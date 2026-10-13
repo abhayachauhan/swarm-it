@@ -31,8 +31,10 @@ A sidebar list of every worker, grouped by what it needs from you:
   header closes every finished worker at once. Running workers are never touched, and a worker whose
   worktree has uncommitted changes is kept and named.
 
-Workers move to a separate `<name> · workers` workspace in the same Kelpi Group, so your coordinator keeps
-its space. **⌂ Coordinator** takes you back to it. The status bar shows the waiting / running / finished
+Workers live in a separate `<name> · workers` workspace in the same Kelpi Group, so your coordinator keeps
+its space. `swarm-spawn` opens each worker straight in that workspace, so Kelpi never switches your view
+while you work elsewhere. The first worker of a new swarm is the exception: the plugin creates the workers
+workspace and moves that worker in, and Kelpi switches to it once. **⌂ Coordinator** takes you back to it. The status bar shows the waiting / running / finished
 counts, and `ctrl+alt+j` gives the rail the keyboard.
 
 ### Worker results
