@@ -3,6 +3,8 @@
 Run a swarm of Claude Code workers in [Kelpi](https://github.com/benfriebe/kelpi), and keep track of them
 from one sidebar.
 
+![swarm-it in under 30 seconds: start workers, answer their prompts, read their results](docs/demo.gif)
+
 You ask your coordinator Claude to "swarm it". It splits the work into tasks and starts one headless Claude
 per task. Each worker gets its own pane, out of your way. The **Swarm rail** shows what every worker is
 doing, raises their permission prompts so you can answer them in one place, and shows each worker's
@@ -13,11 +15,11 @@ swarm-it is two parts that work together:
 - **The Kelpi plugin** (`local.swarm-view`): the rail, the result view and a few pane tools.
 - **The `swarm-it` Claude Code skill** (`skills/swarm-it`): how your coordinator Claude starts and waits for workers.
 
-![The Swarm rail beside a coordinator Claude session](docs/rail.png)
-
 ## Features
 
 ### Swarm rail
+
+![The Swarm rail beside a coordinator Claude session](docs/rail.png)
 
 A sidebar list of every worker, grouped by what it needs from you:
 
