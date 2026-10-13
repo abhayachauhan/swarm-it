@@ -19,7 +19,7 @@ export const PLUGIN_ID = 'local.swarm-view';
 export const COMMANDS = [
     'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
     'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result',
-    'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread',
+    'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
     'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude'
 ].map(name => `${PLUGIN_ID}.${name}`);
 export const COUNTS_ITEM = `${PLUGIN_ID}.counts`;
@@ -722,6 +722,12 @@ export function registerAll(api, deps = modules) {
     });
     command('archive', async args => needPane(args) ?? after(await X.archive(api, st, args.paneID)));
     command('close-worker', async args => needPane(args) ?? after(await X.closeWorker(api, st, args.paneID)));
+    // A partial clear still changed the rail, so it publishes whenever anything was cleared.
+    command('clear-done', async () => {
+        const result = await X.clearDone(api, st);
+        if (result.cleared.length) { await settle(); await publish(); }
+        return result;
+    });
     command('accept', async args => needPane(args) ?? after(await X.accept(api, st, args.paneID)));
     command('pin-orchestrator', async args => {
         const bad = needPane(args);

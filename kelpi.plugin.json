@@ -39,6 +39,7 @@
       { "id": "local.swarm-view.auto-approve-log", "title": "Swarm: list or clear the auto-approve log" },
       { "id": "local.swarm-view.dismiss-worker", "title": "Swarm: dismiss a worker whose pane is closed" },
       { "id": "local.swarm-view.close-thread", "title": "Swarm: close the worker thread view" },
+      { "id": "local.swarm-view.clear-done", "title": "Swarm: clear finished workers" },
       { "id": "local.swarm-view.run-suggested", "title": "Run last suggested command", "icon": "terminal", "shortcut": "super+shift+u" },
       { "id": "local.swarm-view.copy-suggested", "title": "Copy fixed command" },
       { "id": "local.swarm-view.run-suggested-confirm", "title": "Swarm: run a confirmed suggested command" },

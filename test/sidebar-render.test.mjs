@@ -69,7 +69,7 @@ test('the list is sectioned: Needs you (cards), Running, Done; each pane appears
     L.render(fakeDoc, refs, view(fixture(), { selectedPaneID: 'p-run', railFocused: true }), handlers());
     const options = refs.list.children.filter(n => n.attrs.role === 'option');
     assert.deepEqual(options.map(r => r.dataset.paneId), ['p-wait', 'p-run', 'p-err', 'p-done', 'p-acc']);
-    assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.text), ['Needs you · 1', 'Running · 1', 'Done · 3']);
+    assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.textContent), ['Needs you · 1', 'Running · 1', 'Done · 3']);
     // The waiting worker with a card is the card, not a worker row.
     assert.equal(options[0].className, 'att att-request');
     assert.equal(options[0].dataset.itemId, 'Request:p-wait:2026-10-08T00:58:00.000Z');
@@ -103,7 +103,20 @@ test('empty sections are not drawn', () => {
     const refs = makeRefs();
     const snap = { ...fixture(), attention: [], workers: fixture().workers.filter(w => w.state === 'running') };
     L.render(fakeDoc, refs, view(snap), handlers());
-    assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.text), ['Running · 1']);
+    assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.textContent), ['Running · 1']);
+});
+
+test('the Done head has one Clear button that sends clear-done; other heads have none', () => {
+    const refs = makeRefs();
+    const calls = [];
+    L.render(fakeDoc, refs, view(fixture()), { ...handlers(calls), onClearDone: () => calls.push(['clear-done']) });
+    const heads = refs.list.children.filter(n => n.className.startsWith('sec-head'));
+    const clears = heads.map(head => find(head, n => n.tag === 'button' || n.tagName === 'BUTTON'));
+    assert.deepEqual(clears.map(c => c.length), [0, 0, 1]);
+    assert.equal(clears[2][0].textContent, 'Clear');
+    clears[2][0].click();
+    assert.deepEqual(calls, [['clear-done']]);
+    assert.deepEqual(L.clearDoneEffect(), { command: `${L.CMD}clear-done`, args: {} });
 });
 
 test('clicking a card selects it, so Y/N land on that request', () => {

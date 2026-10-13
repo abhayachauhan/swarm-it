@@ -164,6 +164,8 @@
         // ✕ "Remove": a done worker is closed in one click (nothing is running); a closed pane just leaves the rail.
         onClose: paneID => { void run('Remove', { command: `${L.CMD}close-worker`, args: { paneID } }); },
         onDismiss: paneID => { void run('Remove', { command: `${L.CMD}dismiss-worker`, args: { paneID } }); },
+        // Done section's Clear: every finished worker at once. Workers it kept (dirty worktree) are named in the notice.
+        onClearDone: () => { void run('Clear', L.clearDoneEffect()); },
         onAttention: (kind, item) => { if (L.layoutLocked(ui, Date.now())) return; void run(kind, L.attentionEffect(kind, item)); },
         // A card's command: click (or Enter) shows the whole thing, click again shortens it. Everything below moves, so
         // Approve and Deny are locked for a moment (the second click of a double-click lands on nothing).

@@ -61,7 +61,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 .aa-reason { color: var(--bad); font-size: 11px; }
 
 /* Sections: Needs you, Running, Done. Drawn only when they have rows. */
-.sec-head { padding: 10px 12px 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.sec-head { padding: 10px 12px 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 8px; }
+.sec-clear { margin-left: auto; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
 .sec-needs { color: var(--accent); }
 .att { margin: 0 8px 6px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 9px; display: grid; gap: 4px; background: var(--surface); cursor: pointer; }
 .att[aria-current="true"] { box-shadow: 0 0 0 1px var(--accent); }

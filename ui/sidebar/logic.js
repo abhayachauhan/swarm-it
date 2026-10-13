@@ -733,11 +733,20 @@
         return node;
     }
 
-    function buildSectionHead(doc, section) {
-        const node = h(doc, 'div', `sec-head sec-${section.key}`, `${section.title} · ${section.rows.length}`);
+    /** The Done section's head carries Clear: one click closes every finished worker's pane (nothing runs in them any more). */
+    function buildSectionHead(doc, section, handlers) {
+        const node = h(doc, 'div', `sec-head sec-${section.key}`);
         node.setAttribute('role', 'presentation');
+        node.append(h(doc, 'span', 'sec-title', `${section.title} · ${section.rows.length}`));
+        if (section.key === 'done' && handlers && handlers.onClearDone) {
+            const clear = button(doc, 'Clear', 'btn btn-link sec-clear', () => handlers.onClearDone(), 'Close and remove every finished worker');
+            clear.setAttribute('aria-label', 'Clear finished workers');
+            node.append(clear);
+        }
         return node;
     }
+
+    const clearDoneEffect = () => effect('clear-done', {});
 
     /** The keyboard hint lives in the header's tooltip, not in a footer line. */
     const KEY_HINT = 'Keys (Ctrl+Alt+J focuses the rail): J/K move, Enter open, E archive, X stop, Y/N twice to approve or deny';
@@ -821,7 +830,7 @@
             };
             for (const section of sections(snapshot)) {
                 if (!section.rows.length) continue;
-                list.push(buildSectionHead(doc, section));
+                list.push(buildSectionHead(doc, section, handlers));
                 for (const row of section.rows) list.push(build(row));
             }
             list.push(...buildOtherSwarms(doc, snapshot, handlers));
@@ -843,7 +852,7 @@
         initialUI, reconcile, moveSelection, itemsForPane, requestForPane, cardTitle, fromOtherSwarm, isExpanded, toggleExpanded, pruneExpanded, cardCommand,
         ARM_MS, IDLE_MS, LOCK_MS, LAYOUT_LOCK_MS, BLUR_GRACE_MS, armedNow, expire, touch, setRailFocused, noteBlur, resolveBlur, createButtonGuard,
         markLayout, layoutLocked, layoutLockRemaining, askClose, cancelClose,
-        reduceKey, attentionEffect, describeResult, displayCommand, statusLine, reviewEffect,
+        reduceKey, attentionEffect, describeResult, displayCommand, statusLine, reviewEffect, clearDoneEffect, buildSectionHead,
         AUTO_DEFAULT_HOURS, formatClock, autoLabel, autoEndedText, autoNotes, autoAlerts, autoOnEffect, autoOffEffect, autoLogEffect, autoLogClearEffect, buildAutoControls, buildAutoLog,
         nextNineAm, autoChoices, autoChoiceEffect, groupColor, fromTag, swarmSummary, buildOtherSwarms, buildWaitingRow, buildSwarmTag,
         KEY_HINT, warningsOf, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,

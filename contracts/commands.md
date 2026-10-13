@@ -106,6 +106,10 @@ Workers and tests never call bare `kelpi`. Use `bin/k` with `SWARM_VIEW_SOCKET=t
 
 `open-thread` now keeps one thread pane: it closes the thread pane it opened last (only an id the host returned to this plugin) before opening the next.
 
+## Added: clear-done
+
+| `local.swarm-view.clear-done` | `{}` | `{ ok, cleared: string[], kept: [] }`, or `{ ok: false, code: 'PARTIAL', error, cleared, kept: [{ paneID, label, code, error }] }` | Removes every finished (done or error) worker of the followed swarm from the rail in one go: an open pane goes through `close-worker` (same `DIRTY` / `UNKNOWN_GIT` refusals), a closed pane through `dismiss-worker`. Running and waiting workers, the orchestrator and archived workers are never touched. A worker that refuses is kept and named in `error` ("cleared 2, kept 1: schema (worktree ... has uncommitted changes)"); the others are still cleared, and the rail republishes whenever anything was cleared. The rail's Done section head shows a **Clear** button that sends it in one click (nothing is running in those panes). Palette: "Swarm: clear finished workers". |
+
 ## Added: close-thread
 
 | Command | Args | Result | Notes |

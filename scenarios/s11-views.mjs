@@ -70,7 +70,7 @@ const RAIL_PROBE = `(() => {
     focused: list.dataset.railFocused === 'true',
     home: (b => b ? btn(b) : null)(document.querySelector('#head .btn-home')),
     auto: document.querySelector('#head .btn-auto')?.textContent ?? '',
-    sections: [...list.querySelectorAll('.sec-head')].map(h => h.textContent),
+    sections: [...list.querySelectorAll('.sec-head .sec-title')].map(h => h.textContent),
     options: [...list.querySelectorAll('[role="option"]')].map(o => ({ pane: o.dataset.paneId, kind: o.classList.contains('att') ? 'card' : 'row', selected: o.getAttribute('aria-current') === 'true' })),
     rows: [...list.querySelectorAll('.row')].map(r => ({ pane: r.dataset.paneId, state: r.dataset.state, name: r.querySelector('.name')?.textContent, last: r.querySelector('.last')?.textContent, selected: r.getAttribute('aria-current') === 'true', buttons: [...r.querySelectorAll('button')].map(btn) })),
     cards: [...list.querySelectorAll('.att')].map(a => ({ id: a.dataset.itemId, pane: a.dataset.paneId, title: a.querySelector('.att-pane')?.textContent, paneTip: a.querySelector('.att-pane')?.title, command: a.querySelector('.att-command')?.textContent ?? '', clamped: !!a.querySelector('.att-clamp'), more: [...a.querySelectorAll('.att-more')].filter(visible).map(m => m.textContent), answerInPane: [...a.querySelectorAll('.att-text')].some(t => t.textContent === 'Answer in the pane'), selected: a.getAttribute('aria-current') === 'true', buttons: [...a.querySelectorAll('button')].map(btn) })),

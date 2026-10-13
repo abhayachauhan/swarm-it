@@ -75,7 +75,7 @@ function drawnClasses() {
 }
 
 // Selector hooks that logic.js emits for tests and scenarios, deliberately unstyled; and classes other files add.
-const HOOKS = new Set(['att-request', 'sec-running', 'sec-done', 'sec-other']);
+const HOOKS = new Set(['att-request', 'sec-running', 'sec-done', 'sec-other', 'sec-title']);
 const FROM_HTML = new Set([...HTML.matchAll(/class="([^"]+)"/g)].flatMap(m => m[1].split(/\s+/)));
 const FROM_APP_JS = new Set(['att-overflow']);
 

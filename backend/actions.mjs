@@ -330,6 +330,27 @@ export async function dismissWorker(api, store, paneID) {
     return { ok: true, paneID };
 }
 
+/**
+ * Clear every finished worker of the followed swarm off the rail in one go: done or error workers have their pane
+ * closed (closeWorker, same dirty-worktree refusal), closed panes are dismissed. Running and waiting workers are never
+ * touched. A worker that refuses is kept and named in the error (PARTIAL); the rest are still cleared.
+ */
+export async function clearDone(api, store) {
+    const cleared = [];
+    const kept = [];
+    for (const w of [...store.manifestWorkers]) {
+        if (store.archived.has(w.paneID)) continue;
+        const state = deriveState(store, w);
+        if (state !== 'done' && state !== 'error') continue;
+        const result = store.panes.has(w.paneID) ? await closeWorker(api, store, w.paneID) : await dismissWorker(api, store, w.paneID);
+        if (result.ok) cleared.push(w.paneID);
+        else kept.push({ paneID: w.paneID, label: w.label, code: result.code, error: result.error });
+    }
+    if (!kept.length) return { ok: true, cleared, kept };
+    const names = kept.map(k => `${k.label || k.paneID} (${k.error})`).join('; ');
+    return { ...fail(`cleared ${cleared.length}, kept ${kept.length}: ${names}`, 'PARTIAL'), cleared, kept };
+}
+
 /** Settle the open Complete cards of a worker once the user opened its result (thread view, Open, read). Returns true when one was. */
 export async function settleComplete(store, paneID) {
     let settled = false;
