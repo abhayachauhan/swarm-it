@@ -1,0 +1,15 @@
+#!/bin/sh
+# Private-instance wrapper for the Kelpi CLI. Refuses to run unless pointed at a loopback TCP socket,
+# so a CLI call can never fall back to the live app socket.
+case "${SWARM_VIEW_SOCKET:-}" in
+  tcp:127.0.0.1:*) ;;
+  *)
+    echo "bin/k: refusing to run. Set SWARM_VIEW_SOCKET to a private instance socket starting with tcp:127.0.0.1: (default: tcp:127.0.0.1:56353)." >&2
+    exit 2
+    ;;
+esac
+KELPI_SOCKET="$SWARM_VIEW_SOCKET"
+KELPI_REQUIRE_SOCKET=1
+export KELPI_SOCKET KELPI_REQUIRE_SOCKET
+[ -n "${KELPI_CLI:-}" ] || { echo "bin/k: set KELPI_CLI to a Kelpi checkout's packages/cli/dist/kelpi.js." >&2; exit 2; }
+exec node "$KELPI_CLI" "$@"

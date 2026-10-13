@@ -1,0 +1,60 @@
+{
+  "id": "local.swarm-view",
+  "name": "Swarm View",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "trust": "full",
+  "backend": "backend/index.mjs",
+  "activation": "startup",
+  "contributes": {
+    "views": [
+      { "id": "local.swarm-view.rail", "title": "Swarm", "entry": "ui/sidebar/index.html", "stateVersion": 1, "placements": ["sidebar.secondary", "pane"] },
+      { "id": "local.swarm-view.thread", "title": "Swarm thread", "entry": "ui/thread/index.html", "stateVersion": 1, "placements": ["pane"] },
+      { "id": "local.swarm-view.run", "title": "Run suggested command", "entry": "ui/run/index.html", "stateVersion": 1, "placements": ["pane"] }
+    ],
+    "menus": [
+      { "id": "local.swarm-view.run-suggested.header", "command": "local.swarm-view.run-suggested", "placement": "pane.header", "group": "Suggested command", "order": 10, "when": { "pane.type": "shell" } },
+      { "id": "local.swarm-view.run-suggested.pane", "command": "local.swarm-view.run-suggested", "placement": "pane", "group": "Suggested command", "order": 10, "when": { "pane.type": "shell" } },
+      { "id": "local.swarm-view.copy-suggested.pane", "command": "local.swarm-view.copy-suggested", "placement": "pane", "group": "Suggested command", "order": 20, "when": { "pane.type": "shell" } },
+      { "id": "local.swarm-view.restart-claude.header", "command": "local.swarm-view.restart-claude", "placement": "pane.header", "group": "Claude", "order": 10, "when": { "pane.type": "shell" } },
+      { "id": "local.swarm-view.restart-claude.pane", "command": "local.swarm-view.restart-claude", "placement": "pane", "group": "Claude", "order": 10, "when": { "pane.type": "shell" } }
+    ],
+    "commands": [
+      { "id": "local.swarm-view.focus-rail", "title": "Swarm: focus thread rail", "shortcut": "ctrl+alt+j" },
+      { "id": "local.swarm-view.get-state", "title": "Swarm: get state snapshot" },
+      { "id": "local.swarm-view.open-thread", "title": "Swarm: open worker thread" },
+      { "id": "local.swarm-view.read-result", "title": "Swarm: read worker result file" },
+      { "id": "local.swarm-view.capture-worker", "title": "Swarm: capture worker output" },
+      { "id": "local.swarm-view.approve", "title": "Swarm: approve permission request" },
+      { "id": "local.swarm-view.deny", "title": "Swarm: deny permission request" },
+      { "id": "local.swarm-view.snooze", "title": "Swarm: snooze attention item" },
+      { "id": "local.swarm-view.archive", "title": "Swarm: archive worker" },
+      { "id": "local.swarm-view.close-worker", "title": "Swarm: stop and close worker" },
+      { "id": "local.swarm-view.accept", "title": "Swarm: accept finished worker" },
+      { "id": "local.swarm-view.pin-orchestrator", "title": "Swarm: pin this pane as orchestrator" },
+      { "id": "local.swarm-view.clear-attention", "title": "Swarm: clear attention item" },
+      { "id": "local.swarm-view.send-to-worker", "title": "Swarm: send a message to a worker" },
+      { "id": "local.swarm-view.open-result", "title": "Swarm: open worker result file" },
+      { "id": "local.swarm-view.auto-approve", "title": "Swarm: auto-approve permission requests (on/off, hours)" },
+      { "id": "local.swarm-view.auto-approve-log", "title": "Swarm: list or clear the auto-approve log" },
+      { "id": "local.swarm-view.dismiss-worker", "title": "Swarm: dismiss a worker whose pane is closed" },
+      { "id": "local.swarm-view.close-thread", "title": "Swarm: close the worker thread view" },
+      { "id": "local.swarm-view.run-suggested", "title": "Run last suggested command", "icon": "terminal", "shortcut": "super+shift+u" },
+      { "id": "local.swarm-view.copy-suggested", "title": "Copy fixed command" },
+      { "id": "local.swarm-view.run-suggested-confirm", "title": "Swarm: run a confirmed suggested command" },
+      { "id": "local.swarm-view.close-run-view", "title": "Swarm: close the run suggested command view" },
+      { "id": "local.swarm-view.restart-claude", "title": "Restart Claude (quit and resume)", "icon": "restart" }
+    ],
+    "items": [
+      { "id": "local.swarm-view.counts", "placement": "statusbar", "text": "Swarm 0/0/0", "tooltip": "Swarm: waiting / running / finished", "tone": "default", "command": "local.swarm-view.focus-rail" }
+    ],
+    "settings": {
+      "autoHide": { "title": "Hide workers in the swarm workspace", "type": "boolean", "default": true },
+      "snoozeMinutes": { "title": "Default snooze (minutes)", "type": "number", "default": 15 },
+      "coordinatorLabel": { "title": "Orchestrator pane label", "type": "string", "default": "coordinator" },
+      "manifestDir": { "title": "Swarm manifest directory", "type": "string", "default": "" },
+      "resultRoot": { "title": "Extra root allowed for worker result files (workers without a worktree)", "type": "string", "default": "" },
+      "worktreeRoots": { "title": "Directories worker worktrees must live inside to be trusted: absolute paths separated by ':' or newlines (empty = ~/repos)", "type": "string", "default": "" }
+    }
+  }
+}

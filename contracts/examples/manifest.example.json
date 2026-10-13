@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "orchestrator": { "paneID": "pane-orch-1", "label": "coordinator" },
+  "workers": [
+    {
+      "paneID": "pane-w-1",
+      "label": "repo-lag",
+      "task": "Investigate lag in the repo list and propose a fix",
+      "resultPath": "/Users/you/repos/example/.swarm/repo-lag.md",
+      "worktreePath": "/Users/you/repos/example-wt-repo-lag",
+      "parent": null
+    },
+    {
+      "paneID": "pane-w-2",
+      "label": "repo-lag-tests",
+      "task": "Write regression tests for the lag fix",
+      "resultPath": null,
+      "worktreePath": null,
+      "parent": "pane-w-1"
+    }
+  ]
+}

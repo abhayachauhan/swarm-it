@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "sequence": 12,
+  "generatedAt": "2026-10-08T01:00:00.000Z",
+  "workspaceID": "ws-1",
+  "orchestrator": { "paneID": "p-orch", "label": "coordinator", "source": "manifest" },
+  "workers": [
+    { "paneID": "p-wait", "label": "repo-lag", "task": "Fix lag", "state": "waiting", "elapsedSeconds": 125, "lastLine": "Do you want to run npm test?", "resultPath": null, "worktreePath": "/w/lag", "parent": null, "hidden": true },
+    { "paneID": "p-err", "label": "db-migrate", "task": "Migrate", "state": "error", "elapsedSeconds": 3700, "lastLine": "Error: connection refused", "resultPath": "/w/mig/result.md", "worktreePath": "/w/mig", "parent": null, "hidden": true },
+    { "paneID": "p-run", "label": "api-docs", "task": "Docs", "state": "running", "elapsedSeconds": 42, "lastLine": "Reading files", "resultPath": null, "worktreePath": "/w/docs", "parent": null, "hidden": true },
+    { "paneID": "p-done", "label": "ui-polish", "task": "Polish", "state": "done", "elapsedSeconds": 900, "lastLine": "Wrote result.md", "resultPath": "/w/ui/result.md", "worktreePath": "/w/ui", "parent": null, "hidden": true },
+    { "paneID": "p-acc", "label": "lint-fix", "task": "Lint", "state": "done", "elapsedSeconds": 300, "lastLine": "Done", "resultPath": "/w/lint/result.md", "worktreePath": "/w/lint", "parent": null, "hidden": true, "accepted": true },
+    { "paneID": "p-arch", "label": "old-job", "task": "Old", "state": "done", "elapsedSeconds": 9000, "lastLine": "", "resultPath": null, "worktreePath": null, "parent": null, "hidden": true, "archived": true }
+  ],
+  "attention": [
+    { "id": "Request:p-wait:2026-10-08T00:58:00.000Z", "type": "Request", "paneID": "p-wait", "text": "repo-lag wants to run a command", "command": "npm test", "promptHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","createdAt": "2026-10-08T00:58:00.000Z" },
+    { "id": "Error:p-err:2026-10-08T00:59:00.000Z", "type": "Error", "paneID": "p-err", "text": "db-migrate failed", "createdAt": "2026-10-08T00:59:00.000Z" },
+    { "id": "Complete:p-done:2026-10-08T00:59:30.000Z", "type": "Complete", "paneID": "p-done", "text": "ui-polish finished", "createdAt": "2026-10-08T00:59:30.000Z" }
+  ],
+  "snoozed": [
+    { "id": "Complete:p-acc:2026-10-08T00:50:00.000Z", "type": "Complete", "paneID": "p-acc", "text": "lint-fix finished", "createdAt": "2026-10-08T00:50:00.000Z", "snoozedUntil": "2026-10-08T01:30:00.000Z" }
+  ],
+  "counts": { "waiting": 1, "running": 1, "finished": 3 },
+  "warnings": []
+}

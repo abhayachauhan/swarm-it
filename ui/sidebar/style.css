@@ -1,0 +1,132 @@
+/* Terminal rail. Colours follow Kelpi theme tokens when the host provides them; otherwise a dark set, and a light set
+ * when the host window prefers light (test/sidebar-style.test.mjs checks both sets stay readable). */
+:root {
+    color-scheme: dark light;
+    --bg: var(--kelpi-bg, #0c0e12);
+    --fg: var(--kelpi-fg, #d7dce4);
+    --dim: var(--kelpi-fg-secondary, #79808c);
+    --line: var(--kelpi-border, #232830);
+    --accent: var(--kelpi-accent, #6ea2ff);
+    --surface: var(--kelpi-surface, #11141a);
+    --ok: var(--kelpi-success, #4cc782);
+    --warn: var(--kelpi-warning, #e8a53a);
+    --bad: var(--kelpi-error, #ff7b6e);
+    --hover: color-mix(in srgb, var(--bg) 82%, var(--accent));
+    --font: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: var(--kelpi-bg, #ffffff);
+        --fg: var(--kelpi-fg, #1b1f26);
+        --dim: var(--kelpi-fg-secondary, #5c6470);
+        --line: var(--kelpi-border, #d9dde3);
+        --accent: var(--kelpi-accent, #2a62c9);
+        --surface: var(--kelpi-surface, #f4f6f8);
+        --ok: var(--kelpi-success, #1e7a45);
+        --warn: var(--kelpi-warning, #8a5300);
+        --bad: var(--kelpi-error, #b9302a);
+    }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 12px/1.45 var(--font); }
+.shell { display: flex; flex-direction: column; min-height: 100vh; outline: none; }
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 8px; border-bottom: 1px solid var(--line); }
+.btn-home { color: var(--fg); border-color: var(--line); font-weight: 500; }
+.btn-home:hover:not(:disabled), .btn-home:focus-visible { background: var(--hover); color: var(--fg); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn-warn { color: var(--warn); border-color: var(--warn); padding: 2px 6px; }
+.btn-warn:hover, .btn-warn:focus-visible { background: var(--warn); color: var(--bg); }
+/* Expanding details under the header: the warnings list and the auto-approve log. */
+.panel { display: grid; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.panel:empty { display: none; }
+.panel p { margin: 0; }
+.panel-warnings { display: grid; gap: 2px; }
+.panel-log { display: grid; gap: 4px; }
+
+/* Auto-approve: one header toggle. While on it borrows the theme's warning colour so it reads in both themes. */
+.head-auto { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.btn-auto { color: var(--dim); border-color: var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.btn-auto:hover, .btn-auto:focus-visible { background: var(--hover); color: var(--fg); }
+.btn-auto-on { color: var(--fg); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 28%, var(--bg)); }
+.btn-auto-on:hover, .btn-auto-on:focus-visible { background: var(--warn); color: var(--bg); }
+.btn-link { border-color: transparent; color: var(--dim); padding: 2px 4px; text-decoration: underline; }
+.btn-link:hover, .btn-link:focus-visible { background: none; color: var(--fg); }
+.aa-note { font-size: 11px; overflow-wrap: anywhere; }
+.aa-paused { color: var(--bad); }
+.aa-entries { display: grid; gap: 6px; margin: 6px 0; max-height: 18em; overflow-y: auto; }
+.aa-entry { display: grid; gap: 2px; padding: 4px 6px; border-left: 2px solid var(--ok); background: var(--surface); }
+.aa-failed { border-left-color: var(--bad); }
+.aa-when { color: var(--dim); }
+.aa-who { font-weight: 500; overflow-wrap: anywhere; }
+.aa-reason { color: var(--bad); font-size: 11px; }
+
+/* Sections: Needs you, Running, Done. Drawn only when they have rows. */
+.sec-head { padding: 10px 12px 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.sec-needs { color: var(--accent); }
+.att { margin: 0 8px 6px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 9px; display: grid; gap: 4px; background: var(--surface); cursor: pointer; }
+.att[aria-current="true"] { box-shadow: 0 0 0 1px var(--accent); }
+.att-pane { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.att-text { overflow-wrap: anywhere; }
+/* "Press Y again to approve": the pending second key press, on the card it will act on. */
+.att-armed { color: var(--accent); font-weight: 500; }
+.att-command { display: block; padding: 3px 6px; border-radius: 4px; background: var(--bg); color: var(--warn); overflow-wrap: anywhere; white-space: pre-wrap; cursor: pointer; }
+/* Two lines by default; click (or Enter on the selected card) shows the whole command in place. */
+.att-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.att-more { font-size: 11px; cursor: pointer; }
+/* Shown only once app.js has measured that the clamped command really overflows two lines. */
+.att-more-maybe { display: none; }
+.att-more-maybe.att-overflow { display: block; }
+/* A worker waiting on a prompt the rail cannot read: no command, only Go to pane. */
+.att-waiting { border-left-color: var(--warn); }
+/* "from <swarm>": that swarm's Group colour (Kelpi's named colours), the accent when it has none. Text stays --fg. */
+.swarm-tag, .swarm-line { --tag: var(--accent); }
+[data-color="red"] { --tag: #e5484d; }
+[data-color="orange"] { --tag: #f76b15; }
+[data-color="yellow"] { --tag: #e2b400; }
+[data-color="green"] { --tag: #30a46c; }
+[data-color="blue"] { --tag: #3e7bfa; }
+[data-color="purple"] { --tag: #8e4ec6; }
+[data-color="pink"] { --tag: #d6409f; }
+[data-color="gray"] { --tag: #8b8d98; }
+[data-color="black"] { --tag: #555a63; }
+[data-color="white"] { --tag: #c9ccd1; }
+.swarm-tag { justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; font-size: 10px; color: var(--fg); background: color-mix(in srgb, var(--tag) 25%, var(--bg)); border: 1px solid var(--tag); border-radius: 4px; padding: 0 6px; cursor: pointer; }
+/* One line per other live swarm, under the followed swarm's sections. */
+.swarm-line { display: block; width: calc(100% - 16px); margin: 0 8px 4px; padding: 4px 8px; font: inherit; text-align: left; color: var(--fg); background: none; border: 0; border-left: 3px solid var(--tag); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.swarm-tag:hover, .swarm-tag:focus-visible, .swarm-line:hover, .swarm-line:focus-visible { background: var(--hover); outline: none; }
+/* The Auto toggle's duration menu, under the header. */
+.auto-menu { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.att-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.btn { font: inherit; font-size: 11px; color: var(--accent); background: none; border: 1px solid var(--accent); border-radius: 6px; padding: 2px 9px; cursor: pointer; }
+.btn:hover, .btn:focus-visible { background: var(--accent); color: var(--bg); outline: none; }
+.btn-danger { color: var(--warn); border-color: var(--warn); }
+.btn-primary { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.btn-x { padding: 2px 6px; color: var(--dim); border-color: var(--line); }
+.btn-x:hover, .btn-x:focus-visible { background: var(--bad); border-color: var(--bad); color: var(--bg); }
+
+.list { flex: 1; min-height: 0; overflow-y: auto; }
+.row { display: grid; gap: 2px; width: 100%; padding: 8px 12px; border: 0; border-left: 2px solid transparent; border-bottom: 1px solid var(--line); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.row:hover, .row:focus-visible { background: var(--hover); outline: none; }
+.row[aria-current="true"] { background: var(--hover); border-left-color: var(--accent); }
+.row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.time { color: var(--dim); font-variant-numeric: tabular-nums; flex: none; }
+.last { color: var(--dim); padding-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The one verb per row sits at the row's right edge (the name takes the slack), so the last button is where Stop was:
+ * after arming, that is Keep. Stop appears only on the selected or hovered row. */
+.row-actions { display: flex; justify-content: flex-end; gap: 4px; flex: none; }
+.row-hover { display: none; }
+.row:hover .row-hover, .row[aria-current="true"] .row-hover { display: flex; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dim); }
+.dot-running { background: var(--ok); }
+.dot-waiting { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+.dot-error { background: var(--bad); }
+.dot-done { background: var(--dim); }
+
+.empty { margin: 14px 12px; color: var(--fg); }
+.dim { color: var(--dim); }
+.foot { border-top: 1px solid var(--line); padding: 6px 12px; display: grid; gap: 2px; }
+.foot:empty { display: none; }
+.foot p { margin: 0; }
+.notice { color: var(--warn); overflow-wrap: anywhere; }
+.warn { color: var(--warn); overflow-wrap: anywhere; }

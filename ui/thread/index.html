@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swarm thread</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="app">
+  <header class="head">
+    <div class="row">
+      <button id="back" type="button" class="back" title="Close this thread and give the coordinator its space back">← Back to coordinator</button>
+    </div>
+    <div class="title">
+      <span id="dot" class="dot"></span>
+      <h1 id="name">Worker</h1>
+      <span id="state" class="tag"></span>
+      <span id="elapsed" class="muted mono"></span>
+    </div>
+    <div id="worktree" class="muted mono"></div>
+    <div id="task" class="muted"></div>
+  </header>
+
+  <p id="error" class="error" role="alert"></p>
+
+  <section id="request" class="card request" hidden>
+    <h2>Permission request</h2>
+    <p class="muted mono">From <span id="requestOrigin"></span></p>
+    <pre id="requestCommand" class="mono"></pre>
+    <div class="row">
+      <button id="approve" type="button" class="primary">Approve</button>
+      <button id="deny" type="button">Deny</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Goal</h2>
+    <div id="goal" class="body"></div>
+  </section>
+  <section class="card">
+    <h2>Done</h2>
+    <div id="done" class="body"></div>
+  </section>
+  <section class="card">
+    <h2>Next</h2>
+    <div id="next" class="body"></div>
+  </section>
+  <section id="fallbackCard" class="card" hidden>
+    <h2>Result file (first 40 lines)</h2>
+    <pre id="fallback" class="mono"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Result file</h2>
+    <div class="row">
+      <span id="resultPath" class="mono path"></span>
+      <button id="openResult" type="button">Open</button>
+      <button id="reload" type="button">Reload</button>
+    </div>
+  </section>
+
+  <section class="actions row">
+    <button id="accept" type="button" class="primary">Accept</button>
+    <button id="requestChanges" type="button">Request changes</button>
+    <button id="dismiss" type="button">Dismiss</button>
+    <button id="terminal" type="button">Open terminal</button>
+  </section>
+
+  <form id="composer" class="composer">
+    <label for="message" class="muted">Message to this worker</label>
+    <textarea id="message" rows="3" placeholder="Send text to this worker"></textarea>
+    <div class="row"><button id="send" type="submit" class="primary">Send</button></div>
+  </form>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# swarm-wait <pane-id>:<label> ... [--timeout seconds]
+# Run in the background. Exits when every worker has written ~/.kelpi-swarm/results/<label>.md
+# or its pane has closed. Prints one status line per worker as it finishes.
+set -uo pipefail
+RES="$HOME/.kelpi-swarm/results"
+limit=1800
+workers=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --timeout) limit=$2; shift 2 ;;
+    *:*) workers+=("$1"); shift ;;
+    *) echo "usage: swarm-wait <pane-id>:<label> ... [--timeout seconds]" >&2; exit 1 ;;
+  esac
+done
+[ ${#workers[@]} -gt 0 ] || { echo "no workers given" >&2; exit 1; }
+
+# A counter, not ${#done_[@]}: under set -u an empty associative array counts as unbound.
+declare -A done_=()
+failed=0 finished=0
+for ((t = 0; t < limit; t += 2)); do
+  live=$(kelpi pane list --json 2>/dev/null | jq -r '.[].id' || true)
+  for w in "${workers[@]}"; do
+    pane=${w%%:*} label=${w#*:}
+    [ -n "${done_[$label]:-}" ] && continue
+    if [ -s "$RES/$label.md" ]; then
+      done_[$label]=1 finished=$((finished + 1))
+      echo "DONE $label: $(head -c 200 "$RES/$label.md" | tr '\n' ' ')"
+    elif ! grep -qx "$pane" <<<"$live"; then
+      done_[$label]=1 failed=$((failed + 1)) finished=$((finished + 1))
+      echo "FAILED $label: pane closed with no result"
+    fi
+  done
+  [ "$finished" -eq ${#workers[@]} ] && exit $((failed > 0))
+  sleep 2
+done
+for w in "${workers[@]}"; do
+  pane=${w%%:*} label=${w#*:}
+  [ -n "${done_[$label]:-}" ] && continue
+  echo "TIMEOUT $label, last lines:"
+  kelpi pane capture --target "$pane" --lines 10
+done
+exit 2

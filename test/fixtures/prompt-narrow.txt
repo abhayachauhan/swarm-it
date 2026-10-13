@@ -1,0 +1,27 @@
+╭─╮
+Bash command
+Download MobileSAM
+weights from
+ultralytics
+releases
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+curl -sSLf -o
+/Users/maxmusterm
+ann/gl/data/model
+s/mobile_sam.pt
+https://github.co
+m/ultralytics/ass
+ets/releases/down
+load/v8.3.0/mobil
+e_sam.pt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+Ask rule Bash(curl
+* -o *) overrides
+auto mode for this
+command.
+/permissions to let
+auto mode decide
+Do you want to
+proceed?
+❯ 1. Yes
+2. No

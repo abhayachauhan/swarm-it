@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run suggested command</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="app">
+  <h1 id="title">Run suggested command</h1>
+  <p id="hint" class="muted">Check and edit the command. Nothing runs until you press Run.</p>
+  <textarea id="command" class="mono" rows="6" spellcheck="false"></textarea>
+  <p id="lines" class="muted"></p>
+  <label for="target" class="muted">Run in</label>
+  <select id="target"></select>
+  <p id="target-note" class="muted"></p>
+  <p id="error" class="error" role="alert"></p>
+  <div class="row">
+    <button id="run" type="button" class="primary">Run</button>
+    <button id="copy" type="button">Copy</button>
+    <button id="cancel" type="button">Cancel</button>
+  </div>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# swarm-spawn <label> <task-file> [--mode auto] [--model sonnet] [--path dir]
+# One call per worker: split a pane, register it in the swarm rail, start a headless
+# Claude on the task file. Prints <pane-id>:<label>, ready for swarm-wait. The result
+# lands in ~/.kelpi-swarm/results/<label>.md.
+set -euo pipefail
+
+usage() { echo "usage: swarm-spawn <label> <task-file> [--mode auto] [--model sonnet] [--path dir]" >&2; exit 1; }
+[ $# -ge 2 ] || usage
+label=$1 task=$2; shift 2
+mode=auto model=sonnet dir=$PWD
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --mode) mode=$2; shift 2 ;;
+    --model) model=$2; shift 2 ;;
+    --path) dir=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+case "$label$task$dir" in *[\"\'\ ]*) echo "label, task path and dir must not contain quotes or spaces" >&2; exit 1 ;; esac
+[ -f "$task" ] || { echo "no task file: $task" >&2; exit 1; }
+task=$(cd "$(dirname "$task")" && pwd)/$(basename "$task")
+
+MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
+RES="$HOME/.kelpi-swarm/results"
+mkdir -p "$RES"
+rm -f "$RES/$label.md"
+
+orch=$(kelpi pane id)
+me=$(kelpi pane list --json | jq -c --arg p "$orch" '.[] | select(.id == $p)')
+ws=$(jq -r '.workspace_id' <<<"$me")
+# A swarm owns its Group: the rail and the hidden workers workspace both key off it.
+[ "$(jq -r '.group_id // empty' <<<"$me")" ] || echo "warning: this workspace is not in a Group; the rail shows the swarm only here" >&2
+node "$MW" show "$ws" >/dev/null 2>&1 || node "$MW" init "$ws" "$orch" coordinator >/dev/null
+# A restarted coordinator gets a new pane id; the rail ignores a swarm whose coordinator pane is gone.
+[ "$(node "$MW" show "$ws" | jq -r '.orchestrator.paneID')" = "$orch" ] || node "$MW" set-orchestrator "$ws" "$orch" >/dev/null
+# Label the coordinator pane so it is easy to spot; never rename a pane the user already labelled.
+[ "$(jq -r '.label // empty' <<<"$me")" ] || kelpi pane name --target "$orch" coordinator >/dev/null
+
+pane=$(kelpi pane split --name "$label" --path "$dir" --json | jq -r '.pane_id // .id')
+node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" >/dev/null
+
+FORMAT="Write the result as markdown with three headings, ## Goal, ## Done and ## Next. Goal is one plain sentence saying what you were asked to do. Done is at most three short bullets saying what is now true or what you found, in plain words, with no code, file dumps or tool narration. Next is at most two bullets of what a human must decide or do, or the words Nothing pending. Keep the whole file under 80 words."
+
+# Give the new shell a moment to draw its prompt before typing into it.
+sleep 2
+# cd explicitly: the split's --path did not reach the new shell in a live test.
+kelpi pane send --target "$pane" "cd $dir && claude -p --permission-mode $mode --model $model \"Do the task in $task. $FORMAT Write the result to $RES/$label.md. Reply done.\"" >/dev/null
+echo "$pane:$label"
