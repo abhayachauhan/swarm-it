@@ -1,7 +1,7 @@
 // clear-done: one click removes every finished worker from the rail, and never touches a running one.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStore, applyStateChange } from '../backend/store.mjs';
+import { createStore, applyStateChange, persist, HANDLED_KEEP_MAX } from '../backend/store.mjs';
 import { createAttention } from '../backend/attention.mjs';
 import { clearDone } from '../backend/actions.mjs';
 import { makeFakeApi, MANIFEST } from './backend-fake-api.mjs';
@@ -60,6 +60,22 @@ test('clear-done dismisses a finished worker whose pane is already closed, witho
     assert.deepEqual(result.cleared, ['w2']);
     assert.equal(api.callsTo('panes.close').length, 0);
     assert.ok(store.archived.has('w2'));
+});
+
+test('stored cards stay small: only the newest 50 handled cards are kept, without prompt blocks; open cards all stay', async () => {
+    const { api, store } = setup();
+    const block = 'x'.repeat(2000);
+    for (let n = 0; n < 300; n += 1) {
+        store.attention.push({ id: `Request:w1:${n}`, type: 'Request', paneID: 'w1', text: '', createdAt: new Date(n * 1000).toISOString(), promptBlock: block, handledAt: new Date(n * 1000 + 1).toISOString() });
+    }
+    store.attention.push({ id: 'Request:w2:open', type: 'Request', paneID: 'w2', text: '', createdAt: new Date(0).toISOString(), promptBlock: block });
+    await persist(store);
+    const saved = api.storageMap.get('attention');
+    assert.equal(saved.length, HANDLED_KEEP_MAX + 1);
+    assert.ok(saved.some(i => i.id === 'Request:w1:299') && !saved.some(i => i.id === 'Request:w1:0'), 'the newest are kept');
+    assert.equal(saved.find(i => i.id === 'Request:w2:open').promptBlock, block, 'an open card keeps its prompt');
+    assert.ok(saved.filter(i => i.handledAt).every(i => !('promptBlock' in i)));
+    assert.ok(JSON.stringify(saved).length < 32 * 1024);
 });
 
 test('clear-done with nothing finished is a no-op', async () => {

@@ -433,6 +433,8 @@ export function registerAll(api, deps = modules) {
         await loadManifest();
         await loadSwarms({ force: true });
         resolveOrchestrator();
+        // Workers whose pane closed while the plugin was down would otherwise read as running forever.
+        S.markMissingWorkers(st);
         for (const w of st.manifestWorkers) await S.refreshWorker(st, w.paneID);
         A.rearm(att, Date.now());
         // A reload may find cards whose pane closed while the plugin was down.

@@ -110,6 +110,10 @@ Workers and tests never call bare `kelpi`. Use `bin/k` with `SWARM_VIEW_SOCKET=t
 
 | `local.swarm-view.clear-done` | `{}` | `{ ok, cleared: string[], kept: [] }`, or `{ ok: false, code: 'PARTIAL', error, cleared, kept: [{ paneID, label, code, error }] }` | Removes every finished (done or error) worker of the followed swarm from the rail in one go: an open pane goes through `close-worker` (same `DIRTY` / `UNKNOWN_GIT` refusals), a closed pane through `dismiss-worker`. Running and waiting workers, the orchestrator and archived workers are never touched. A worker that refuses is kept and named in `error` ("cleared 2, kept 1: schema (worktree ... has uncommitted changes)"); the others are still cleared, and the rail republishes whenever anything was cleared. The rail's Done section head shows a **Clear** button that sends it in one click (nothing is running in those panes). Palette: "Swarm: clear finished workers". |
 
+At startup, a manifest worker whose pane is not in the host's full snapshot is marked gone (`markMissingWorkers`): its pane closed while the plugin was not running, so it reads as `error` with `paneClosed` and Clear dismisses it, instead of reading as `running` forever. A pane event for it later undoes the mark.
+
+Storage cap: Kelpi refuses plugin storage over 256 KiB, and a refused write fails the command that made it (`INTERNAL`). Every `persist` keeps all open cards but only the newest 50 handled cards (`HANDLED_KEEP_MAX`), with their `promptBlock` removed.
+
 ## Added: close-thread
 
 | Command | Args | Result | Notes |

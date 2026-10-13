@@ -246,6 +246,21 @@ export function seedFromSnapshot(store, snapshot, now) {
     }
 }
 
+/**
+ * After seeding from the host's full snapshot: a manifest worker whose pane the host does not have was closed while
+ * the plugin was not running (swarm-spawn creates the pane before the manifest entry). Mark it gone, so it reads as
+ * done or error instead of running forever. Returns the pane ids marked.
+ */
+export function markMissingWorkers(store) {
+    const marked = [];
+    for (const w of store.manifestWorkers) {
+        if (store.panes.has(w.paneID) || store.gone.has(w.paneID)) continue;
+        store.gone.add(w.paneID);
+        marked.push(w.paneID);
+    }
+    return marked;
+}
+
 export function lastLineOf(text) {
     if (typeof text !== 'string') return '';
     const lines = text.replace(ANSI, '').split('\n').map(line => line.trim()).filter(line => line && !DECOR_ONLY.test(line));
@@ -414,9 +429,26 @@ export function buildSnapshot(store, now) {
 
 const asArray = value => (Array.isArray(value) ? value : []);
 
+export const HANDLED_KEEP_MAX = 50;
+
+/**
+ * Keep the stored cards small: Kelpi refuses plugin storage over 256 KiB, and auto-approve handles hundreds of
+ * Requests a day. Only the newest 50 handled cards are kept, without their prompt block; open cards are all kept.
+ */
+export function compactAttention(store) {
+    const recent = store.attention
+        .filter(i => i.handledAt)
+        .sort((a, b) => b.handledAt.localeCompare(a.handledAt))
+        .slice(0, HANDLED_KEEP_MAX);
+    const keep = new Set(recent);
+    store.attention = store.attention.filter(i => !i.handledAt || keep.has(i));
+    for (const item of recent) delete item.promptBlock;
+}
+
 /** Persist attention, pins, accepted, archived, firstSeen, hiddenWorkspaceID (and `restored`) to plugin storage. */
 export async function persist(store) {
     const { storage } = store.api;
+    compactAttention(store);
     await storage.set('attention', store.attention);
     await storage.set('pins', { orchestratorPaneID: store.pinnedOrchestratorPaneID });
     await storage.set('accepted', [...store.accepted]);

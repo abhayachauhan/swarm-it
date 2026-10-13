@@ -77,14 +77,17 @@ test('a closed pane is marked paneClosed, raises no autohide warning, and Dismis
     reloaded();
 });
 
-test('a manifest worker whose pane was never seen is not "closed" and still warns', async () => {
+test('a manifest worker whose pane the host does not have at startup reads as closed, not running forever', async () => {
     const manifest = { ...MANIFEST, workers: [...MANIFEST.workers, { paneID: 'w3', label: 'ghost', task: '', resultPath: null, worktreePath: null, parent: null }] };
     const api = makeSwarmApi({ files: { '/m/ws1.json': JSON.stringify(manifest) } });
     const dispose = registerAll(api);
     await dispose.ready;
-    const snap = lastSnapshot(api);
-    assert.equal(snap.workers.find(w => w.paneID === 'w3').paneClosed, false);
-    assert.ok(snap.warnings.some(w => /ghost: pane not in the plugin's pane list/.test(w)), snap.warnings.join(' | '));
+    const ghost = lastSnapshot(api).workers.find(w => w.paneID === 'w3');
+    assert.deepEqual([ghost.state, ghost.paneClosed], ['error', true]);
+    // Clear takes it off the rail without closing anything.
+    const result = await api.commands.execute('local.swarm-view.clear-done', {});
+    assert.ok(result.cleared.includes('w3'), JSON.stringify(result));
+    assert.equal(lastSnapshot(api).workers.find(w => w.paneID === 'w3').archived, true);
     dispose();
 });
 
