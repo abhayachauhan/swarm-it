@@ -20,6 +20,17 @@ test('a subagent header ("· from the general-purpose agent") is recognised', ()
     assert.equal(parsePrompt(v2({ header: 'Bash command · from the general-purpose agent' })).approvable, true);
 });
 
+test('a queue counter ("1 of 3") after the header, shown when several agents ask at once, is recognised', () => {
+    const pad = ' '.repeat(80);
+    assert.equal(parsePrompt(v2({ header: `Bash command · from the general-purpose agent${pad}1 of 3` })).approvable, true);
+    assert.equal(parsePrompt(v2({ header: `Bash command${pad}2 of 2` })).approvable, true);
+    // Only that exact counter: other trailing text, or a single space before it, stays unrecognised.
+    assert.equal(parsePrompt(v2({ header: `Bash command${pad}1 of 3 rm -rf` })).approvable, false);
+    assert.equal(parsePrompt(v2({ header: 'Bash command 1 of 3' })).approvable, false);
+    // A counter-style header inside the command is still a fake header.
+    assert.equal(parsePrompt(v2({ cmd: ['ls', `Bash command${pad}1 of 2`] })).approvable, false);
+});
+
 test('the description line and notes are optional', () => {
     assert.equal(parsePrompt(v2({ desc: [], notes: [] })).command, 'git status');
 });

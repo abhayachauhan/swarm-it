@@ -18,8 +18,9 @@ const OPTION_YES = /^[❯>›]?\s*1[.)]\s*yes\b/i;
 const CURSOR_YES = /^[❯›]\s*1[.)]\s*yes\b/i;
 const CURSOR = /^[❯>›]\s*\d+[.)]\s/;
 // Exact Claude permission header strings only (no wildcards: a command line such as `echo run command` must never act as a header).
-// A subagent's prompt adds " · from the <name> agent" to the header.
-const HEADER = /^(?:bash command|edit file|create file|write file|read file|fetch|web fetch|tool use)(?: · from the [\w .-]{1,40} agent)?$/i;
+// A subagent's prompt adds " · from the <name> agent" to the header. While several agents wait at once, Claude
+// right-aligns a queue counter ("1 of 3") on the header line; Enter still answers the one shown.
+const HEADER = /^(?:bash command|edit file|create file|write file|read file|fetch|web fetch|tool use)(?: · from the [\w .-]{1,40} agent)?(?:\s{2,}\d{1,3} of \d{1,3})?$/i;
 // The dashed rules newer Claude versions draw above and below the command.
 const RULE = /^[╌╍┄┅┈┉]{3,}$/u;
 /** A narrow pane wraps the description and the notes; these bound how many lines each may take. */
