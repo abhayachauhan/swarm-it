@@ -27,9 +27,8 @@ A sidebar list of every worker, grouped by what it needs from you:
   Deny it here without leaving the pane you're working in. Before sending anything, the plugin checks that
   the prompt on screen is still the one you saw.
 - **Running**: workers still going, and how long they've taken.
-- **Done**: finished workers. Open shows the result, ✕ closes the worker, and **Clear** on the section
-  header closes every finished worker at once. Running workers are never touched, and a worker whose
-  worktree has uncommitted changes is kept and named.
+- **Done**: just a count of finished workers ("Done · 12"). They are not listed and need no clearing.
+  Their results stay in `~/.kelpi-swarm/results/`.
 
 Workers live in a separate `<name> · workers` workspace in the same Kelpi Group, so your coordinator keeps
 its space. `swarm-spawn` opens each worker straight in that workspace, so Kelpi never switches your view

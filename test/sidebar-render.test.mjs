@@ -68,7 +68,7 @@ test('the list is sectioned: Needs you (cards), Running, Done; each pane appears
     const refs = makeRefs();
     L.render(fakeDoc, refs, view(fixture(), { selectedPaneID: 'p-run', railFocused: true }), handlers());
     const options = refs.list.children.filter(n => n.attrs.role === 'option');
-    assert.deepEqual(options.map(r => r.dataset.paneId), ['p-wait', 'p-run', 'p-err', 'p-done', 'p-acc']);
+    assert.deepEqual(options.map(r => r.dataset.paneId), ['p-wait', 'p-run']);
     assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.textContent), ['Needs you · 1', 'Running · 1', 'Done · 3']);
     // The waiting worker with a card is the card, not a worker row.
     assert.equal(options[0].className, 'att att-request');
@@ -76,7 +76,6 @@ test('the list is sectioned: Needs you (cards), Running, Done; each pane appears
     assert.equal(find(options[1], n => n.className === 'time')[0].text, '42s');
     assert.equal(options[1].attrs['aria-current'], 'true');
     assert.equal(options[0].attrs['aria-current'], 'false');
-    assert.equal(find(options[2], n => n.className === 'last')[0].text, 'Error: connection refused');
     assert.equal(find(refs.list, n => n.text === 'orchestrator' || n.text === 'coordinator').length, 0, 'no coordinator row');
 });
 
@@ -106,17 +105,15 @@ test('empty sections are not drawn', () => {
     assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.textContent), ['Running · 1']);
 });
 
-test('the Done head has one Clear button that sends clear-done; other heads have none', () => {
+test('Done is a count only: no rows and no buttons; with only finished workers the rail shows just that count', () => {
     const refs = makeRefs();
-    const calls = [];
-    L.render(fakeDoc, refs, view(fixture()), { ...handlers(calls), onClearDone: () => calls.push(['clear-done']) });
+    L.render(fakeDoc, refs, view(fixture()), handlers());
     const heads = refs.list.children.filter(n => n.className.startsWith('sec-head'));
-    const clears = heads.map(head => find(head, n => n.tag === 'button' || n.tagName === 'BUTTON'));
-    assert.deepEqual(clears.map(c => c.length), [0, 0, 1]);
-    assert.equal(clears[2][0].textContent, 'Clear');
-    clears[2][0].click();
-    assert.deepEqual(calls, [['clear-done']]);
-    assert.deepEqual(L.clearDoneEffect(), { command: `${L.CMD}clear-done`, args: {} });
+    assert.deepEqual(heads.map(head => find(head, n => n.tag === 'button' || n.tagName === 'BUTTON').length), [0, 0, 0]);
+    assert.equal(L.clearDoneEffect, undefined);
+    const finished = { ...fixture(), attention: [], workers: fixture().workers.filter(w => w.state === 'done' || w.state === 'error') };
+    L.render(fakeDoc, refs, view(finished), handlers());
+    assert.deepEqual(refs.list.children.map(n => n.textContent), ['Done · 3']);
 });
 
 test('clicking a card selects it, so Y/N land on that request', () => {
@@ -138,9 +135,9 @@ test('Request cards only: no Complete or Error cards and no summary bar', () => 
     assert.equal(find(items[0], n => n.text === 'repo-lag wants to run a command').length, 0, 'the long item text is not shown');
     assert.equal(find(refs.list, n => n.className === 'strip-summary').length, 0, 'no summary bar');
     assert.equal(find(refs.list, n => /ui-polish finished|db-migrate failed/.test(n.text)).length, 0, 'finished workers are not cards');
-    // The finished workers are still listed once each, in Done.
+    // The finished workers are not rows either: the Done head counts them.
     const rows = find(refs.list, n => n.className === 'row').map(r => r.dataset.paneId);
-    assert.ok(rows.includes('p-done') && rows.includes('p-err'));
+    assert.deepEqual(rows, ['p-run']);
     const quiet = { ...fixture(), attention: fixture().attention.filter(i => i.type !== 'Request') };
     L.render(fakeDoc, refs, view(quiet), handlers());
     assert.equal(cards(refs).length, 0);
@@ -428,17 +425,10 @@ test('row verbs: Stop (two steps, hover or selected only) while running; Open an
     L.render(fakeDoc, refs, view(noCard), h);
     assert.deepEqual(buttons('p-wait'), ['Stop']);
     L.render(fakeDoc, refs, view(snap), h);
-    for (const id of ['p-done', 'p-err', 'p-acc']) {
-        assert.deepEqual(buttons(id), ['Open', '✕'], id);
-        assert.equal(actions(id).className, 'row-actions', `${id}: always shown`);
-        assert.equal(find(row(id), n => n.text === '✕')[0].attrs.title, 'Remove (X)');
-    }
-    for (const gone of ['pane closed', 'Close', 'Accept', 'accepted', 'Dismiss']) assert.equal(find(refs.list, n => n.text === gone).length, 0, `no "${gone}"`);
-    find(row('p-done'), n => n.text === 'Open')[0].click();
-    find(row('p-done'), n => n.text === '✕')[0].click();
-    find(row('p-err'), n => n.text === '✕')[0].click();
+    for (const id of ['p-done', 'p-err', 'p-acc']) assert.equal(row(id), undefined, `${id}: finished, no row`);
+    for (const gone of ['pane closed', 'Close', 'Accept', 'accepted', 'Dismiss', 'Open', '✕']) assert.equal(find(refs.list, n => n.text === gone).length, 0, `no "${gone}"`);
     find(row('p-run'), n => n.tag === 'button')[0].click();
-    assert.deepEqual(calls, [['open', 'p-done'], ['close', 'p-done'], ['dismiss', 'p-err'], ['ask', 'p-run']]);
+    assert.deepEqual(calls, [['ask', 'p-run']]);
     // The second step, on the asked row: Really stop? / Keep.
     calls.length = 0;
     L.render(fakeDoc, refs, view(snap, { selectedPaneID: 'p-run', railFocused: true, closeAsk: { paneID: 'p-run', until: 9e12 } }), h);
@@ -446,9 +436,6 @@ test('row verbs: Stop (two steps, hover or selected only) while running; Open an
     find(row('p-run'), n => n.text === 'Really stop?')[0].click();
     find(row('p-run'), n => n.text === 'Keep')[0].click();
     assert.deepEqual(calls, [['confirm', 'p-run'], ['keep']]);
-    // A finished worker never shows the two-step confirm even when a closeAsk is pending for it.
-    L.render(fakeDoc, refs, view(snap, { selectedPaneID: 'p-done', railFocused: true, closeAsk: { paneID: 'p-done', until: 9e12 } }), h);
-    assert.deepEqual(buttons('p-done'), ['Open', '✕']);
 });
 
 test('the status line is clean: no box drawing, no git status, a prompt line becomes the state', () => {
@@ -456,15 +443,12 @@ test('the status line is clean: no box drawing, no git status, a prompt line bec
     const snap = fixture();
     const set = (id, lastLine) => { snap.workers.find(w => w.paneID === id).lastLine = lastLine; };
     set('p-run', '│ Reading files ─── main ↑16 !10 ?3');
-    set('p-done', '> Try "fix lint errors"');
-    set('p-err', '╭──────────────────────╮');
-    set('p-acc', '');
     L.render(fakeDoc, refs, view(snap), handlers());
     const last = id => find(find(refs.list, n => n.dataset.paneId === id)[0], n => n.className === 'last')[0].text;
     assert.equal(last('p-run'), 'Reading files main');
-    assert.equal(last('p-done'), 'done');
-    assert.equal(last('p-err'), 'error');
-    assert.equal(last('p-acc'), 'done');
+    set('p-run', '╭──────────────────────╮');
+    L.render(fakeDoc, refs, view(snap), handlers());
+    assert.equal(last('p-run'), 'running');
 });
 
 // ---- auto-approve ---------------------------------------------------------------------------------------------

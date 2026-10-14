@@ -66,7 +66,7 @@
      *   needs:   one 'request' row per permission card (a waiting worker with a card appears only here), then one
      *            'waiting' row per worker waiting for input whose prompt the backend cannot read (snapshot.waitingPanes);
      *   running: live workers (running, or waiting without a card);
-     *   done:    finished workers (done or error), snapshot order.
+     *   done:    no rows, only `count`: how many workers finished (done or error).
      * Archived workers are omitted everywhere.
      */
     function sections(snapshot) {
@@ -85,11 +85,10 @@
         }
         const workers = activeWorkers(snapshot).map(worker => ({ kind: 'worker', ...worker }));
         const running = workers.filter(row => !isFinished(row) && !carded.has(row.paneID));
-        const done = workers.filter(isFinished);
         return [
             { key: 'needs', title: 'Needs you', rows: needs },
             { key: 'running', title: 'Running', rows: running },
-            { key: 'done', title: 'Done', rows: done },
+            { key: 'done', title: 'Done', rows: [], count: workers.filter(isFinished).length },
         ];
     }
 
@@ -327,9 +326,6 @@
             }
             case 'x': {
                 if (!selected || selected.kind !== 'worker') return other({ notice: 'Select a worker to stop.' });
-                // Nothing is running: a closed pane is dismissed, a finished worker is closed, on one press (the row's ✕, "Remove").
-                if (selected.paneClosed) return other({ label: 'Remove', effect: effect('dismiss-worker', { paneID: selected.paneID }) });
-                if (isFinished(selected)) return other({ label: 'Remove', effect: effect('close-worker', { paneID: selected.paneID }) });
                 if (ui.closeAsk && ui.closeAsk.paneID === selected.paneID && nowMs < ui.closeAsk.until) {
                     return handled({ ui: { ...disarm(active), closeAsk: null }, label: 'Stop', effect: effect('close-worker', { paneID: selected.paneID }) });
                 }
@@ -604,7 +600,7 @@
 
     /**
      * A worker row: dot, name, elapsed, then the one right verb. Running or waiting: a two-step Stop, shown only on the
-     * selected or hovered row (CSS, class row-hover). Done, error or pane closed: Open and ✕ (Remove), always shown.
+     * selected or hovered row (CSS, class row-hover). Finished workers have no row: the Done head counts them.
      */
     function buildThreadRow(doc, row, selected, view, handlers) {
         const nowMs = Number.isFinite(view.nowMs) ? view.nowMs : Date.now();
@@ -622,17 +618,7 @@
         top.append(time);
         {
             const asked = view.ui && view.ui.closeAsk && view.ui.closeAsk.paneID === row.paneID;
-            if (isFinished(row) || row.paneClosed) {
-                const actions = h(doc, 'span', 'row-actions');
-                actions.append(button(doc, 'Open', 'btn', () => handlers.onOpen(row.paneID), 'Open the result (Enter)'));
-                // Remove: closes the pane when it is still open (nothing runs any more), else just takes the row off the rail.
-                const remove = row.paneClosed
-                    ? button(doc, '✕', 'btn btn-x', () => handlers.onDismiss(row.paneID), 'Remove (X)')
-                    : button(doc, '✕', 'btn btn-x', () => handlers.onClose(row.paneID), 'Remove (X)');
-                remove.setAttribute('aria-label', 'Remove');
-                actions.append(remove);
-                top.append(actions);
-            } else {
+            {
                 const actions = h(doc, 'span', 'row-actions row-hover');
                 if (asked) {
                     // Two steps, so one stray click cannot end an agent. The actions sit at the row's right edge, so the
@@ -733,20 +719,14 @@
         return node;
     }
 
-    /** The Done section's head carries Clear: one click closes every finished worker's pane (nothing runs in them any more). */
-    function buildSectionHead(doc, section, handlers) {
+    /** "Running · 2". The Done head is the whole Done section: a count, no rows. */
+    const sectionSize = section => (Number.isFinite(section.count) ? section.count : section.rows.length);
+    function buildSectionHead(doc, section) {
         const node = h(doc, 'div', `sec-head sec-${section.key}`);
         node.setAttribute('role', 'presentation');
-        node.append(h(doc, 'span', 'sec-title', `${section.title} · ${section.rows.length}`));
-        if (section.key === 'done' && handlers && handlers.onClearDone) {
-            const clear = button(doc, 'Clear', 'btn btn-link sec-clear', () => handlers.onClearDone(), 'Close and remove every finished worker');
-            clear.setAttribute('aria-label', 'Clear finished workers');
-            node.append(clear);
-        }
+        node.append(h(doc, 'span', 'sec-title', `${section.title} · ${sectionSize(section)}`));
         return node;
     }
-
-    const clearDoneEffect = () => effect('clear-done', {});
 
     /** The keyboard hint lives in the header's tooltip, not in a footer line. */
     const KEY_HINT = 'Keys (Ctrl+Alt+J focuses the rail): J/K move, Enter open, E archive, X stop, Y/N twice to approve or deny';
@@ -820,17 +800,17 @@
         if (!snapshot) {
             list.push(h(doc, 'p', 'empty', 'Connecting...'));
         } else {
-            const all = rowsOf(snapshot);
-            if (!all.length) list.push(h(doc, 'p', 'empty', 'No workers yet.'));
+            const secs = sections(snapshot);
+            if (!secs.some(sectionSize)) list.push(h(doc, 'p', 'empty', 'No workers yet.'));
             const build = row => {
                 const selected = row.paneID === ui.selectedPaneID;
                 if (row.kind === 'request') return buildRequestRow(doc, row, selected, view, handlers);
                 if (row.kind === 'waiting') return buildWaitingRow(doc, row, selected, view, handlers);
                 return buildThreadRow(doc, row, selected, view, handlers);
             };
-            for (const section of sections(snapshot)) {
-                if (!section.rows.length) continue;
-                list.push(buildSectionHead(doc, section, handlers));
+            for (const section of secs) {
+                if (!sectionSize(section)) continue;
+                list.push(buildSectionHead(doc, section));
                 for (const row of section.rows) list.push(build(row));
             }
             list.push(...buildOtherSwarms(doc, snapshot, handlers));
@@ -852,7 +832,7 @@
         initialUI, reconcile, moveSelection, itemsForPane, requestForPane, cardTitle, fromOtherSwarm, isExpanded, toggleExpanded, pruneExpanded, cardCommand,
         ARM_MS, IDLE_MS, LOCK_MS, LAYOUT_LOCK_MS, BLUR_GRACE_MS, armedNow, expire, touch, setRailFocused, noteBlur, resolveBlur, createButtonGuard,
         markLayout, layoutLocked, layoutLockRemaining, askClose, cancelClose,
-        reduceKey, attentionEffect, describeResult, displayCommand, statusLine, reviewEffect, clearDoneEffect, buildSectionHead,
+        reduceKey, attentionEffect, describeResult, displayCommand, statusLine, reviewEffect, buildSectionHead,
         AUTO_DEFAULT_HOURS, formatClock, autoLabel, autoEndedText, autoNotes, autoAlerts, autoOnEffect, autoOffEffect, autoLogEffect, autoLogClearEffect, buildAutoControls, buildAutoLog,
         nextNineAm, autoChoices, autoChoiceEffect, groupColor, fromTag, swarmSummary, buildOtherSwarms, buildWaitingRow, buildSwarmTag,
         KEY_HINT, warningsOf, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,

@@ -36,8 +36,8 @@ the user before spawning more.
 
    Run it with `run_in_background`. It exits when every result exists or a pane closes, and prints
    each result's first lines. Read the result files for the detail.
-4. Clean up: the user presses **Clear** on the rail's Done section (every finished worker at once) or Stop
-   on one worker. To clear finished workers yourself: `kelpi plugin run local.swarm-view.clear-done`. Per worker:
+4. Clean up: the rail only counts finished workers, so nothing needs clearing there. To close their panes:
+   `kelpi plugin run local.swarm-view.clear-done`. Per worker:
 
    ```bash
    kelpi pane close --target <pane-id>

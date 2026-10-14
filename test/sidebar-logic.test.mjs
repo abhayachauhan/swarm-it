@@ -47,13 +47,14 @@ test('elapsedNow counts up live workers only', () => {
     assert.equal(L.elapsedNow({ state: 'running', elapsedSeconds: 10 }, 6000, 1000), 10);
 });
 
-test('sections: Needs you holds one request row per card, Running the live workers without a card, Done the finished ones', () => {
+test('sections: Needs you holds one request row per card, Running the live workers without a card, Done only a count', () => {
     const secs = L.sections(fixture());
     assert.deepEqual(secs.map(s => [s.key, s.title, s.rows.map(r => r.paneID)]), [
         ['needs', 'Needs you', ['p-wait']],
         ['running', 'Running', ['p-run']],
-        ['done', 'Done', ['p-err', 'p-done', 'p-acc']],
+        ['done', 'Done', []],
     ]);
+    assert.equal(secs[2].count, 3, 'done and error workers are counted; the archived one is not');
     assert.equal(secs[0].rows[0].kind, 'request');
     assert.equal(secs[0].rows[0].item.type, 'Request');
     assert.equal(secs[1].rows[0].kind, 'worker');
@@ -77,8 +78,8 @@ test('a waiting worker without a card is listed under Running; one with a card a
     assert.deepEqual(L.sections(other)[0].rows.map(r => r.paneID), ['p-wait', 'x9']);
 });
 
-test('rows is the flat J/K order: Needs you, Running, Done; the coordinator is not a row', () => {
-    assert.deepEqual(L.rows(fixture()).map(r => r.paneID), ['p-wait', 'p-run', 'p-err', 'p-done', 'p-acc']);
+test('rows is the flat J/K order: Needs you, Running; finished workers and the coordinator are not rows', () => {
+    assert.deepEqual(L.rows(fixture()).map(r => r.paneID), ['p-wait', 'p-run']);
     assert.equal(L.rows(fixture()).some(r => r.kind === 'orchestrator'), false);
     assert.equal(L.rows({ ...fixture(), orchestrator: null })[0].paneID, 'p-wait');
     assert.deepEqual(L.rows(null), []);
@@ -117,7 +118,7 @@ test('J and K move and clamp', () => {
     ui = L.reduceKey(ui, snap, key('k')).ui;
     assert.equal(ui.selectedPaneID, 'p-wait');
     for (let i = 0; i < 20; i += 1) ui = L.reduceKey(ui, snap, key('J')).ui;
-    assert.equal(ui.selectedPaneID, 'p-acc');
+    assert.equal(ui.selectedPaneID, 'p-run');
 });
 
 test('keys are ignored unless the rail has focus', () => {
@@ -208,8 +209,8 @@ test('cardCommand: the captured command, or the best guess for an unrecognised p
 });
 
 test('E archives the selected worker by paneID, never the orchestrator', () => {
-    const out = L.reduceKey(focused('p-done'), fixture(), key('e'));
-    assert.deepEqual(out.effect, { command: 'local.swarm-view.archive', args: { paneID: 'p-done' } });
+    const out = L.reduceKey(focused('p-run'), fixture(), key('e'));
+    assert.deepEqual(out.effect, { command: 'local.swarm-view.archive', args: { paneID: 'p-run' } });
     // The coordinator is not a row, so it can never be selected or archived.
     const orch = L.reduceKey(focused('p-orch'), fixture(), key('e'));
     assert.equal(orch.effect, null);
@@ -234,18 +235,8 @@ test('X arms a stop, and a second X on the same worker closes it', () => {
     assert.equal(second.ui.closeAsk, null);
 });
 
-test('X removes a done or error worker on one press and dismisses a closed pane; running workers keep the two steps', () => {
-    const done = L.reduceKey(focused('p-done'), fixture(), key('x', { nowMs: 1000 }));
-    assert.deepEqual(done.effect, { command: 'local.swarm-view.close-worker', args: { paneID: 'p-done' } });
-    assert.equal(done.label, 'Remove', 'a failure notice says Remove, the verb on the row');
-    assert.equal(done.ui.closeAsk ?? null, null);
-    const error = L.reduceKey(focused('p-err'), fixture(), key('x', { nowMs: 1000 }));
-    assert.deepEqual(error.effect, { command: 'local.swarm-view.close-worker', args: { paneID: 'p-err' } }, 'an error worker with its pane open is closed, no second step');
+test('X on a running worker keeps the two steps, and the second press is labelled Stop', () => {
     const snap = fixture();
-    snap.workers.find(w => w.paneID === 'p-err').paneClosed = true;
-    const closed = L.reduceKey(focused('p-err'), snap, key('x', { nowMs: 1000 }));
-    assert.deepEqual(closed.effect, { command: 'local.swarm-view.dismiss-worker', args: { paneID: 'p-err' } });
-    assert.equal(closed.label, 'Remove');
     const running = L.reduceKey(focused('p-run'), snap, key('x', { nowMs: 1000 }));
     assert.equal(running.effect, null);
     assert.equal(running.ui.closeAsk.paneID, 'p-run');
@@ -302,12 +293,12 @@ test('selection survives a new snapshot and falls back when the pane vanishes', 
     assert.equal(L.reconcile(focused('p-run'), gone).selectedPaneID, 'p-wait');
 });
 
-test('J walks from a card into Running and Done without a tab change', () => {
+test('J walks from a card into Running and stops there (Done has no rows), without a tab change', () => {
     const snap = fixture();
     let ui = focused('p-wait');
     const seen = [];
-    for (let i = 0; i < 5; i += 1) { ui = L.reduceKey(ui, snap, key('j')).ui; seen.push(ui.selectedPaneID); }
-    assert.deepEqual(seen, ['p-run', 'p-err', 'p-done', 'p-acc', 'p-acc']);
+    for (let i = 0; i < 3; i += 1) { ui = L.reduceKey(ui, snap, key('j')).ui; seen.push(ui.selectedPaneID); }
+    assert.deepEqual(seen, ['p-run', 'p-run', 'p-run']);
     assert.equal(L.initialUI().tab, undefined, 'no tab state any more');
     assert.equal(L.setTab, undefined);
     assert.equal(L.TABS, undefined);
@@ -419,7 +410,7 @@ test('a transient window blur does not release the rail, a real one does', () =>
 test('J K E still act on a single press', () => {
     const snap = fixture();
     assert.equal(L.reduceKey(focused('p-wait'), snap, key('j')).ui.selectedPaneID, 'p-run');
-    assert.equal(L.reduceKey(focused('p-done'), snap, key('e')).effect.command, 'local.swarm-view.archive');
+    assert.equal(L.reduceKey(focused('p-run'), snap, key('e')).effect.command, 'local.swarm-view.archive');
 });
 
 test('the button guard locks Approve and Deny for 500 ms after the item, prompt or position changes', () => {

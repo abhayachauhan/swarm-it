@@ -146,29 +146,13 @@ test('a rate-guard pause and the timer switching auto-approve off are each annou
     assert.match(app.button(app.refs.head, app.L.autoLabel({ ...AUTO_ON, paused: [PAUSED] })).attrs.title, /Stopped for api-docs/);
 });
 
-test('a failed ✕ says "Remove:", by click and by the X key; a failed two-step stop says "Stop:"', async () => {
-    const snap = fixture();
-    snap.workers.find(w => w.paneID === 'p-err').paneClosed = true;
-    const refuse = command => (/close-worker|dismiss-worker/.test(command) ? { ok: false, error: 'the host refused' } : null);
-    const app = await bootApp({ snapshot: snap, execute: refuse });
-    await app.pointerClick(app.button(app.row('p-done'), '✕'));
-    await app.flush();
-    assert.equal(app.footerText(), 'Remove: the host refused');
-    await app.pointerClick(app.button(app.row('p-err'), '✕'));
-    await app.flush();
-    assert.equal(app.footerText(), 'Remove: the host refused');
-    assert.deepEqual(sent(app, 'dismiss-worker').map(c => c.args), [{ paneID: 'p-err' }]);
-    // Keys: selecting a row by click gives the rail the keyboard; X on a done worker is Remove.
-    await app.pointerClick(app.row('p-done'));
-    assert.equal(app.refs.list.dataset.railFocused, 'true');
-    await app.press('x');
-    assert.equal(app.footerText(), 'Remove: the host refused');
-    assert.equal(sent(app, 'close-worker').length, 2);
-    await app.pointerClick(app.row('p-err'));
-    await app.press('x');
-    assert.equal(sent(app, 'dismiss-worker').length, 2);
-    // X twice on a running worker is Stop.
+test('finished workers have no row to remove; a failed two-step stop by the X key says "Stop:"', async () => {
+    const refuse = command => (/close-worker/.test(command) ? { ok: false, error: 'the host refused' } : null);
+    const app = await bootApp({ snapshot: fixture(), execute: refuse });
+    assert.equal(app.row('p-done'), null);
+    // Selecting a row by click gives the rail the keyboard; X twice on a running worker is Stop.
     await app.pointerClick(app.row('p-run'));
+    assert.equal(app.refs.list.dataset.railFocused, 'true');
     await app.press('x');
     assert.match(app.footerText(), /^Press X again/);
     await app.press('x');
