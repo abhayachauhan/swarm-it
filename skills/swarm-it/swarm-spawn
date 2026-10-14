@@ -38,11 +38,11 @@ node "$MW" show "$ws" >/dev/null 2>&1 || node "$MW" init "$ws" "$orch" coordinat
 # Label the coordinator pane so it is easy to spot; never rename a pane the user already labelled.
 [ "$(jq -r '.label // empty' <<<"$me")" ] || kelpi pane name --target "$orch" coordinator >/dev/null
 
-# Open the worker straight in `<name> · workers` when it exists: Kelpi switches the user's view on every
-# move between workspaces, but never on a background create. The first worker of a new swarm still splits
-# here, and the plugin moves it (and creates the workers workspace) once.
-workers=$(kelpi workspace list --json | jq -r --arg n "$(jq -r '.workspace_name' <<<"$me") · workers" --arg ws "$ws" \
-  '[.[] | select(.name == $n and .id != $ws)][0].id // empty')
+# Open the worker straight in the shared `Workers` workspace when it exists: Kelpi switches the user's view
+# on every move between workspaces, but never on a background create. Before it exists the worker splits
+# here, and the plugin creates the Workers workspace and moves it there once.
+workers=$(kelpi workspace list --json | jq -r --arg ws "$ws" \
+  '([.[] | select(.name == "Workers" and .id != $ws and .group_name == "Workers")] + [.[] | select(.name == "Workers" and .id != $ws)])[0].id // empty')
 if [ -n "$workers" ]; then
   pane=$(kelpi pane create --workspace "$workers" --name "$label" --path "$dir" --json | jq -r '.pane_id // .id')
 else

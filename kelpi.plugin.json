@@ -50,7 +50,8 @@
       { "id": "local.swarm-view.counts", "placement": "statusbar", "text": "Swarm 0/0/0", "tooltip": "Swarm: waiting / running / finished", "tone": "default", "command": "local.swarm-view.focus-rail" }
     ],
     "settings": {
-      "autoHide": { "title": "Hide workers in the swarm workspace", "type": "boolean", "default": true },
+      "autoHide": { "title": "Move workers into the shared Workers workspace", "type": "boolean", "default": true },
+      "autoCleanMinutes": { "title": "Close finished workers after this many minutes (0 = never)", "type": "number", "default": 10 },
       "snoozeMinutes": { "title": "Default snooze (minutes)", "type": "number", "default": 15 },
       "coordinatorLabel": { "title": "Orchestrator pane label", "type": "string", "default": "coordinator" },
       "manifestDir": { "title": "Swarm manifest directory", "type": "string", "default": "" },

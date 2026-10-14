@@ -30,10 +30,16 @@ A sidebar list of every worker, grouped by what it needs from you:
 - **Done**: just a count of finished workers ("Done · 12"). They are not listed and need no clearing.
   Their results stay in `~/.kelpi-swarm/results/`.
 
-Workers live in a separate `<name> · workers` workspace in the same Kelpi Group, so your coordinator keeps
-its space. `swarm-spawn` opens each worker straight in that workspace, so Kelpi never switches your view
-while you work elsewhere. The first worker of a new swarm is the exception: the plugin creates the workers
-workspace and moves that worker in, and Kelpi switches to it once. **⌂ Coordinator** takes you back to it. The status bar shows the waiting / running / finished
+Every swarm's workers live in one shared `Workers` workspace, inside a collapsed `Workers` Group, so the
+sidebar shows one row for all of them and your coordinator keeps its space. Each coordinator's rail still
+shows only its own workers. `swarm-spawn` opens each worker straight in `Workers`, so Kelpi never switches
+your view while you work elsewhere. The exception is before `Workers` exists: the plugin creates it and
+moves that first worker in, and Kelpi switches to it once.
+
+Finished workers clean themselves up: 10 minutes after a worker finishes, its pane is closed and it leaves
+the swarm (the result file stays). A worker whose worktree has uncommitted changes is kept and named under
+the rail's ⚠. Change the delay with the `autoCleanMinutes` plugin setting; 0 turns it off. Old
+`<name> · workers` workspaces from earlier versions are emptied into `Workers` and removed. **⌂ Coordinator** takes you back to it. The status bar shows the waiting / running / finished
 counts, and `ctrl+alt+j` gives the rail the keyboard.
 
 ### Worker results

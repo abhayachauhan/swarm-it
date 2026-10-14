@@ -36,6 +36,7 @@ export function makeFakeApi(opts = {}) {
     const captures = { ...(opts.captures ?? {}) };
     const panes = (opts.panes ?? []).map(p => ({ status: 'idle', ...p }));
     const workspaces = (opts.workspaces ?? []).map(w => ({ ...w }));
+    const groups = (opts.groups ?? []).map(g => ({ ...g }));
     let sequence = 100;
     let nextWorkspace = 1;
 
@@ -165,7 +166,16 @@ export function makeFakeApi(opts = {}) {
             },
             remove: trap('workspaces.remove')
         },
-        groups: { async list() { return (opts.groups ?? []).map(g => ({ ...g })); } },
+        groups: {
+            async list() { return groups.map(g => ({ ...g })); },
+            async create(name, o) {
+                record('groups.create', name, o);
+                const id = `g-created-${groups.length + 1}`;
+                groups.push({ id, name, workspaces: [] });
+                return { groupID: id, name, workspaceIDs: [] };
+            },
+            async setCollapsed(groupID, collapsed) { record('groups.setCollapsed', groupID, collapsed); return { groupID, collapsed }; }
+        },
         git: {
             removeWorktree: trap('git.removeWorktree'),
             dissociate: trap('git.dissociate'),

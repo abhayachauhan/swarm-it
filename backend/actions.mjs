@@ -263,6 +263,22 @@ export async function accept(api, store, paneID) {
     return { ok: true, paneID, notified: sent.ok };
 }
 
+/** A failure when the worker's worktree is dirty (DIRTY) or its git status is unknown (UNKNOWN_GIT); null when clean or there is none. */
+export async function worktreeProblem(api, w) {
+    if (!w.worktreePath) return null;
+    let status;
+    try {
+        status = await api.services.call('kelpi.git', 1, 'getStatus', { repoPath: w.worktreePath });
+    } catch (error) {
+        return fail(`git status for ${w.worktreePath} is unknown (${message(error)}); not archiving`, 'UNKNOWN_GIT');
+    }
+    if (status?.kind === 'dirty') {
+        return fail(`worktree ${w.worktreePath} has uncommitted changes (${status.changedFiles ?? '?'} files); not archiving`, 'DIRTY');
+    }
+    if (status?.kind !== 'clean') return fail(`git status for ${w.worktreePath} is unknown; not archiving`, 'UNKNOWN_GIT');
+    return null;
+}
+
 /**
  * Hide a worker from the rail. Refuses when its worktree is dirty (DIRTY) or its git status is unknown (UNKNOWN_GIT).
  * Never deletes the worktree and never closes the pane (contracts/commands.md).
@@ -270,18 +286,8 @@ export async function accept(api, store, paneID) {
 export async function archive(api, store, paneID) {
     const w = worker(store, paneID);
     if (!w) return fail(`pane ${paneID} is not a worker in the manifest`, 'NOT_WORKER');
-    if (w.worktreePath) {
-        let status;
-        try {
-            status = await api.services.call('kelpi.git', 1, 'getStatus', { repoPath: w.worktreePath });
-        } catch (error) {
-            return fail(`git status for ${w.worktreePath} is unknown (${message(error)}); not archiving`, 'UNKNOWN_GIT');
-        }
-        if (status?.kind === 'dirty') {
-            return fail(`worktree ${w.worktreePath} has uncommitted changes (${status.changedFiles ?? '?'} files); not archiving`, 'DIRTY');
-        }
-        if (status?.kind !== 'clean') return fail(`git status for ${w.worktreePath} is unknown; not archiving`, 'UNKNOWN_GIT');
-    }
+    const problem = await worktreeProblem(api, w);
+    if (problem) return problem;
     store.archived.add(paneID);
     for (const item of store.attention) {
         if (item.paneID === paneID && !item.handledAt) await handleItem(store.att, item.id);

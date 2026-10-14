@@ -20,7 +20,7 @@ export interface Worker {
     worktreePath: string | null;
     /** paneID of the spawning worker, or null when spawned by the orchestrator. */
     parent: string | null;
-    /** True once the plugin moved the pane into the hidden workspace. */
+    /** True while the pane lives in the shared Workers workspace (or the swarm's old `<name> · workers`). */
     hidden: boolean;
     /** True once the user pressed Accept (reviewed). */
     accepted?: boolean;

@@ -2,6 +2,7 @@
 import { visibleItems, snoozedItems, toMs } from './attention.mjs';
 import { checkResultPath, readResultSafely, withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { createHash } from 'node:crypto';
+import { isWorkersWorkspaceOf } from './workers.mjs';
 
 export const textHash = text => createHash('sha256').update(String(text)).digest('hex');
 /** Claude session ids are UUIDs; anything else is never typed into a shell. */
@@ -11,7 +12,7 @@ const STATE_ORDER = { waiting: 0, error: 1, running: 2, done: 3 };
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 const DECOR_ONLY = /^[\s─━│┃┌┐└┘├┤┬┴┼╭╮╯╰═║╔╗╚╝▀▄█▌▐░▒▓·•>❯]*$/u;
 
-export const DEFAULT_SETTINGS = { autoHide: true, snoozeMinutes: 15, coordinatorLabel: 'coordinator', manifestDir: '', worktreeRoots: '' };
+export const DEFAULT_SETTINGS = { autoHide: true, autoCleanMinutes: 10, snoozeMinutes: 15, coordinatorLabel: 'coordinator', manifestDir: '', worktreeRoots: '' };
 
 /** A pane capture that has not answered by then counts as failed: one hung pane must never stall the serial queue. */
 export const CAPTURE_TIMEOUT_MS = Number(process.env.SWARM_CAPTURE_TIMEOUT_MS) || 2000;
@@ -45,12 +46,11 @@ export function otherSwarms(store) {
     return store.swarms.filter(s => !(store.manifest && s.workspaceID === store.workspaceID));
 }
 
-const workersName = swarm => `${swarm.name} · workers`;
-
 /**
  * FAIL-CLOSED gate for a Request on a pane of another live swarm (approve, deny, notification, scan). The swarm's
  * orchestrator pane must still live in the workspace its manifest file is named after, and the pane must be that
- * swarm's orchestrator or a listed worker, living in the swarm's workspace or its `<name> · workers` workspace.
+ * swarm's orchestrator or a listed worker, living in the swarm's workspace, the shared `Workers` workspace or the
+ * swarm's old `<name> · workers` workspace.
  * @returns {{ swarm: object, label: string, role: 'worker' | 'orchestrator' } | null}
  */
 export function otherSwarmPane(store, paneID) {
@@ -58,7 +58,7 @@ export function otherSwarmPane(store, paneID) {
     if (typeof paneID !== 'string' || typeof workspaceID !== 'string' || !workspaceID) return null;
     for (const swarm of otherSwarms(store)) {
         if (store.panes.get(swarm.orchestrator.paneID)?.workspaceID !== swarm.workspaceID) continue;
-        const allowed = workspaceID === swarm.workspaceID || (!!swarm.name && store.workspaceNames.get(workspaceID) === workersName(swarm));
+        const allowed = workspaceID === swarm.workspaceID || isWorkersWorkspaceOf(store, workspaceID, swarm.name);
         if (!allowed) continue;
         if (swarm.orchestrator.paneID === paneID) return { swarm, label: swarm.orchestrator.label, role: 'orchestrator' };
         const worker = swarm.workers.find(w => w.paneID === paneID);
@@ -87,11 +87,12 @@ export function createStore(api) {
         sequence: Date.now(),
         workspaceID: null,
         workspaceName: null,
+        /** The shared `Workers` workspace every swarm's workers live in (backend/workers.mjs). */
         hiddenWorkspaceID: null,
-        /** The empty shell pane the host put in the workers workspace this plugin created; closed once a worker moved in. */
-        hiddenShellPaneID: null,
-        createdHiddenWorkspaceID: null,
-        createdHiddenAt: 0,
+        /** Worker pane id to the time it was first seen finished (in memory): auto-clean closes it after the delay. */
+        doneSince: new Map(),
+        /** Old `<name> · workers` workspaces already tried for removal this run. */
+        legacyTried: new Set(),
         /** Set once a view reports the workspace the user is in: only that workspace's swarm is shown. */
         followWorkspaceID: null,
         orchestrator: null,
@@ -340,7 +341,7 @@ export function currentWorkers(store, now) {
             resultPath: mw.resultPath ?? null,
             worktreePath: mw.worktreePath ?? null,
             parent: mw.parent ?? null,
-            hidden: !!pane && !!store.hiddenWorkspaceID && pane.workspaceID === store.hiddenWorkspaceID,
+            hidden: !!pane && isWorkersWorkspaceOf(store, pane.workspaceID, store.workspaceName),
             accepted: store.accepted.has(mw.paneID),
             archived: store.archived.has(mw.paneID),
             paneClosed: paneClosed(store, mw.paneID)

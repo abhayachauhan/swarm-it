@@ -253,8 +253,9 @@ test('collapse via index: only manifest workers move; orchestrator and unknown p
     assert.deepEqual(moves, ['w1', 'w2']);
     assert.equal(api.paneList.find(p => p.id === 'orch').workspaceID, 'ws1');
     assert.equal(api.paneList.find(p => p.id === 'stranger').workspaceID, 'ws1');
-    const hidden = api.workspaceList.find(w => w.name === 'Swarm · workers');
+    const hidden = api.workspaceList.find(w => w.name === 'Workers');
     assert.ok(hidden);
+    assert.equal(api.paneList.find(p => p.id === 'w1').workspaceID, hidden.id);
     const snap = lastSnapshot(api);
     assert.ok(snap.workers.every(w => w.hidden), 'snapshot marks them hidden');
     // later events address the worker by pane id even though it lives in another workspace
@@ -364,18 +365,23 @@ const GROUPED = {
     otherPanes: [{ id: 'n-shell', workspaceID: 'ws3', status: 'idle' }, { id: 'o-shell', workspaceID: 'ws2', status: 'idle' }]
 };
 
-test('the workers workspace is created inside the swarm Group', async () => {
+test('the shared Workers workspace is created in the Workers Group, not the swarm Group', async () => {
     const { api, dispose } = await start({ swarmGroup: 'g1' });
     const created = api.callsTo('workspaces.create').map(c => c.args[0]);
-    assert.deepEqual(created, [{ name: 'Swarm · workers', groupID: 'g1' }]);
+    assert.deepEqual(created, [{ name: 'Workers', groupID: 'g-created-1' }]);
+    assert.equal(api.callsTo('workspaces.moveMany').length, 0);
     dispose();
 });
 
-test('a top-level workers workspace from before is moved into the swarm Group', async () => {
-    const { api, dispose } = await start({ swarmGroup: 'g1', otherWorkspaces: [{ id: 'hw', name: 'Swarm · workers' }] });
-    assert.equal(api.callsTo('workspaces.create').length, 0);
-    assert.deepEqual(api.callsTo('workspaces.moveMany').map(c => c.args), [[['hw'], { groupID: 'g1' }]]);
-    assert.equal(api.workspaceList.find(w => w.id === 'hw').groupID, 'g1');
+test('workers in an old "<name> · workers" workspace move to the shared Workers workspace, and the rail still shows them', async () => {
+    const api = makeSwarmApi({ swarmGroup: 'g1', otherWorkspaces: [{ id: 'hw', name: 'Swarm · workers', groupID: 'g1' }] });
+    api.paneList.find(p => p.id === 'w1').workspaceID = 'hw';
+    const dispose = registerAll(api);
+    await dispose.ready;
+    await api.idle();
+    const shared = api.workspaceList.find(w => w.name === 'Workers');
+    assert.equal(api.paneList.find(p => p.id === 'w1').workspaceID, shared.id);
+    assert.equal(lastSnapshot(api).workers.length, 2);
     dispose();
 });
 

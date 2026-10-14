@@ -1,4 +1,4 @@
-// Fixes seen live in a second swarm (workspace BB): the coordinator row, hide retries, the created shell pane.
+// Fixes seen live in a second swarm (workspace BB): the coordinator row, hide retries, the Workers workspace's shell pane.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSwarmApi } from './backend-fake-api.mjs';
@@ -38,7 +38,7 @@ test('a failed hide is retried with backoff and the collapse warning clears once
     await dispose.ready;
     assert.equal(api.callsTo('workspaces.create').length, 2, 'one attempt per worker on the first pass');
     assert.deepEqual(moved(api), []);
-    assert.ok(lastSnapshot(api).warnings.some(w => w === 'collapse: cannot create the hidden workspace: plugin invocation has expired'), lastSnapshot(api).warnings.join(' | '));
+    assert.ok(lastSnapshot(api).warnings.some(w => w === 'collapse: cannot create the Workers workspace: plugin invocation has expired'), lastSnapshot(api).warnings.join(' | '));
     const { snapshot } = await api.command('get-state', {});
     assert.ok(snapshot.warnings.some(w => /^autohide: repo-lag: move failed, retrying in \d+ s; tests: move failed, retrying in \d+ s$/.test(w)), snapshot.warnings.join(' | '));
     assert.equal(api.callsTo('workspaces.create').length, 2, 'not retried before the first delay');
@@ -56,51 +56,13 @@ test('a failed hide is retried with backoff and the collapse warning clears once
     dispose();
 });
 
-test('the empty shell pane made by creating the workers workspace is closed once a worker moved in, and only that one', async () => {
+test('the shell pane the host opens in the new Workers workspace is kept, so the workspace never empties and is never recreated', async () => {
     const api = makeSwarmApi({ allowClose: true, createShellPane: true });
     const dispose = registerAll(api);
     await dispose.ready;
     assert.deepEqual(moved(api), ['w1', 'w2']);
-    assert.deepEqual(api.callsTo('panes.close').map(c => c.args), [['shell-ws-created-1']]);
-    assert.equal(dispose.store.hiddenShellPaneID, null, 'forgotten once closed');
-    // A pane the user opens in the workers workspace later is never closed.
-    await api.upsert('user-pane', { workspaceID: 'ws-created-1', status: 'idle' });
     await sleep(60);
-    assert.equal(api.callsTo('panes.close').length, 1);
+    assert.deepEqual(api.callsTo('panes.close'), []);
     assert.deepEqual(api.destructive, []);
-    dispose();
-});
-
-test('a shell pane announced only after the workspace was created is still closed; one outside the window is not', async () => {
-    const api = makeSwarmApi({ allowClose: true });
-    const dispose = registerAll(api);
-    await dispose.ready;
-    assert.equal(dispose.store.hiddenShellPaneID, null, 'the listing showed no pane');
-    assert.equal(dispose.store.createdHiddenWorkspaceID, 'ws-created-1');
-    await api.upsert('late-shell', { workspaceID: 'ws-created-1', status: 'idle' });
-    assert.deepEqual(api.callsTo('panes.close').map(c => c.args), [['late-shell']]);
-    assert.equal(dispose.store.createdHiddenWorkspaceID, null, 'the creation window is over');
-    await api.upsert('another', { workspaceID: 'ws-created-1', status: 'idle' });
-    assert.equal(api.callsTo('panes.close').length, 1, 'no later pane is taken for the shell');
-    dispose();
-
-    const api2 = makeSwarmApi({ allowClose: true });
-    const dispose2 = registerAll(api2);
-    await dispose2.ready;
-    dispose2.store.createdHiddenAt = Date.now() - 60000;
-    await api2.upsert('old-pane', { workspaceID: 'ws-created-1', status: 'idle' });
-    assert.equal(api2.callsTo('panes.close').length, 0, 'a pane first seen long after creation is not the shell');
-    dispose2();
-});
-
-test('a shell pane close that keeps failing is given up after three attempts, never a worker', async () => {
-    const api = makeSwarmApi({ allowClose: true, createShellPane: true, closeFails: true });
-    const dispose = registerAll(api);
-    await dispose.ready;
-    for (let n = 0; n < 5; n += 1) await api.upsert('w1', { status: 'running' });
-    const closes = api.callsTo('panes.close').map(c => c.args[0]);
-    assert.equal(closes.length, 3);
-    assert.ok(closes.every(id => id === 'shell-ws-created-1'));
-    assert.equal(dispose.store.hiddenShellPaneID, null);
     dispose();
 });

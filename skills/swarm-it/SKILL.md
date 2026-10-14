@@ -9,11 +9,12 @@ One command per worker. `swarm-spawn` splits a pane, registers it in the swarm r
 `claude -p` on a task file. Defaults: `--permission-mode auto`, `--model sonnet`. Do not ask the user
 for a permission mode unless the work changes shared or production state.
 
-Run the swarm from a workspace inside its own Group. Workers live in a `<name> · workers`
-workspace in the same Group, and the rail shows the swarm from any workspace in that Group.
-`swarm-spawn` opens each worker straight in that workspace, so the user's view never switches. Only
-the first worker of a new swarm opens beside the coordinator: the plugin then creates the workers
-workspace and moves it there, which switches the view once. `swarm-spawn` warns when the orchestrator's workspace is not in a Group: tell
+Run the swarm from a workspace inside its own Group. Every swarm's workers live in one shared
+`Workers` workspace (in a collapsed `Workers` Group), and the rail shows the swarm from any workspace
+in the coordinator's Group. `swarm-spawn` opens each worker straight in `Workers`, so the user's view
+never switches. Only before `Workers` exists does a worker open beside the coordinator: the plugin then
+creates `Workers` and moves it there, which switches the view once. Finished workers are closed
+automatically 10 minutes after they finish (plugin setting `autoCleanMinutes`); their results stay. `swarm-spawn` warns when the orchestrator's workspace is not in a Group: tell
 the user before spawning more.
 
 ## Steps

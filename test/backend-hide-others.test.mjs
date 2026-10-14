@@ -45,30 +45,28 @@ test('another live swarm\'s workers are hidden without the user opening its work
     await dispose.ready;
     await api.command('get-state', { workspaceID: 'ws1' });
     await sleep(100);
-    const made = api.workspaceList.find(w => w.name === 'Agents · workers');
-    assert.ok(made, 'the workers workspace is created');
-    assert.equal(made.groupID, 'g1', 'in the swarm\'s Group');
+    const made = api.workspaceList.find(w => w.name === 'Workers');
+    assert.ok(made, 'the shared Workers workspace is created');
+    assert.equal(api.workspaceList.filter(w => w.name === 'Workers').length, 1, 'one for both swarms');
+    assert.equal(workspaceOf(api, 'w1'), made.id, 'the followed swarm\'s workers share it');
     assert.equal(workspaceOf(api, 'x1'), made.id);
     assert.equal(workspaceOf(api, 'x2'), made.id);
     // Never moved: the coordinator, a pane not in the manifest, and a worker the user put somewhere else.
     assert.equal(workspaceOf(api, 'orch2'), 'ws2');
     assert.equal(workspaceOf(api, 'y1'), 'ws2');
     assert.equal(workspaceOf(api, 'x3'), 'ws3');
-    // The followed swarm closes its own new workspace's shell; this swarm closes only the shell of the one it made.
-    const closed = api.callsTo('panes.close').map(c => c.args[0]);
-    assert.ok(closed.includes(`shell-${made.id}`), 'the new workspace\'s empty shell is closed');
-    assert.ok(closed.every(id => id.startsWith('shell-')), 'nothing but empty shells is closed');
-    assert.equal(api.callsTo('workspaces.create').filter(c => c.args[0]?.name === 'Agents · workers').length, 1, 'made once');
+    assert.deepEqual(api.callsTo('panes.close'), [], 'nothing is closed, not even the new workspace\'s shell');
+    assert.equal(api.callsTo('workspaces.create').length, 1, 'made once');
     dispose();
 });
 
-test('an existing workers workspace is reused, and nothing moves with auto-hide off', async () => {
-    const api = makeApi({ workspaces: [{ id: 'ws9', name: 'Agents · workers', groupID: 'g1' }] });
+test('an existing Workers workspace is reused, and nothing moves with auto-hide off', async () => {
+    const api = makeApi({ workspaces: [{ id: 'ws9', name: 'Workers' }] });
     const dispose = registerAll(api);
     await dispose.ready;
     await sleep(100);
     assert.equal(workspaceOf(api, 'x1'), 'ws9');
-    assert.equal(api.callsTo('workspaces.create').filter(c => c.args[0]?.name === 'Agents · workers').length, 0);
+    assert.equal(api.callsTo('workspaces.create').length, 0);
     dispose();
 
     const off = makeApi({ settings: { autoHide: false } });

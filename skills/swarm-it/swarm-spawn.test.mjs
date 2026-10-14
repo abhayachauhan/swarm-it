@@ -41,8 +41,8 @@ function spawn({ home, bin, task }) {
   return { ...out, calls: fs.readFileSync(path.join(home, 'calls.log'), 'utf8').trim().split('\n') }
 }
 
-test('a worker opens straight in the existing workers workspace, with no split and no move', () => {
-  const s = stub([{ id: 'WS', name: 'Warm pool' }, { id: 'HID', name: 'Warm pool · workers' }, { id: 'X', name: 'Other · workers' }])
+test('a worker opens straight in the shared Workers workspace, with no split and no move', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }, { id: 'OLD', name: 'Warm pool · workers' }, { id: 'LOOSE', name: 'Workers' }, { id: 'HID', name: 'Workers', group_name: 'Workers' }])
   const { status, stdout, stderr, calls } = spawn(s)
   assert.equal(status, 0, stderr)
   assert.equal(stdout.trim(), 'CREATED:w1')
@@ -52,8 +52,8 @@ test('a worker opens straight in the existing workers workspace, with no split a
   assert.deepEqual(manifest.workers.map(w => w.paneID), ['CREATED'])
 })
 
-test('the first worker of a new swarm splits beside the coordinator, for the plugin to move once', () => {
-  const s = stub([{ id: 'WS', name: 'Warm pool' }, { id: 'X', name: 'Other · workers' }])
+test('before the Workers workspace exists a worker splits beside the coordinator, for the plugin to move once', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }, { id: 'X', name: 'Warm pool · workers' }])
   const { status, stdout, stderr, calls } = spawn(s)
   assert.equal(status, 0, stderr)
   assert.equal(stdout.trim(), 'SPLIT:w1')
