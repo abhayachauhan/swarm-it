@@ -101,12 +101,23 @@ export function registerAll(api, deps = modules) {
         if (disposed) return null;
         const snapshot = snapshotNow();
         const hasError = snapshot.workers.some(w => !w.archived && w.state === 'error');
-        try { await api.contributions.update({ items: { [COUNTS_ITEM]: countsPatch(snapshot.counts, hasError) } }); } catch { /* status bar is best effort */ }
+        const patch = countsPatch(snapshot.counts, hasError);
+        const patchJSON = JSON.stringify(patch);
+        if (patchJSON !== lastCounts) {
+            try { await api.contributions.update({ items: { [COUNTS_ITEM]: patch } }); lastCounts = patchJSON; } catch { /* status bar is best effort */ }
+        }
         try { await emit(SNAPSHOT_EVENT, snapshot); } catch { /* views re-call get-state */ }
         return snapshot;
     }
+    let lastCounts = null;
 
-    att.onChange = () => { serial(publish); };
+    // Many cards can change in one pass (a swarm closing settles all of its cards): queue one publish, not one per card.
+    let publishQueued = false;
+    att.onChange = () => {
+        if (publishQueued) return;
+        publishQueued = true;
+        serial(async () => { publishQueued = false; await publish(); });
+    };
 
     const setWarning = (key, message) => {
         st.warnings = st.warnings.filter(w => !w.startsWith(`${key}:`));

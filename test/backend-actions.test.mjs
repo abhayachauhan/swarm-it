@@ -189,7 +189,7 @@ test('accept marks reviewed and messages the orchestrator, never calling a destr
     assert.match(sent[0].args[1], /accepted/);
     assert.match(sent[0].args[1], /Nothing was merged/);
     assert.deepEqual(api.destructive, []);
-    assert.deepEqual([...new Set(api.calls.map(c => c.name))].sort(), ['terminal.send']);
+    assert.deepEqual([...new Set(api.calls.map(c => c.name).filter(n => n !== 'storage.set'))].sort(), ['terminal.send']);
 });
 
 test('accept refuses an unfinished worker and a non-worker', async () => {

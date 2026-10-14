@@ -76,7 +76,7 @@ export function makeFakeApi(opts = {}) {
         },
         storage: {
             async get(key) { return storage.has(key) ? structuredClone(storage.get(key)) : null; },
-            async set(key, value) { storage.set(key, structuredClone(value)); }
+            async set(key, value) { record('storage.set', key); storage.set(key, structuredClone(value)); }
         },
         settings: { async get() { return { ...api.settingsValue }; }, async set() {} },
         contributions: {

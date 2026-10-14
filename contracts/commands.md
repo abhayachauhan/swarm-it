@@ -64,6 +64,14 @@ Text format: `Swarm <waiting>/<running>/<finished>`. Tone: `warning` if waiting 
 
 `attention` (AttentionItem[]), `pins` ({ orchestratorPaneID }), `accepted` (paneID[]), `archived` (paneID[]), `firstSeen` ({ [paneID]: ISO }), `hiddenWorkspaceID`, `autoApproveLog` (AutoApproveEntry[], last 500; the auto-approve on/off state itself is never stored), `gone` (paneID[] seen closing) and `results` (paneID[] whose result file was proven to exist while the pane was live; existence is sticky once the pane is gone, since the path check needs the live pane to trust the worktree), `sessions` ({ [paneID]: last Claude session id }) and `restarts` ({ [paneID]: sha256 of the result file when send-to-worker restarted it }).
 
+## Message budget
+
+Kelpi stops a plugin that sends more than 512 messages in one second ("plugin exceeded the IPC message
+rate limit"), and the rail disappears. So `persist` writes only the storage keys whose value changed, the
+status bar item is updated only when its text or tone changes, and a burst of attention changes inside one
+queued task (a pane closing with many open cards) publishes the snapshot once. Settling 60 cards at once
+used to send about 690 messages; it now sends well under 140 (test/backend-message-budget.test.mjs).
+
 ## Module function names (each backend module exports exactly these; all take the injected `api` or a deps object first)
 
 - `store.mjs`: `createStore(api)`, `applyStateChange(store, change)`, `buildSnapshot(store, now)`, `persist(store)`, `load(store)`

@@ -449,18 +449,26 @@ export function compactAttention(store) {
 export async function persist(store) {
     const { storage } = store.api;
     compactAttention(store);
-    await storage.set('attention', store.attention);
-    await storage.set('pins', { orchestratorPaneID: store.pinnedOrchestratorPaneID });
-    await storage.set('accepted', [...store.accepted]);
-    await storage.set('archived', [...store.archived]);
-    await storage.set('restored', [...store.restored]);
-    await storage.set('firstSeen', store.firstSeen);
-    await storage.set('hiddenWorkspaceID', store.hiddenWorkspaceID);
+    // Kelpi stops a plugin that sends over 512 messages a second, so only keys whose value changed are written.
+    const written = store.persisted ??= new Map();
+    const set = async (key, value) => {
+        const json = JSON.stringify(value);
+        if (written.get(key) === json) return;
+        await storage.set(key, value);
+        written.set(key, json);
+    };
+    await set('attention', store.attention);
+    await set('pins', { orchestratorPaneID: store.pinnedOrchestratorPaneID });
+    await set('accepted', [...store.accepted]);
+    await set('archived', [...store.archived]);
+    await set('restored', [...store.restored]);
+    await set('firstSeen', store.firstSeen);
+    await set('hiddenWorkspaceID', store.hiddenWorkspaceID);
     // Panes seen closing, and results proven to exist: both outlive a reload so a finished worker keeps reading as done.
-    await storage.set('gone', [...store.gone]);
-    await storage.set('results', [...store.resultExists].filter(([, exists]) => exists === true).map(([id]) => id));
-    await storage.set('sessions', Object.fromEntries(store.sessions));
-    await storage.set('restarts', Object.fromEntries(store.restarts));
+    await set('gone', [...store.gone]);
+    await set('results', [...store.resultExists].filter(([, exists]) => exists === true).map(([id]) => id));
+    await set('sessions', Object.fromEntries(store.sessions));
+    await set('restarts', Object.fromEntries(store.restarts));
     store.sessionsDirty = false;
 }
 
