@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, applyStateChange } from '../backend/store.mjs';
 import { createAttention, addItem } from '../backend/attention.mjs';
-import { autoClean, removeEmptyLegacy } from '../backend/workers.mjs';
+import { autoClean, removeEmptyLegacy, BATCH_PER_SCAN } from '../backend/workers.mjs';
 import { makeFakeApi, makeSwarmApi } from './backend-fake-api.mjs';
 
 const MIN = 60000;
@@ -94,6 +94,20 @@ test('a worker whose pane already closed is removed from the swarm with nothing 
     assert.deepEqual(api.callsTo('services.call'), [], 'no git check for a closed pane');
 });
 
+test('at most BATCH_PER_SCAN panes are closed per call; the rest go on the next calls', async () => {
+    const { api, store } = setup();
+    const many = Array.from({ length: 20 }, (_, n) => ({ paneID: `p${n}`, label: `p${n}`, resultPath: null, worktreePath: null }));
+    for (const w of many) {
+        applyStateChange(store, { kind: 'pane-upserted', workspaceID: 'wsW', paneID: w.paneID, pane: { id: w.paneID, status: 'idle' } });
+        store.resultExists.set(w.paneID, true);
+    }
+    await autoClean(api, store, many, 0);
+    assert.equal((await autoClean(api, store, many, 10 * MIN)).cleaned.length, BATCH_PER_SCAN);
+    assert.equal((await autoClean(api, store, many, 10 * MIN)).cleaned.length, BATCH_PER_SCAN);
+    assert.equal((await autoClean(api, store, many, 10 * MIN)).cleaned.length, 20 - 2 * BATCH_PER_SCAN);
+    assert.equal(api.callsTo('panes.close').length, 20);
+});
+
 test('autoCleanMinutes 0 turns it off; another number changes the delay', async () => {
     const off = setup({ settings: { autoCleanMinutes: 0 } });
     await autoClean(off.api, off.store, [W1], 0);
@@ -119,6 +133,20 @@ test('only empty, inactive "<name> · workers" workspaces are removed, each trie
     assert.deepEqual(await removeEmptyLegacy(api, store), ['empty']);
     assert.deepEqual(await removeEmptyLegacy(api, store), [], 'tried once');
     assert.deepEqual(removed, ['empty']);
+});
+
+test('a pane in Workers listed by two manifests is trusted by neither swarm, so it is never closed', async () => {
+    const { otherSwarmPane } = await import('../backend/store.mjs');
+    const { api, store } = setup();
+    store.workspaceNames.set('wsW', 'Workers');
+    const own = { workspaceID: 'wsA', name: 'A', orchestrator: { paneID: 'oA' }, workers: [W1] };
+    const rogue = { workspaceID: 'wsB', name: 'B', orchestrator: { paneID: 'oB' }, workers: [{ ...W1, label: 'stolen' }] };
+    for (const [id, ws] of [['oA', 'wsA'], ['oB', 'wsB']]) applyStateChange(store, { kind: 'pane-upserted', workspaceID: ws, paneID: id, pane: { id, status: 'idle' } });
+    store.swarms = [own];
+    assert.equal(otherSwarmPane(store, 'w1')?.swarm.name, 'A', 'one claim: trusted');
+    store.swarms = [own, rogue];
+    assert.equal(otherSwarmPane(store, 'w1'), null, 'two claims: refused');
+    assert.deepEqual(api.callsTo('panes.close'), []);
 });
 
 test('through the plugin: a finished worker is closed after the delay; the coordinator and other panes never are', async () => {

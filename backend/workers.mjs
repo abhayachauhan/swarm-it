@@ -11,6 +11,9 @@ export const LEGACY_SUFFIX = ' · workers';
 export const legacyName = swarmName => `${swarmName}${LEGACY_SUFFIX}`;
 export const isWorkersName = name => typeof name === 'string' && (name === WORKERS_NAME || name.endsWith(LEGACY_SUFFIX));
 export const DEFAULT_CLEAN_MINUTES = 10;
+/** At most this many workers are moved, and this many closed, per scan: each brings a burst of host events, and Kelpi
+ *  stops a plugin that sends over 512 messages a second. A bigger batch finishes over the next scans. */
+export const BATCH_PER_SCAN = 8;
 
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
 const message = error => String(error?.message ?? error);
@@ -64,6 +67,14 @@ export function isWorkersWorkspaceOf(store, workspaceID, swarmName) {
 }
 
 /**
+ * Every swarm shares the Workers workspace, so a manifest (any local process can write one) could list another
+ * swarm's worker that lives there. A pane in Workers is trusted only while exactly one live manifest lists it.
+ */
+export function claimedElsewhere(store, paneID, ownWorkspaceID) {
+    return (store.swarms ?? []).some(s => s.workspaceID !== ownWorkspaceID && s.workers.some(w => w.paneID === paneID));
+}
+
+/**
  * Close finished workers once they have been finished for `autoCleanMinutes` (0 turns it off). `candidates` are manifest
  * workers an ownership gate already accepts. A worker counts as finished when its result exists and its agent stopped,
  * or its pane is closed. Errored workers with an open pane are left for the user. A worker whose worktree is dirty, or
@@ -77,6 +88,7 @@ export async function autoClean(api, store, candidates, now) {
     if (!(delay > 0)) { store.doneSince.clear(); return result; }
     const live = new Set(candidates.map(w => w.paneID));
     for (const id of [...store.doneSince.keys()]) if (!live.has(id)) store.doneSince.delete(id);
+    let closes = 0;
     for (const w of candidates) {
         const id = w.paneID;
         if (store.archived.has(id)) { store.doneSince.delete(id); continue; }
@@ -85,7 +97,9 @@ export async function autoClean(api, store, candidates, now) {
         if (!finished) { store.doneSince.delete(id); continue; }
         if (!store.doneSince.has(id)) store.doneSince.set(id, now);
         if (now - store.doneSince.get(id) < delay) continue;
+        if (open && closes >= BATCH_PER_SCAN) continue;
         if (open) {
+            closes += 1;
             const problem = await worktreeProblem(api, w);
             if (problem) { store.doneSince.set(id, now); result.kept.push({ paneID: id, label: w.label, error: problem.error }); continue; }
         }

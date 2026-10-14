@@ -287,7 +287,9 @@ export function registerAll(api, deps = modules) {
         const ignored = [];
         for (const w of all) {
             const pane = st.panes.get(w.paneID);
-            if (pane?.workspaceID && !allowed(pane.workspaceID)) ignored.push(w.label); else kept.push(w);
+            // A worker outside the home workspace (in Workers) must not also be listed by another swarm's manifest.
+            const contested = !!pane?.workspaceID && pane.workspaceID !== home && W.claimedElsewhere(st, w.paneID, home);
+            if ((pane?.workspaceID && !allowed(pane.workspaceID)) || contested) ignored.push(w.label); else kept.push(w);
         }
         st.manifestWorkers = kept;
         setWarning('workers', ignored.length ? `ignored ${ignored.length} manifest worker(s) in another workspace: ${ignored.join(', ')}` : null);
@@ -372,13 +374,18 @@ export function registerAll(api, deps = modules) {
         const now = Date.now();
         let moved = false;
         for (const paneID of [...otherHideFailed.keys()]) if (!st.panes.has(paneID)) otherHideFailed.delete(paneID);
+        // Each move also brings a burst of host events to react to: a big batch (a first install moving dozens of
+        // workers) is spread over several scans so the plugin stays under Kelpi's message rate limit.
+        let budget = W.BATCH_PER_SCAN;
         for (const swarm of S.otherSwarms(st)) {
+            if (budget <= 0) break;
             const legacy = W.legacyName(swarm.name);
             const due = swarm.workers.map(w => w.paneID).filter(id => {
                 const ws = st.panes.get(id)?.workspaceID;
                 return !!ws && (ws === swarm.workspaceID || wsName(ws) === legacy) && !st.restored.has(id) && !(otherHideFailed.get(id)?.nextAt > now);
-            });
+            }).slice(0, budget);
             if (!due.length) continue;
+            budget -= due.length;
             const result = await C.hideSwarmWorkers(api, st, swarm, due);
             for (const id of result.moved) otherHideFailed.delete(id);
             for (const { paneID } of result.failed) {

@@ -2,7 +2,7 @@
 import { visibleItems, snoozedItems, toMs } from './attention.mjs';
 import { checkResultPath, readResultSafely, withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { createHash } from 'node:crypto';
-import { isWorkersWorkspaceOf } from './workers.mjs';
+import { isWorkersWorkspaceOf, claimedElsewhere } from './workers.mjs';
 
 export const textHash = text => createHash('sha256').update(String(text)).digest('hex');
 /** Claude session ids are UUIDs; anything else is never typed into a shell. */
@@ -58,8 +58,8 @@ export function otherSwarmPane(store, paneID) {
     if (typeof paneID !== 'string' || typeof workspaceID !== 'string' || !workspaceID) return null;
     for (const swarm of otherSwarms(store)) {
         if (store.panes.get(swarm.orchestrator.paneID)?.workspaceID !== swarm.workspaceID) continue;
-        const allowed = workspaceID === swarm.workspaceID || isWorkersWorkspaceOf(store, workspaceID, swarm.name);
-        if (!allowed) continue;
+        const inWorkers = workspaceID !== swarm.workspaceID && isWorkersWorkspaceOf(store, workspaceID, swarm.name);
+        if (workspaceID !== swarm.workspaceID && (!inWorkers || claimedElsewhere(store, paneID, swarm.workspaceID))) continue;
         if (swarm.orchestrator.paneID === paneID) return { swarm, label: swarm.orchestrator.label, role: 'orchestrator' };
         const worker = swarm.workers.find(w => w.paneID === paneID);
         if (worker) return { swarm, label: worker.label, role: 'worker' };
