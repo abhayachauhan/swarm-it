@@ -34,12 +34,32 @@ esac
   return { home, bin, task }
 }
 
-function spawn({ home, bin, task }) {
+function spawn({ home, bin, task }, args = ['w1', task, '--path', home]) {
   const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` }
   delete env.SWARM_MANIFEST_DIR
-  const out = spawnSync(script, ['w1', task, '--path', home], { env, encoding: 'utf8' })
-  return { ...out, calls: fs.readFileSync(path.join(home, 'calls.log'), 'utf8').trim().split('\n') }
+  const out = spawnSync(script, args, { env, encoding: 'utf8' })
+  const log = path.join(home, 'calls.log')
+  return { ...out, calls: fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [] }
 }
+
+test('shell metacharacters in the label, task, dir, mode or model are refused before anything runs', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const victim = path.join(s.home, 'x.md')
+  fs.writeFileSync(victim, 'keep')
+  for (const args of [
+    ['../../x', s.task],
+    ['w$(id)', s.task],
+    ['w1', s.task, '--path', 'a;rm${IFS}-rf${IFS}b'],
+    ['w1', s.task, '--model', 'sonnet;id'],
+    ['w1', s.task, '--mode', 'auto --dangerously-skip-permissions'],
+    ['w1', `${s.task}$(id)`]
+  ]) {
+    const { status, calls } = spawn(s, args)
+    assert.notEqual(status, 0, args.join(' '))
+    assert.deepEqual(calls, [], `nothing ran for ${args.join(' ')}`)
+  }
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'keep', 'a ../ label deletes nothing')
+})
 
 test('a worker opens straight in the shared Workers workspace, with no split and no move', () => {
   const s = stub([{ id: 'WS', name: 'Warm pool' }, { id: 'OLD', name: 'Warm pool · workers' }, { id: 'LOOSE', name: 'Workers' }, { id: 'HID', name: 'Workers', group_name: 'Workers' }])

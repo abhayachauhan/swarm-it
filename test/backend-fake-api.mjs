@@ -223,7 +223,8 @@ export function makeSwarmApi(extra = {}) {
         workspaces: [{ id: 'ws1', name: 'Swarm', ...(extra.swarmGroup ? { groupID: extra.swarmGroup } : {}) }, ...(extra.otherWorkspaces ?? [])],
         panes: [
             ...(extra.otherPanes ?? []),
-            { id: 'orch', label: 'coordinator', workspaceID: 'ws1', status: 'idle' },
+            // The coordinator is a live interactive Claude, so Kelpi reports its session.
+            { id: 'orch', label: 'coordinator', workspaceID: 'ws1', status: 'idle', agentSessionID: '0f0f0f0f-0000-4000-8000-00000000c0de' },
             { id: 'w1', label: 'repo-lag', workspaceID: 'ws1', status: extra.w1Status ?? 'running' },
             { id: 'w2', label: 'tests', workspaceID: 'ws1', status: 'running' },
             { id: 'stranger', label: 'my-shell', workspaceID: 'ws1', status: 'idle' }

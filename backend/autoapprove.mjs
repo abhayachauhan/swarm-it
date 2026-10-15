@@ -68,7 +68,15 @@ export const NEVER_AUTO_APPROVE = [
     { name: 'download piped into an interpreter', test: (tokens, all) => /\b(?:curl|wget)\b/.test(all) && tokens.some(t => INTERPRETERS.test(base(t))) },
     // `R=rm; $R -rf x`: the command word is only known when the shell runs it. `echo $HOME` stays approvable.
     { name: 'command word is a variable', test: tokens => /^\$/.test(commandWord(tokens) ?? '') },
-    { name: 'alias or eval', test: tokens => tokens.some(t => ['alias', 'eval'].includes(base(t))) }
+    { name: 'alias or eval', test: tokens => tokens.some(t => ['alias', 'eval'].includes(base(t))) },
+    // `{rm,-rf,x}`, `rm -${X:-rf} d`, `git ${x}push`: the shell builds the real word, so the rules above cannot see it.
+    { name: 'shell expansion builds a word', test: tokens => /[{$]/.test(commandWord(tokens) ?? '')
+        || tokens.some(t => /\$\{[^}]*[-:=?+#%/^,]/.test(t) || (t.startsWith('-') && t.includes('$')) || /[A-Za-z0-9_]\$|\}[A-Za-z]/.test(t)) },
+    // `echo <base64> | base64 -d | sh`: anything piped into a shell or interpreter, not just a download.
+    { name: 'piped into a shell or interpreter', test: (tokens, all) => {
+        const word = base(commandWord(tokens) ?? '');
+        return (SHELLS.has(word) || INTERPRETERS.test(word)) && new RegExp(`(?<!\\|)\\|(?!\\|)\\s*(?:(?:\\S*/)?env\\s+)?(?:\\S*/)?${word.replace(/\./g, '\\.')}(?:\\s|$)`).test(all);
+    } }
 ];
 
 // Quotes and backslashes are deleted, not spaced, so r"m" -rf and r\m -rf read as rm -rf, as the shell would run them.

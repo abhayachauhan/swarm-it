@@ -446,17 +446,51 @@ export function compactAttention(store) {
     for (const item of recent) delete item.promptBlock;
 }
 
+/** Most remembered ids per history key; a pane still open or listed in a manifest is always kept. */
+export const HISTORY_CAP = 500;
+
+/**
+ * Pane-id history (firstSeen, gone, results, sessions, accepted, archived, restored) would otherwise grow with every pane
+ * ever seen until plugin storage refuses writes. Drops the oldest entries for panes no longer open or listed anywhere.
+ */
+export function pruneHistory(store, cap = HISTORY_CAP) {
+    const keep = new Set([...store.panes.keys(), ...store.manifestWorkers.map(w => w.paneID),
+        ...store.swarms.flatMap(s => [s.orchestrator?.paneID, ...s.workers.map(w => w.paneID)])]);
+    const trim = ids => {
+        let extra = ids.filter(id => !keep.has(id)).length - cap;
+        return extra > 0 ? ids.filter(id => keep.has(id) || extra-- <= 0) : null;
+    };
+    for (const name of ['gone', 'accepted', 'archived', 'restored']) {
+        const kept = trim([...store[name]]);
+        if (kept) store[name] = new Set(kept);
+    }
+    for (const name of ['sessions', 'resultExists']) {
+        const kept = trim([...store[name].keys()]);
+        if (kept) { const ok = new Set(kept); for (const id of [...store[name].keys()]) if (!ok.has(id)) store[name].delete(id); }
+    }
+    const byAge = Object.keys(store.firstSeen).sort((a, b) => String(store.firstSeen[a]).localeCompare(String(store.firstSeen[b])));
+    const kept = trim(byAge);
+    if (kept) store.firstSeen = Object.fromEntries(kept.map(id => [id, store.firstSeen[id]]));
+}
+
 /** Persist attention, pins, accepted, archived, firstSeen, hiddenWorkspaceID (and `restored`) to plugin storage. */
 export async function persist(store) {
     const { storage } = store.api;
     compactAttention(store);
+    pruneHistory(store);
     // Kelpi stops a plugin that sends over 512 messages a second, so only keys whose value changed are written.
     const written = store.persisted ??= new Map();
+    // A refused write (storage full or busy) is retried on the next persist; it must not break the scan that called it.
     const set = async (key, value) => {
         const json = JSON.stringify(value);
         if (written.get(key) === json) return;
-        await storage.set(key, value);
-        written.set(key, json);
+        try {
+            await storage.set(key, value);
+            written.set(key, json);
+            store.persistError = null;
+        } catch (error) {
+            store.persistError = `saving ${key} failed: ${error?.message ?? error}`;
+        }
     };
     await set('attention', store.attention);
     await set('pins', { orchestratorPaneID: store.pinnedOrchestratorPaneID });

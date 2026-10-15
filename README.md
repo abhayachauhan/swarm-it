@@ -57,7 +57,8 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
 
 - It's off after every install or reload, and never turns on by itself.
 - Some commands are never auto-approved: for example `sudo`, `git reset --hard`, `kubectl delete`,
-  `terraform apply`, writes to AWS, and a download piped into a shell. Those stay on the rail for you.
+  `terraform apply`, writes to AWS, and anything piped into a shell. Those stay on the rail for you.
+- A pane where Claude has exited is never answered, even if an old prompt is still on its screen.
 - Every approval and refusal goes in a log (**Swarm: list or clear the auto-approve log** in the palette).
 
 ### Run last suggested command

@@ -108,6 +108,16 @@ test('A2: common safe commands stay auto-approvable', () => {
     ]) assert.equal(neverAutoApprove(cmd), null, cmd);
 });
 
+test('shell expansion that builds a command word, and anything piped into a shell, are never auto-approved', () => {
+    for (const cmd of [
+        '{rm,-rf,/tmp/x}', 'rm -${X:-rf} d', 'git ${x}push', 'git pu${x}sh origin', 'echo aGk= | base64 -d | sh', 'cat x.sh | bash',
+        'printf x | /bin/zsh', 'echo 1 | python3', 'make || true | sh'
+    ]) assert.ok(neverAutoApprove(cmd), cmd);
+    for (const cmd of [
+        'echo ${HOME}/x', 'ls ${TMPDIR}', "awk '{print $1}' f", 'cmd1 || bash -c true', 'cat a | grep b', 'jq ".[] | .a" f'
+    ]) assert.equal(neverAutoApprove(cmd), null, cmd);
+});
+
 // ---- A3 ----
 
 test('A3: a restarted worker whose new result is byte-identical reads done once its Claude exits', async () => {

@@ -129,6 +129,8 @@ export async function autoClean(api, store, candidates, now) {
  */
 export async function removeEmptyLegacy(api, store) {
     if (typeof api.workspaces?.remove !== 'function') return [];
+    // Runs every scan: skip the host call when no known workspace has the old name (the usual case after migration).
+    if (store.workspaceNames.size && ![...store.workspaceNames.values()].some(n => String(n).endsWith(LEGACY_SUFFIX))) return [];
     let list;
     try { list = await api.workspaces.list(); } catch { return []; }
     const removed = [];

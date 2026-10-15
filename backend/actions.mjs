@@ -204,7 +204,10 @@ async function answerRequest(api, store, itemID, key, sentHash) {
     // The followed swarm's worker or orchestrator, a pane of another live, correctly owned swarm (otherSwarmPane), or
     // any Claude pane while auto-approve is on (anyClaudePane).
     if (!worker(store, item.paneID) && !actionableOrchestrator(store, item.paneID) && !otherSwarmPane(store, item.paneID) && !anyClaudePane(store, item.paneID)) return fail(`pane ${item.paneID} is not an actionable swarm pane`, 'NOT_WORKER');
-    // No pane-status check: Kelpi often leaves a prompting pane at "running". The live prompt check below is the guard.
+    // Kelpi often leaves a prompting pane at "running", so any live state passes. An idle pane with no session is a shell:
+    // a prompt left on its screen (Claude killed mid-prompt, or printed text) must never get an Enter typed into it.
+    const live = store.panes.get(item.paneID);
+    if (!live?.agentSessionID && live?.status !== 'running' && live?.status !== 'waitingForInput') return fail('Claude is no longer running in that pane', 'STALE');
     // Capture and verify the LIVE prompt; done twice, the second time immediately before the key goes out, so a prompt swapped
     // while the first check was awaiting cannot receive the keypress.
     const verifyLive = async () => {

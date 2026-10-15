@@ -18,6 +18,7 @@
     },
     "workers": {
       "type": "array",
+      "maxItems": 500,
       "items": {
         "type": "object",
         "required": ["paneID", "label", "task", "resultPath", "worktreePath", "parent"],
@@ -25,7 +26,7 @@
         "properties": {
           "paneID": { "type": "string", "minLength": 1 },
           "label": { "type": "string", "minLength": 1 },
-          "task": { "type": "string" },
+          "task": { "type": "string", "maxLength": 1000 },
           "resultPath": { "type": ["string", "null"] },
           "worktreePath": { "type": ["string", "null"] },
           "parent": { "type": ["string", "null"] }

@@ -537,6 +537,11 @@ export function registerAll(api, deps = modules) {
         const scanned = new Set();
         const scanWorker = async (paneID, worker = null) => {
             if (worker) scanned.add(paneID);
+            // An idle pane with no Claude session is a plain shell: nothing there can be a live prompt, so skip the capture
+            // unless a card or waiting row for it still needs settling.
+            const pane = st.panes.get(paneID);
+            const pending = st.unparsed.has(paneID) || st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt);
+            if (pane?.status === 'idle' && !pane.agentSessionID && !pending) return;
             let screen;
             try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
             const prompt = N.parsePrompt(screen);

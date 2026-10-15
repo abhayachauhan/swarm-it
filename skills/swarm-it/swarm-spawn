@@ -18,9 +18,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-case "$label$task$dir" in *[\"\'\ ]*) echo "label, task path and dir must not contain quotes or spaces" >&2; exit 1 ;; esac
+# Every value is typed into a shell, so only plain characters are allowed: no quotes, spaces, `$`, `;` or `..`.
+bad() { echo "$1" >&2; exit 1; }
+[[ $label =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $label != *..* ]] || bad "label must be letters, digits, dot, dash or underscore"
+[[ $mode =~ ^[A-Za-z]+$ && $model =~ ^[A-Za-z0-9.-]+$ ]] || bad "mode and model must be plain words"
+[[ $task =~ ^[A-Za-z0-9._/~-]+$ && $dir =~ ^[A-Za-z0-9._/~-]+$ ]] || bad "task path and dir must be letters, digits, dot, dash, underscore or slash"
 [ -f "$task" ] || { echo "no task file: $task" >&2; exit 1; }
 task=$(cd "$(dirname "$task")" && pwd)/$(basename "$task")
+[[ $task =~ ^[A-Za-z0-9._/~-]+$ ]] || bad "task path must be letters, digits, dot, dash, underscore or slash"
 
 MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
 RES="$HOME/.kelpi-swarm/results"

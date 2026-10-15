@@ -47,7 +47,8 @@ the user before spawning more.
 
 ## Rules
 
-- Labels, task paths and `--path` must contain no spaces or quotes (`kelpi pane send` drops quotes).
+- Labels, task paths and `--path` may use only letters, digits, `.`, `_`, `-` (and `/`, `~` in paths): every value is
+  typed into a shell, so swarm-spawn refuses anything else. `--mode` and `--model` must be plain words.
 - Address workers by pane id, never by label: workers live in another workspace.
 - Do NOT run `kelpi layout select`, `kelpi pane resize`, or pass `--focus`. The plugin places panes.
 - Results must stay under `~/.kelpi-swarm/results/`; the rail refuses any other path (BAD_RESULT_PATH).

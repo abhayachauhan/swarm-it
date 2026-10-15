@@ -38,6 +38,11 @@ function checkKeys(obj, allowed, where, errors) {
     for (const key of allowed) if (!(key in obj)) errors.push(`${where}: missing "${key}"`);
 }
 
+/** Manifests are re-read every few seconds and sent in every snapshot, so their size is bounded. */
+export const MAX_MANIFEST_BYTES = 256 * 1024;
+export const MAX_WORKERS = 500;
+export const MAX_TASK_CHARS = 1000;
+
 /**
  * Validate against contracts/manifest.schema.json, plus two consistency rules the schema cannot express:
  * pane ids are unique, and the orchestrator is never also a worker.
@@ -61,6 +66,7 @@ export function validateManifest(obj) {
     const seen = new Set();
     if ('workers' in obj) {
         if (!Array.isArray(obj.workers)) errors.push('manifest.workers: must be an array');
+        else if (obj.workers.length > MAX_WORKERS) errors.push(`manifest.workers: more than ${MAX_WORKERS} workers`);
         else {
             obj.workers.forEach((worker, index) => {
                 const where = `manifest.workers[${index}]`;
@@ -69,7 +75,7 @@ export function validateManifest(obj) {
                 for (const key of ['paneID', 'label']) {
                     if (key in worker && !isNonEmptyString(worker[key])) errors.push(`${where}.${key}: must be a non-empty string`);
                 }
-                if ('task' in worker && typeof worker.task !== 'string') errors.push(`${where}.task: must be a string`);
+                if ('task' in worker && (typeof worker.task !== 'string' || worker.task.length > MAX_TASK_CHARS)) errors.push(`${where}.task: must be a string of at most ${MAX_TASK_CHARS} characters`);
                 for (const key of ['resultPath', 'worktreePath', 'parent']) {
                     if (key in worker && !isStringOrNull(worker[key])) errors.push(`${where}.${key}: must be a string or null`);
                 }
@@ -102,6 +108,9 @@ export async function readManifest(api, path) {
         const message = String(error?.message ?? error);
         const missing = /ENOENT|no such file|not found|does not exist/i.test(`${error?.code ?? ''} ${message}`);
         return { ok: false, code: missing ? 'MISSING' : 'UNREADABLE', error: message, missing, path };
+    }
+    if (typeof text === 'string' && text.length > MAX_MANIFEST_BYTES) {
+        return { ok: false, code: 'INVALID', error: `manifest is larger than ${MAX_MANIFEST_BYTES / 1024} KiB`, missing: false, path };
     }
     let parsed;
     try {

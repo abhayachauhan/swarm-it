@@ -29,7 +29,7 @@ function makeApi(extra = {}) {
     return makeSwarmApi({
         otherWorkspaces: [{ id: 'ws2', name: 'Kelpi UI improvement' }, { id: 'ws3', name: 'Empty' }],
         otherPanes: [
-            { id: 'orch2', label: 'coordinator2', workspaceID: 'ws2', status: 'idle' },
+            { id: 'orch2', label: 'coordinator2', workspaceID: 'ws2', status: 'idle', agentSessionID: '0f0f0f0f-0000-4000-8000-0000000c0de2' },
             { id: 'x1', label: 'worker-2', workspaceID: 'ws2', status: 'running' },
             { id: 'plain', label: 'shell', workspaceID: 'ws3', status: 'idle' }
         ],
@@ -135,6 +135,27 @@ test('a coordinator prompt with no notification (the user is watching that pane)
     assert.equal(enters(api, 'orch'), 1, 'the followed swarm coordinator');
     assert.equal(enters(api, 'orch2'), 1, "another swarm's coordinator");
     assert.equal(enters(api, 'stranger'), 0);
+    dispose();
+});
+
+test('a prompt left on an idle shell (Claude exited, no session) never gets Enter', async () => {
+    const { api, dispose } = await start();
+    await api.command('auto-approve', { on: true });
+    await api.upsert('w1', { status: 'idle', agentSessionID: null });
+    api.captureStore.w1 = prompt('npm test');
+    await sleep(100);
+    assert.equal(openRequests(dispose, 'w1').length, 0, 'a plain shell is not scanned');
+    assert.equal(enters(api, 'w1'), 0);
+    // A card raised while Claude ran, then left on screen after it exited, is refused at approve time too.
+    await api.command('auto-approve', { on: false });
+    await api.upsert('w1', { status: 'running' });
+    await sleep(60);
+    await api.upsert('w1', { status: 'idle', agentSessionID: null });
+    const card = openRequests(dispose, 'w1')[0];
+    assert.ok(card, 'raised while running');
+    const result = await api.command('approve', { itemID: card.id, promptHash: card.promptHash });
+    assert.equal(result.code, 'STALE');
+    assert.equal(enters(api, 'w1'), 0);
     dispose();
 });
 
