@@ -111,7 +111,14 @@ test('A2: common safe commands stay auto-approvable', () => {
 test('shell expansion that builds a command word, and anything piped into a shell, are never auto-approved', () => {
     for (const cmd of [
         '{rm,-rf,/tmp/x}', 'rm -${X:-rf} d', 'git ${x}push', 'git pu${x}sh origin', 'echo aGk= | base64 -d | sh', 'cat x.sh | bash',
-        'printf x | /bin/zsh', 'echo 1 | python3', 'make || true | sh'
+        'printf x | /bin/zsh', 'echo 1 | python3', 'make || true | sh', 'echo x | "sh"', "echo x | 'bash'", 'echo x | s\\h',
+        'echo x |& sh', 'echo x | command sh', 'echo x | env FOO=1 bash', 'echo x | nohup python3 -', 'echo x|sh',
+        // Found by a second review, each confirmed to slip through before.
+        "bash -c $'rm -rf x'", "sh -c $'\\x72m -rf x'", "git $'push' --force", "kubectl $'delete' pod x", "rm $'-rf' x",
+        "aws s3 $'rm' s3://b --recursive", 'bash <(echo cm0gLXJmIHgK | base64 -d)', 'bash -c "$(echo cm0g | base64 -d)"',
+        'bash <<< x', "sh -c \"$(printf '\\x72m -rf x')\"", '$(echo rm) -rf x', '`echo rm` -rf x', 'R=rm; time -p $R -rf x',
+        'env -i $R -rf x', 'exec -a x $R -rf x', 'r\\\nm\\\n -rf x', 'echo -rf x | xargs rm', 'echo -rf | parallel rm {} x',
+        'git -c alias.p=push p', "git -c alias.c='clean -fdx' c", '=rm -rf x', 'Rm -rf x', 'rm --rec -f x'
     ]) assert.ok(neverAutoApprove(cmd), cmd);
     for (const cmd of [
         'echo ${HOME}/x', 'ls ${TMPDIR}', "awk '{print $1}' f", 'cmd1 || bash -c true', 'cat a | grep b', 'jq ".[] | .a" f'

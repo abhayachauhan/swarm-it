@@ -23,9 +23,24 @@ export const NEVER_REASON = 'on the never-auto-approve list';
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const INTERPRETERS = /^(?:python[0-9.]*|node|nodejs|perl|ruby|php|deno|bun)$/;
 const AWS_WRITE = /^(?:delete|put|create|update|terminate|modify|remove)-/;
-const base = token => token.split('/').pop();
-/** The command word of a segment: the first token after env assignments and `command`/`exec`/`env`/`nohup`/`time`. */
-const commandWord = tokens => tokens.find(t => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t) && !['command', 'exec', 'env', 'nohup', 'time', 'builtin'].includes(base(t)));
+// zsh runs `=rm` as rm, and macOS file names ignore case (`Rm` is /bin/rm), so both are folded away.
+const base = token => token.split('/').pop().replace(/^=+/, '').toLowerCase();
+const WRAPPERS = ['command', 'exec', 'env', 'nohup', 'time', 'builtin'];
+/**
+ * The command word of a segment: the first token after env assignments and `command`/`exec`/`env`/`nohup`/`time`,
+ * skipping the wrappers' own options (`time -p`, `env -i`, `exec -a name`).
+ */
+const commandWord = tokens => {
+    let wrapped = false;
+    for (let i = 0; i < tokens.length; i += 1) {
+        const t = tokens[i];
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) continue;
+        if (WRAPPERS.includes(base(t))) { wrapped = true; continue; }
+        if (wrapped && t.startsWith('-')) { if (t === '-a' || t === '-u') i += 1; continue; }
+        return t;
+    }
+    return undefined;
+};
 /** The words after the first `name` token (or after `name -C dir` style options), for a tool's subcommand. */
 const after = (tokens, name) => {
     const i = tokens.findIndex(t => base(t) === name);
@@ -41,7 +56,7 @@ const sub = (tokens, name, verbs) => {
  * Matching is deliberately broad: a false match only means the user answers that card.
  */
 export const NEVER_AUTO_APPROVE = [
-    { name: 'rm -r', test: tokens => tokens.some((t, i) => base(t) === 'rm' && tokens.slice(i + 1).some(f => f === '--recursive' || /^-[A-Za-z]*[rR]/.test(f))) },
+    { name: 'rm -r', test: tokens => tokens.some((t, i) => base(t) === 'rm' && tokens.slice(i + 1).some(f => /^--rec/.test(f) || /^-[A-Za-z]*[rR]/.test(f))) },
     { name: 'git push', test: tokens => tokens.some((t, i) => base(t) === 'git' && tokens.slice(i + 1).includes('push')) },
     { name: 'sudo', test: tokens => tokens.some(t => base(t) === 'sudo') },
     { name: 'download piped into a shell', test: (tokens, all) => /\b(?:curl|wget)\b/.test(all) && tokens.some(t => SHELLS.has(base(t))) },
@@ -73,14 +88,31 @@ export const NEVER_AUTO_APPROVE = [
     { name: 'shell expansion builds a word', test: tokens => /[{$]/.test(commandWord(tokens) ?? '')
         || tokens.some(t => /\$\{[^}]*[-:=?+#%/^,]/.test(t) || (t.startsWith('-') && t.includes('$')) || /[A-Za-z0-9_]\$|\}[A-Za-z]/.test(t)) },
     // `echo <base64> | base64 -d | sh`: anything piped into a shell or interpreter, not just a download.
+    // `bash -c "$(… | base64 -d)"`, `bash <(…)`, `bash <<< …`: a shell or interpreter fed code generated on the spot.
+    { name: 'shell fed generated code', test: (tokens, all) => {
+        const word = base(commandWord(tokens) ?? '');
+        return (SHELLS.has(word) || INTERPRETERS.test(word)) && /\$\(|`|<\(|<<|\bbase64\b|\bxxd\b|\bprintf\b/.test(all);
+    } },
+    // `$(echo rm) -rf x`: the command word itself comes from a substitution.
+    { name: 'command word from a substitution', test: (tokens, all) => /(?:^|&&|\|\||[;&|\n(])\s*(?:\$\(|`)/.test(all) },
+    // `$'\x72m'`: ANSI-C escapes spell a word this check cannot read.
+    { name: 'ANSI-C escape', test: (tokens, all) => /\$'[^']*\\/.test(all) },
+    // `echo -rf x | xargs rm`: the flags arrive on stdin.
+    { name: 'xargs or parallel running rm', test: tokens => tokens.some((t, i) => ['xargs', 'parallel'].includes(base(t)) && tokens.slice(i + 1).some(f => base(f) === 'rm')) },
+    // `git -c alias.p=push p`: an alias defined inline can be any git command or a shell (`!sh`).
+    { name: 'git -c alias', test: tokens => { const rest = after(tokens, 'git'); return !!rest && rest.some(t => /^alias\./i.test(t) || /^--config-env/.test(t)); } },
+    // Read the way `segments` reads it (quotes and backslashes deleted), so `| "sh"`, `| s\h`, `|& sh` or `| command sh` count.
     { name: 'piped into a shell or interpreter', test: (tokens, all) => {
         const word = base(commandWord(tokens) ?? '');
-        return (SHELLS.has(word) || INTERPRETERS.test(word)) && new RegExp(`(?<!\\|)\\|(?!\\|)\\s*(?:(?:\\S*/)?env\\s+)?(?:\\S*/)?${word.replace(/\./g, '\\.')}(?:\\s|$)`).test(all);
+        if (!SHELLS.has(word) && !INTERPRETERS.test(word)) return false;
+        return all.replace(/["'\\]/g, '').split(/(?<!\|)\|(?!\|)/).slice(1).some(part =>
+            base(commandWord(part.replace(/^&/, '').split(/&&|\|\||[;&\n`]|\$\(|[()]/)[0].trim().split(/\s+/).filter(Boolean)) ?? '') === word);
     } }
 ];
 
 // Quotes and backslashes are deleted, not spaced, so r"m" -rf and r\m -rf read as rm -rf, as the shell would run them.
-const segments = text => text.replace(/["'\\]/g, '').split(/&&|\|\||[;|&\n`]|\$\(|[()]/).map(s => s.trim().split(/\s+/).filter(Boolean)).filter(s => s.length);
+// `$'rm'` and `$"rm"` are quoted words: drop the `$` so they read as rm, not as a variable.
+const segments = text => text.replace(/\$(?=['"])/g, '').replace(/["'\\]/g, '').split(/&&|\|\||[;|&\n`]|\$\(|[()]/).map(s => s.trim().split(/\s+/).filter(Boolean)).filter(s => s.length);
 
 /**
  * The name of the never-auto-approve rule a command breaks, or null. A command wrapped over several lines is also
@@ -88,6 +120,8 @@ const segments = text => text.replace(/["'\\]/g, '').split(/&&|\|\||[;|&\n`]|\$\
  */
 export function neverAutoApprove(command) {
     if (typeof command !== 'string' || !command) return null;
+    // Backslash-newline is a line continuation: the shell joins the halves with nothing between them.
+    command = command.replace(/\\\r?\n/g, '');
     const lines = command.split('\n').map(l => l.trim());
     for (const text of [command, lines.join(' '), lines.join('')]) {
         for (const tokens of segments(text)) {
