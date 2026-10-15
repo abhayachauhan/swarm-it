@@ -118,7 +118,9 @@ test('shell expansion that builds a command word, and anything piped into a shel
         "aws s3 $'rm' s3://b --recursive", 'bash <(echo cm0gLXJmIHgK | base64 -d)', 'bash -c "$(echo cm0g | base64 -d)"',
         'bash <<< x', "sh -c \"$(printf '\\x72m -rf x')\"", '$(echo rm) -rf x', '`echo rm` -rf x', 'R=rm; time -p $R -rf x',
         'env -i $R -rf x', 'exec -a x $R -rf x', 'r\\\nm\\\n -rf x', 'echo -rf x | xargs rm', 'echo -rf | parallel rm {} x',
-        'git -c alias.p=push p', "git -c alias.c='clean -fdx' c", '=rm -rf x', 'Rm -rf x', 'rm --rec -f x'
+        'git -c alias.p=push p', "git -c alias.c='clean -fdx' c", '=rm -rf x', 'Rm -rf x', 'rm --rec -f x',
+        'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p', 'GIT_CONFIG_PARAMETERS=x git p',
+        "env -S 'rm -rf x'", 'env -C /tmp $R -rf x', 'time -f %e $R -rf x', 'time -o out $R -rf x', 'env -u HOME $R -rf x'
     ]) assert.ok(neverAutoApprove(cmd), cmd);
     for (const cmd of [
         'echo ${HOME}/x', 'ls ${TMPDIR}', "awk '{print $1}' f", 'cmd1 || bash -c true', 'cat a | grep b', 'jq ".[] | .a" f'

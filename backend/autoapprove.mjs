@@ -36,7 +36,8 @@ const commandWord = tokens => {
         const t = tokens[i];
         if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) continue;
         if (WRAPPERS.includes(base(t))) { wrapped = true; continue; }
-        if (wrapped && t.startsWith('-')) { if (t === '-a' || t === '-u') i += 1; continue; }
+        // Wrapper options that take a separate value: `exec -a name`, `env -u VAR`, `env -C dir`, `time -f fmt -o file`.
+        if (wrapped && t.startsWith('-')) { if (['-a', '-u', '-C', '-f', '-o', '--unset', '--chdir', '--format', '--output'].includes(t)) i += 1; continue; }
         return t;
     }
     return undefined;
@@ -101,6 +102,10 @@ export const NEVER_AUTO_APPROVE = [
     { name: 'xargs or parallel running rm', test: tokens => tokens.some((t, i) => ['xargs', 'parallel'].includes(base(t)) && tokens.slice(i + 1).some(f => base(f) === 'rm')) },
     // `git -c alias.p=push p`: an alias defined inline can be any git command or a shell (`!sh`).
     { name: 'git -c alias', test: tokens => { const rest = after(tokens, 'git'); return !!rest && rest.some(t => /^alias\./i.test(t) || /^--config-env/.test(t)); } },
+    // `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p`: git config, aliases included, from the environment.
+    { name: 'git config from the environment', test: tokens => tokens.some(t => /^GIT_CONFIG(?:_[A-Z0-9_]*)?=/.test(t)) },
+    // `env -S 'rm -rf x'` splits one string into a whole command this check never sees as words.
+    { name: 'env -S', test: tokens => tokens.some((t, i) => base(t) === 'env' && tokens.slice(i + 1).some(f => /^-[A-Za-z]*S|^--split-string/.test(f))) },
     // Read the way `segments` reads it (quotes and backslashes deleted), so `| "sh"`, `| s\h`, `|& sh` or `| command sh` count.
     { name: 'piped into a shell or interpreter', test: (tokens, all) => {
         const word = base(commandWord(tokens) ?? '');
