@@ -81,7 +81,7 @@ used to send about 690 messages; it now sends well under 140 (test/backend-messa
 - `actions.mjs`: `approve(api, store, itemID, promptHash)`, `deny(api, store, itemID)`, `archive(api, store, paneID)`, `accept(api, store, paneID)`, `captureWorker(api, store, paneID, lines)`, `sendToWorker(api, store, paneID, text)`, `openResult(api, store, paneID)`, `sendText(api, paneID, text)`, `readResult(api, store, paneID)`, `sendToOrchestrator(api, store, text)`
 - `collapse.mjs`: `ensureHiddenWorkspace(api, store, settings)`, `hideWorker(api, store, paneID)`, `showWorker(api, store, paneID)`
 - `notify.mjs`: `onNotification(api, store, att, event)`, `parsePrompt(captureText)` (returns `{ command, question, block }`), `promptHash(text)`
-- `autoapprove.mjs`: `createState()`, `load(store)`, `turnOn(store, hours, now, mono)`, `setUntil(store, endAt, now, mono)`, `turnOff(store, reason, now)`, `expireIfDue(store, now, mono)`, `run(api, store, now)` (approves through `actions.approve` only, and never while the provider is active), `appendLog(store, entry)`, `clearLog(store)`, `logEntries(store)`, `snapshotPart(store)`, `providerPart(auto)`, `NEVER_AUTO_APPROVE`, `neverAutoApprove(command)` (the matched rule name or null), `judgeRequest(toolName, toolInput)`, `decide(store, args, now, mono)` (the provider method, synchronous), `checkProvider(api, store, now)`, `PERMISSIONS_SERVICE`, `PROVIDER_ID`, `SELECT_COMMAND`
+- `autoapprove.mjs`: `createState()`, `load(store)`, `turnOn(store, hours, now, mono)`, `setUntil(store, endAt, now, mono)`, `turnOff(store, reason, now)`, `expireIfDue(store, now, mono)`, `run(api, store, now)` (approves through `actions.approve` only, and never while the provider is active), `appendLog(store, entry)`, `clearLog(store)`, `logEntries(store)`, `snapshotPart(store)`, `providerPart(auto)`, `NEVER_AUTO_APPROVE`, `neverAutoApprove(command)` (the matched rule name or null), `judgeRequest(toolName, toolInput, fs?)` (async), `decide(store, args, now, mono)` (the provider method, async), `checkProvider(api, store, now)`, `PERMISSIONS_SERVICE`, `PROVIDER_ID`, `SELECT_COMMAND`
 - `kelpi-policy.mjs`: Kelpi's auto-approve example `policy.mjs` (commit 29b2d45) unchanged below a two-line header: `NEVER_AUTO_APPROVE`, `neverAutoApprove(command)`, `judgeCommand(command)`
 - `suggested.mjs`: `findSuggested(captureText, options)`, `joinWraps(lines, indent, wrap)`, `wrapWidth(lines)`, `commandProblem(text)`, `sourcePane(api, args, context)`, `suggestionIn(api, paneID)`, `runTargets(panes, source)`, `runConfirmed(api, args)`, `pbcopy(text)`, `SUGGESTED_CAPTURE_LINES`
 - `index.mjs`: `activate(api)` (host entry), `registerAll(api, deps)` (returns dispose; `deps.clipboard` overrides `pbcopy`)
@@ -168,8 +168,8 @@ Kelpi 0.2.18+ runs Claude's `PermissionRequest` hook as `kelpi event permission-
 `kelpi plugin service-select kelpi.agent.permissions local.swarm-view.permissions`, plus `kelpi install-hooks` for the hook
 (Claude loads hooks when a session starts). `default` in place of the provider id goes back to Kelpi's bundled abstain.
 
-`decide(args)` returns `{ behavior: 'allow' }` or `{ behavior: 'abstain' }`, never `deny`. It is synchronous, awaits nothing
-(Kelpi waits 2 s at most) and never throws. It allows only when all hold: auto-approve is on (the window is checked on every
+`decide(args)` resolves to `{ behavior: 'allow' }` or `{ behavior: 'abstain' }`, never `deny`. It awaits only a write's
+path lookup, at most 500 ms in all (Kelpi waits 2 s at most), and never rejects. It allows only when all hold: auto-approve is on (the window is checked on every
 call against both the wall-clock `until` and a monotonic deadline, so setting the clock back cannot extend it and a Mac that
 slept past the end wakes up off); the last `checkProvider` saw `activeProviderID === 'local.swarm-view.permissions'`;
 `agent === 'claude'`; `judgeRequest` allows it; the rate guard has not paused the pane (30 in 10 minutes, shared with the screen path).
@@ -184,10 +184,15 @@ and in lower case, since macOS paths ignore case) breaks Kelpi's `agent settings
 `.codex*` folder or `.mcp.json`; a `.git` file, any `.git/…/hooks/` file or `.git/…/config(.worktree)`, `.gitconfig` or
 `.config/git/`; a shell startup file (`.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.zlogout`, `.bashrc`, `.bash_profile`,
 `.bash_login`, `.bash_logout`, `.profile`, `.envrc`, `.config/fish/`); or `Library/LaunchAgents` or `LaunchDaemons`. A write
-through a dangling symlink abstains (`SYMLINK`). A script written and then run is not caught. Any other tool abstains (`TOOL`).
+through a dangling symlink abstains (`SYMLINK`). So does (`PATH`) a write whose path is not absolute, or whose lookup fails
+other than not found (a symlink loop, no access) or runs out of time; the lookups are async, and once 2 have outlived
+their time no new ones start until they return, so a hung network mount cannot take every libuv thread. Turning
+auto-approve off during a lookup abstains unlogged. A script written and then run is not caught, nor a folder swapped for
+a symlink between the decision and the write: the checks catch mistakes, not a determined agent. Any other tool abstains
+(`TOOL`).
 
 While on, every decision is appended to the `autoApproveLog` with `source: 'provider'`, `tool`, and on an abstain `reason`,
-`code` (`NEVER` with `rule`, `SANDBOX`, `MULTILINE`, `CONTROL`, `SYMLINK`, `TOO_LONG`, `NO_INPUT`, `TOOL`, `AGENT`, `PAUSED`, `NOT_ACTIVE`, `ERROR`)
+`code` (`NEVER` with `rule`, `SANDBOX`, `MULTILINE`, `CONTROL`, `SYMLINK`, `PATH`, `TOO_LONG`, `NO_INPUT`, `TOOL`, `AGENT`, `PAUSED`, `NOT_ACTIVE`, `ERROR`)
 and `skipped: true` (counted in `skipped`; not for `NOT_ACTIVE` or `ERROR`). The command is kept to 1000 characters. While
 off it abstains without logging. Screen-path entries carry `source: 'screen'`.
 

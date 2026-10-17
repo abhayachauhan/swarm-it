@@ -647,12 +647,13 @@ export function registerAll(api, deps = modules) {
     disposers.push(() => clearInterval(scanTimer));
 
     // kelpi.agent.permissions@1 (Kelpi 0.2.18+): Claude's PermissionRequest hook asks `decide` once the user selects it.
-    // `decide` answers at once from memory; the publish (and a selection re-check when it was asked unconfirmed) is queued.
+    // `decide` answers from memory (a write also looks up its path); the publish, and a selection re-check when it was asked
+    // unconfirmed, is queued.
     let providerPublishQueued = false;
-    const decide = args => {
+    const decide = async args => {
         let decision = { behavior: 'abstain' };
         const wasOn = st.auto.on;
-        try { decision = AA.decide(st, args); } catch { /* abstain */ }
+        try { decision = await AA.decide(st, args); } catch { /* abstain */ }
         // Off before and after: nothing was logged or counted, so there is nothing to show.
         if ((wasOn || st.auto.on) && !providerPublishQueued) {
             providerPublishQueued = true;

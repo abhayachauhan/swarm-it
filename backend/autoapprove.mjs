@@ -4,7 +4,7 @@
 // goes through actions.approve, the SAME path as the Approve button (double live capture, hash and command match,
 // Enter only). Off by default and after every reload: the on/off state is never persisted; only the log is.
 import { posix } from 'node:path';
-import { realpathSync, lstatSync } from 'node:fs';
+import { realpath, lstat } from 'node:fs/promises';
 import { approve } from './actions.mjs';
 import { ownedRequestPane, otherSwarmPane } from './store.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
@@ -33,6 +33,10 @@ const ASKED_WINDOW_MS = 60000;
 /** Longer tool input is left for the user unread, so `decide` stays well inside Kelpi's 2 second deadline: the never
  *  list reads the whole text once per segment, so 16 KiB of `a;a;…` took 1.6 s, 4 KiB about 0.1 s. */
 export const MAX_REQUEST_TEXT = 4096;
+/** Finding where a write lands may take this long in all; slower (a hung network mount) and the write waits for the user. */
+export const PATH_CHECK_MS = Number(process.env.SWARM_PATH_CHECK_MS) || 500;
+/** A hung lookup holds one of libuv's 4 threads, so once this many outlive their time no new ones start. */
+const MAX_STUCK_LOOKUPS = 2;
 /** Provider log entries keep this many characters of the command. */
 const LOG_TEXT_CAP = 1000;
 const ABSTAIN = Object.freeze({ behavior: 'abstain' });
@@ -388,15 +392,33 @@ const strings = (value, out = []) => {
     else if (value !== null && typeof value === 'object') for (const [key, inner] of Object.entries(value)) { out.push(key); strings(inner, out); }
     return out;
 };
-/** An absolute path with symlinks resolved through its nearest existing folder; null when a dangling symlink is in the way. */
-function realPath(path) {
-    if (!path.startsWith('/')) return path;
+const PATH_FS = { realpath, lstat };
+const MISSING = new Set(['ENOENT', 'ENOTDIR']);
+let stuckLookups = 0;
+/** One file system lookup, given until `end`; one that outlives it counts as stuck until it finally returns. */
+function lookup(fn, path, end) {
+    let late = false;
+    const run = Promise.resolve().then(() => fn(path)).finally(() => { if (late) stuckLookups -= 1; });
+    return withTimeout(run, Math.max(1, end - performance.now()), 'checking where a write lands').catch(error => {
+        if (error.code === 'TIMEOUT') { late = true; stuckLookups += 1; }
+        throw error;
+    });
+}
+/** Where an absolute path lands, symlinks resolved through its nearest existing folder: `{ path }`, or why it can't be told. */
+async function realPath(path, fs) {
+    const end = performance.now() + PATH_CHECK_MS;
+    const unknown = error => ({ code: 'PATH', reason: `could not tell where it writes (${error.code ?? message(error)})` });
     let dir = path;
     let rest = '';
     for (;;) {
-        try { return posix.join(realpathSync(dir), rest); } catch { /* not there (yet): try its folder */ }
+        if (stuckLookups >= MAX_STUCK_LOOKUPS) return { code: 'PATH', reason: 'earlier path lookups are still stuck' };
+        try { return { path: posix.join(await lookup(fs.realpath, dir, end), rest) }; } catch (error) {
+            if (!MISSING.has(error.code)) return unknown(error);
+        }
         // A dangling symlink points at a target only the write would create.
-        try { if (lstatSync(dir).isSymbolicLink()) return null; } catch { /* missing */ }
+        try { if ((await lookup(fs.lstat, dir, end)).isSymbolicLink()) return { code: 'SYMLINK', reason: 'writes through a symlink that points nowhere yet' }; } catch (error) {
+            if (!MISSING.has(error.code)) return unknown(error);
+        }
         rest = posix.join(posix.basename(dir), rest);
         dir = posix.dirname(dir);
     }
@@ -406,9 +428,10 @@ function realPath(path) {
  * Policy for one structured request: `{ allow: true, text }` or `{ allow: false, text, reason, code, rule? }`. `text` is
  * what the prompt would show. Bash: swarm-it's never list, then Kelpi's example policy (union, never weaker). Other
  * tools: the same tool types the screen path approves today ("Tool use" is an MCP tool), never with a control character,
- * with the never list on their text (and on each string of an MCP call); writes to agent, git or shell config are left.
+ * with the never list on their text (and on each string of an MCP call); writes to agent, git or shell config are left,
+ * and so is a write whose path is not absolute or cannot be followed in time. `fs` is for tests.
  */
-export function judgeRequest(toolName, toolInput) {
+export async function judgeRequest(toolName, toolInput, fs = PATH_FS) {
     const input = toolInput !== null && typeof toolInput === 'object' && !Array.isArray(toolInput) ? toolInput : null;
     const mcp = typeof toolName === 'string' && /^mcp__./.test(toolName);
     const field = SCREEN_TOOLS.get(toolName);
@@ -433,8 +456,11 @@ export function judgeRequest(toolName, toolInput) {
         return { allow: false, text, reason: judged.reason, code: KELPI_CODES[judged.reason] ?? 'NEVER' };
     }
     if (WRITES.has(toolName)) {
-        const real = realPath(posix.normalize(text));
-        if (real === null) return { allow: false, text, reason: 'writes through a symlink that points nowhere yet', code: 'SYMLINK' };
+        // Claude sends absolute paths; anything else could not be followed through its symlinks.
+        if (!text.startsWith('/')) return { allow: false, text, reason: 'not an absolute path', code: 'PATH' };
+        const landed = await realPath(posix.normalize(text), fs);
+        if (!landed.path) return { allow: false, text, reason: landed.reason, code: landed.code };
+        const real = landed.path;
         const paths = [text, ...new Set([posix.normalize(text).toLowerCase(), real.toLowerCase(), real])];
         const settings = KELPI_NEVER.find(r => r.name === 'agent settings write');
         if (paths.some(p => settings.test([p], p))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };
@@ -447,10 +473,10 @@ export function judgeRequest(toolName, toolInput) {
 /**
  * The kelpi.agent.permissions@1 `decide`. Allow only while the window is on (checked on both clocks every call), swarm-it is
  * the active provider and the request passes judgeRequest and the rate guard; otherwise abstain, so Claude shows its own
- * prompt and the rail's card works as before. Never denies, never throws, awaits nothing. Every decision made while on is
- * logged with `source: 'provider'`; while off it abstains without logging.
+ * prompt and the rail's card works as before. Never denies, never rejects, awaits only a write's path lookup (at most
+ * PATH_CHECK_MS). Every decision made while on is logged with `source: 'provider'`; while off it abstains without logging.
  */
-export function decide(store, args, now = Date.now(), mono = performance.now()) {
+export async function decide(store, args, now = Date.now(), mono = performance.now()) {
     const a = store.auto;
     let paneID = '?';
     let tool = '';
@@ -466,7 +492,9 @@ export function decide(store, args, now = Date.now(), mono = performance.now()) 
             tool, source: 'provider', ...fields
         });
         const leave = (reason, code, extra = {}) => { a.skipped += 1; entry({ ok: false, skipped: true, reason, code, ...extra }); return ABSTAIN; };
-        const judged = judgeRequest(args.toolName, args.toolInput);
+        const judged = await judgeRequest(args.toolName, args.toolInput, a.fs);
+        // Turned off while a path was being looked up: off means abstain, unlogged.
+        if (!a.on) return ABSTAIN;
         text = judged.text;
         // Kelpi only asks the selected provider, but until checkProvider confirms it, the screen path is the one answering.
         if (!a.provider.active) { entry({ ok: false, reason: 'swarm-it is not confirmed as the active provider yet; the screen path answers', code: 'NOT_ACTIVE' }); return ABSTAIN; }

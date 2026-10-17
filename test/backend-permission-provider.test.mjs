@@ -17,6 +17,7 @@ process.env.SWARM_NOT_ASKED_GRACE_MS = '60';
 process.env.SWARM_AUTO_RATE_MAX = '3';
 // Long, so the selection tests prove the check on every scan while auto-approve is on.
 process.env.SWARM_PROVIDER_CHECK_MS = '600000';
+process.env.SWARM_PATH_CHECK_MS = '50';
 const { registerAll, SNAPSHOT_EVENT, COUNTS_ITEM } = await import('../backend/index.mjs');
 const AA = await import('../backend/autoapprove.mjs');
 const { createStore } = await import('../backend/store.mjs');
@@ -68,17 +69,17 @@ test('swarm-it registers its decide as the kelpi.agent.permissions provider the 
 
 test('allow inside the window, abstain outside it; decisions made while on are logged with source provider', async () => {
     const { api, dispose } = await start({ permissions: SELECTED });
-    assert.deepEqual(api.decide(bash('npm test')), ABSTAIN, 'off');
+    assert.deepEqual(await api.decide(bash('npm test')), ABSTAIN, 'off');
     assert.deepEqual(await logOf(api), [], 'nothing is logged while off');
     await api.command('auto-approve', { on: true, hours: 1 });
     assert.equal(lastSnapshot(api).autoApprove.provider.active, true);
-    assert.deepEqual(api.decide(bash('npm test')), ALLOW);
+    assert.deepEqual(await api.decide(bash('npm test')), ALLOW);
     await api.idle();
     const [entry] = await logOf(api);
     assert.deepEqual([entry.ok, entry.source, entry.tool, entry.command, entry.paneID, entry.label, entry.swarmName], [true, 'provider', 'Bash', 'npm test', 'w1', 'repo-lag', 'Swarm']);
     assert.equal(lastSnapshot(api).autoApprove.approved, 1, 'the rail is told');
     await api.command('auto-approve', { on: false });
-    assert.deepEqual(api.decide(bash('npm test')), ABSTAIN, 'off again');
+    assert.deepEqual(await api.decide(bash('npm test')), ABSTAIN, 'off again');
     assert.equal((await logOf(api)).length, 1);
     dispose();
 });
@@ -93,7 +94,7 @@ test('a never-list command abstains: swarm-it rules first, then the Kelpi exampl
         ['kelpi plugin service-select kelpi.agent.permissions default', 'NEVER', 'kelpi plugin'],
         ['ls\nmv a b', 'MULTILINE', undefined],
         [`echo ${'a'.repeat(AA.MAX_REQUEST_TEXT)}`, 'TOO_LONG', undefined]
-    ]) assert.deepEqual(api.decide(bash(command)), ABSTAIN, command);
+    ]) assert.deepEqual(await api.decide(bash(command)), ABSTAIN, command);
     await api.idle();
     const entries = (await logOf(api)).reverse();
     assert.deepEqual(entries.map(e => [e.ok, e.skipped, e.source, e.code, e.rule]), [
@@ -110,8 +111,8 @@ test('a never-list command abstains: swarm-it rules first, then the Kelpi exampl
 test('a Bash call that asks to run outside the sandbox abstains, whatever the command', async () => {
     const { api, dispose } = await start({ permissions: SELECTED });
     await api.command('auto-approve', { on: true });
-    assert.deepEqual(api.decide(bash('ls', { dangerouslyDisableSandbox: true })), ABSTAIN);
-    assert.deepEqual(api.decide(bash('ls', { dangerouslyDisableSandbox: false })), ALLOW);
+    assert.deepEqual(await api.decide(bash('ls', { dangerouslyDisableSandbox: true })), ABSTAIN);
+    assert.deepEqual(await api.decide(bash('ls', { dangerouslyDisableSandbox: false })), ALLOW);
     await api.idle();
     const [allowed, left] = await logOf(api);
     assert.deepEqual([left.ok, left.code, left.reason, left.command], [false, 'SANDBOX', 'asks to run outside the sandbox', 'ls']);
@@ -124,8 +125,8 @@ test('when deciding throws, decide abstains and logs the error instead of failin
     await api.command('auto-approve', { on: true });
     const broken = bash('ls');
     Object.defineProperty(broken, 'toolInput', { get() { throw new Error('boom'); } });
-    assert.deepEqual(api.decide(broken), ABSTAIN);
-    assert.deepEqual(api.decide(null), ABSTAIN, 'no arguments at all');
+    assert.deepEqual(await api.decide(broken), ABSTAIN);
+    assert.deepEqual(await api.decide(null), ABSTAIN, 'no arguments at all');
     await api.idle();
     const entries = (await logOf(api)).reverse();
     assert.deepEqual(entries.map(e => [e.ok, e.code, e.reason, e.source, e.paneID]), [
@@ -136,19 +137,19 @@ test('when deciding throws, decide abstains and logs the error instead of failin
     dispose();
 });
 
-test('the window ends on whichever clock runs out first: the wall clock, or the monotonic one a clock change cannot move', () => {
+test('the window ends on whichever clock runs out first: the wall clock, or the monotonic one a clock change cannot move', async () => {
     const now = Date.now();
     const mono = performance.now();
     const hour = 3600000;
     let store = activeStore(1, now, mono);
-    assert.deepEqual(AA.decide(store, bash('ls'), now + 1000, mono + 1000), ALLOW);
-    assert.deepEqual(AA.decide(store, bash('ls'), now - 5 * hour, mono + hour), ABSTAIN, 'the monotonic deadline passed (the clock was set back)');
+    assert.deepEqual(await AA.decide(store, bash('ls'), now + 1000, mono + 1000), ALLOW);
+    assert.deepEqual(await AA.decide(store, bash('ls'), now - 5 * hour, mono + hour), ABSTAIN, 'the monotonic deadline passed (the clock was set back)');
     assert.deepEqual([store.auto.on, store.auto.ended.reason], [false, 'expired']);
     store = activeStore(1, now, mono);
-    assert.deepEqual(AA.decide(store, bash('ls'), now + hour, mono + 1000), ABSTAIN, 'the wall-clock end passed (the Mac slept)');
+    assert.deepEqual(await AA.decide(store, bash('ls'), now + hour, mono + 1000), ABSTAIN, 'the wall-clock end passed (the Mac slept)');
     assert.deepEqual([store.auto.on, store.auto.ended.reason], [false, 'expired']);
     store = activeStore(null, now, mono);
-    assert.deepEqual(AA.decide(store, bash('ls'), now + 100 * hour, mono + 100 * hour), ALLOW, 'until turned off never expires');
+    assert.deepEqual(await AA.decide(store, bash('ls'), now + 100 * hour, mono + 100 * hour), ALLOW, 'until turned off never expires');
 });
 
 test('an exact end time sets both clocks', async () => {
@@ -162,7 +163,7 @@ test('an exact end time sets both clocks', async () => {
     dispose();
 });
 
-test('other tools keep the screen path decisions: the same tool types, the never list on what the prompt shows', () => {
+test('other tools keep the screen path decisions: the same tool types, the never list on what the prompt shows', async () => {
     const store = activeStore();
     const cases = [
         [request('Edit', { file_path: '/wt/w1/src/a.ts', old_string: 'a', new_string: 'b' }), 'allow'],
@@ -191,6 +192,10 @@ test('other tools keep the screen path decisions: the same tool types, the never
         [request('Write', { file_path: '/Users/me/.zshrc', content: 'x' }), 'shell startup file'],
         [request('Write', { file_path: '/wt/w1/.envrc', content: 'x' }), 'shell startup file'],
         [request('Write', { file_path: '/Users/me/Library/LaunchAgents/x.plist', content: 'x' }), 'launch agent'],
+        // A relative path could not be followed through its symlinks.
+        [request('Write', { file_path: 'link/hooks/pre-commit', content: 'x' }), 'PATH'],
+        [request('Edit', { file_path: '~/notes.md', old_string: 'a', new_string: 'b' }), 'PATH'],
+        [request('Read', { file_path: 'notes.md' }), 'allow'],
         [request('Write', { file_path: '/wt/w1/.github/workflows/ci.yml', content: 'x' }), 'allow'],
         [request('Read', { file_path: '/wt/w1/.git/config' }), 'allow'],
         [request('mcp__shell__run', { opts: { 'ls\ngit push': 1 } }), 'CONTROL'],
@@ -201,38 +206,78 @@ test('other tools keep the screen path decisions: the same tool types, the never
         [bash('npm test', {}, { agent: 'codex' }), 'AGENT']
     ];
     for (const [args, expected] of cases) {
-        const decision = AA.decide(store, freshPane(args));
+        const decision = await AA.decide(store, freshPane(args));
         const entry = store.auto.log.at(-1);
         assert.equal(decision.behavior === 'allow' ? 'allow' : entry.rule ?? entry.code, expected, `${args.toolName} ${JSON.stringify(args.toolInput)}`);
     }
 });
 
-test('a write through a symlink is judged by where it lands; one through a dangling symlink waits for the user', () => {
+test('a write through a symlink is judged by where it lands; one through a dangling symlink waits for the user', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'swarm-perm-')));
     mkdirSync(join(root, 'repo', '.git', 'hooks'), { recursive: true });
     symlinkSync(join(root, 'repo', '.git'), join(root, 'repo', 'g'));
     symlinkSync(join(root, 'nowhere', 'x'), join(root, 'repo', 'dangling'));
+    symlinkSync(join(root, 'repo', 'loop'), join(root, 'repo', 'loop'));
     const store = activeStore();
-    const judge = path => {
-        const decision = AA.decide(store, freshPane(request('Write', { file_path: path, content: 'x' })));
-        return decision.behavior === 'allow' ? 'allow' : store.auto.log.at(-1).rule ?? store.auto.log.at(-1).code;
-    };
     try {
-        assert.equal(judge(join(root, 'repo', 'g', 'hooks', 'pre-commit')), 'git hooks or config');
-        assert.equal(judge(join(root, 'repo', 'dangling')), 'SYMLINK');
-        assert.equal(judge(join(root, 'repo', 'src', 'new.ts')), 'allow', 'a folder that does not exist yet is fine');
+        assert.equal(await judgeWrite(store, join(root, 'repo', 'g', 'hooks', 'pre-commit')), 'git hooks or config');
+        assert.equal(await judgeWrite(store, join(root, 'repo', 'dangling')), 'SYMLINK');
+        assert.equal(await judgeWrite(store, join(root, 'repo', 'loop', 'x')), 'PATH', 'a symlink loop is not taken for a missing folder');
+        assert.equal(await judgeWrite(store, join(root, 'repo', 'src', 'new.ts')), 'allow', 'a folder that does not exist yet is fine');
     } finally {
         rmSync(root, { recursive: true });
     }
+});
+
+/** Decide one Write and return 'allow', or the rule or code it was left with. */
+async function judgeWrite(store, path) {
+    const decision = await AA.decide(store, freshPane(request('Write', { file_path: path, content: 'x' })));
+    return decision.behavior === 'allow' ? 'allow' : store.auto.log.at(-1).rule ?? store.auto.log.at(-1).code;
+}
+
+test('a write whose path lookup hangs or fails waits for the user, and stuck lookups stop new ones', async () => {
+    const store = activeStore();
+    const hung = [];
+    store.auto.fs = {
+        realpath: path => path === '/hang/x' ? new Promise(resolve => hung.push(() => resolve(path))) : Promise.resolve(path),
+        lstat: () => Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+    };
+    const started = performance.now();
+    assert.equal(await judgeWrite(store, '/hang/x'), 'PATH');
+    assert.ok(performance.now() - started < AA.PATH_CHECK_MS + 400, 'answered once the lookup ran out of time');
+    assert.equal(store.auto.log.at(-1).reason, 'could not tell where it writes (TIMEOUT)');
+    assert.equal(await judgeWrite(store, '/hang/x'), 'PATH');
+    assert.equal(await judgeWrite(store, '/wt/w1/a.ts'), 'PATH', 'two stuck lookups: none start');
+    assert.equal(store.auto.log.at(-1).reason, 'earlier path lookups are still stuck');
+    for (const finish of hung) finish();
+    await sleep(0);
+    assert.equal(await judgeWrite(store, '/wt/w1/a.ts'), 'allow', 'lookups start again once the stuck ones return');
+    store.auto.fs.realpath = () => Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    assert.equal(await judgeWrite(store, '/wt/w1/a.ts'), 'PATH', 'only a missing path is walked up from');
+    assert.equal(store.auto.log.at(-1).reason, 'could not tell where it writes (EACCES)');
+});
+
+test('turning auto-approve off while a write path is looked up abstains without logging', async () => {
+    const store = activeStore();
+    let finish;
+    store.auto.fs = { realpath: path => new Promise(resolve => { finish = () => resolve(path); }), lstat: () => Promise.reject(new Error('unused')) };
+    const pending = AA.decide(store, freshPane(request('Write', { file_path: '/wt/w1/a.ts', content: 'x' })));
+    const logged = store.auto.log.length;
+    AA.turnOff(store, 'user');
+    await sleep(0);
+    finish();
+    assert.deepEqual(await pending, ABSTAIN);
+    assert.equal(store.auto.log.length, logged);
 });
 
 test('the rate guard stops a pane after the limit; its later requests abstain, other panes are still allowed', async () => {
     const { api, dispose } = await start({ permissions: SELECTED });
     await api.command('auto-approve', { on: true });
     assert.equal(AA.RATE_MAX, 3);
-    const decisions = ['echo 1', 'echo 2', 'echo 3', 'echo 4'].map(c => api.decide(bash(c)).behavior);
+    const decisions = [];
+    for (const c of ['echo 1', 'echo 2', 'echo 3', 'echo 4']) decisions.push((await api.decide(bash(c))).behavior);
     assert.deepEqual(decisions, ['allow', 'allow', 'allow', 'abstain']);
-    assert.deepEqual(api.decide(bash('ls', {}, { paneID: 'w2' })), ALLOW);
+    assert.deepEqual(await api.decide(bash('ls', {}, { paneID: 'w2' })), ALLOW);
     await api.idle();
     const auto = lastSnapshot(api).autoApprove;
     assert.deepEqual(auto.paused.map(p => [p.paneID, p.label]), [['w1', 'repo-lag']]);
@@ -250,7 +295,7 @@ test('no Enter from the screen path while the provider is active, even for cards
     await sleep(150);
     assert.equal(enters(api), 0, 'the screen path sends no key');
     assert.equal(dispose.store.attention.filter(i => i.type === 'Request' && !i.handledAt).length, 3, 'the cards stay for the user');
-    assert.deepEqual(api.decide(bash('npm test')), ALLOW, 'the provider is the path that answers');
+    assert.deepEqual(await api.decide(bash('npm test')), ALLOW, 'the provider is the path that answers');
     // Manual Approve from the rail still works.
     const card = dispose.store.attention.find(i => i.paneID === 'w2' && i.type === 'Request' && !i.handledAt);
     assert.deepEqual(await api.command('approve', { itemID: card.id, promptHash: card.promptHash }), { ok: true, itemID: card.id });
@@ -262,7 +307,7 @@ test('a card on a pane the provider never heard about is logged once as NOT_ASKE
     const { api, dispose } = await start({ permissions: SELECTED });
     await api.command('auto-approve', { on: true });
     // w2's request reached the provider (left for the user), so its card is expected.
-    assert.deepEqual(api.decide(bash('git push', {}, { paneID: 'w2' })), ABSTAIN);
+    assert.deepEqual(await api.decide(bash('git push', {}, { paneID: 'w2' })), ABSTAIN);
     api.captureStore.w1 = prompt('npm test');
     api.captureStore.w2 = prompt('git push');
     await sleep(250);
@@ -312,7 +357,7 @@ test('fallback when swarm-it is not the selected provider, the service is missin
         await sleep(100);
         assert.equal(enters(api), 1, `the screen path answers: ${JSON.stringify(permissions)}`);
         // Kelpi asking an unconfirmed provider (a selection made a moment ago) is left to the screen path.
-        assert.deepEqual(api.decide(bash('npm test', {}, { paneID: 'w2' })), ABSTAIN);
+        assert.deepEqual(await api.decide(bash('npm test', {}, { paneID: 'w2' })), ABSTAIN);
         dispose();
     }
 });
@@ -336,16 +381,20 @@ test('selecting swarm-it while auto-approve is on moves answering from the scree
     dispose();
 });
 
-test('every existing never-list command abstains through the provider, with the same rule where one is named', () => {
+test('every existing never-list command abstains through the provider, with the same rule where one is named', async () => {
     const store = activeStore();
-    const judge = command => {
-        const decision = AA.decide(store, freshPane(bash(command)));
+    const judge = async command => {
+        const decision = await AA.decide(store, freshPane(bash(command)));
         return decision.behavior === 'allow' ? null : store.auto.log.at(-1).rule ?? store.auto.log.at(-1).code;
     };
-    for (const [command, rule] of Object.entries(NEVER_HITS)) assert.equal(judge(command), rule, command);
-    for (const command of [...NEVER_A2, ...NEVER_EXPANSION]) assert.ok(judge(command), command);
+    for (const [command, rule] of Object.entries(NEVER_HITS)) assert.equal(await judge(command), rule, command);
+    for (const command of [...NEVER_A2, ...NEVER_EXPANSION]) assert.ok(await judge(command), command);
     // The union with Kelpi's list leaves these screen-safe commands for the user too: accepted false positives.
-    const left = Object.fromEntries([...SAFE_BASIC, ...SAFE_A2, ...SAFE_EXPANSION].map(c => [c, judge(c)]).filter(([, rule]) => rule));
+    const left = {};
+    for (const command of [...SAFE_BASIC, ...SAFE_A2, ...SAFE_EXPANSION]) {
+        const rule = await judge(command);
+        if (rule) left[command] = rule;
+    }
     assert.deepEqual(left, {
         'git restore --source HEAD file.ts': 'git checkout, restore or switch discarding changes',
         'node --test test/*.test.mjs': 'brace or glob expansion',
@@ -358,11 +407,11 @@ test('every existing never-list command abstains through the provider, with the 
     });
 });
 
-test('the longest command checked is judged well inside the 2 second deadline', () => {
+test('the longest command checked is judged well inside the 2 second deadline', async () => {
     const store = activeStore();
     for (const command of ['a;'.repeat(AA.MAX_REQUEST_TEXT / 2), 'x |'.repeat(Math.floor(AA.MAX_REQUEST_TEXT / 3)), 'a&&'.repeat(Math.floor(AA.MAX_REQUEST_TEXT / 3))]) {
         const started = performance.now();
-        AA.decide(store, freshPane(bash(command)));
+        await AA.decide(store, freshPane(bash(command)));
         const took = performance.now() - started;
         assert.ok(took < 500, `${command.slice(0, 6)}… took ${Math.round(took)} ms`);
     }
