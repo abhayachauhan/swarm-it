@@ -46,6 +46,9 @@
       { "id": "local.swarm-view.close-run-view", "title": "Swarm: close the run suggested command view" },
       { "id": "local.swarm-view.restart-claude", "title": "Restart Claude (quit and resume)", "icon": "restart" }
     ],
+    "providers": [
+      { "id": "local.swarm-view.permissions", "title": "Swarm auto-approve: allow Claude's permission requests while Auto is on", "service": "kelpi.agent.permissions", "version": 1, "methods": ["decide"] }
+    ],
     "items": [
       { "id": "local.swarm-view.counts", "placement": "statusbar", "text": "Swarm 0/0/0", "tooltip": "Swarm: waiting / running / finished", "tone": "default", "command": "local.swarm-view.focus-rail" }
     ],

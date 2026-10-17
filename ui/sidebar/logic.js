@@ -238,6 +238,9 @@
     function autoNotes(auto) {
         if (!auto) return [];
         const notes = [];
+        // Which path answers: Kelpi's permission requests (swarm-it the selected provider), or the screen, with the fix.
+        if (auto.provider && auto.provider.warning) notes.push(auto.provider.warning);
+        else if (auto.provider && auto.provider.active) notes.push("Answers Claude's permission requests through Kelpi, not from the screen");
         if (auto.on && auto.skipped) notes.push(`${auto.skipped} unrecognised prompt${auto.skipped === 1 ? '' : 's'} left for you`);
         if (auto.on && auto.failed) notes.push(`${auto.failed} refused by the live check (see the log)`);
         for (const p of (auto.on && auto.paused) || []) notes.push(`Stopped for ${p.label || p.paneID}: ${p.reason}`);

@@ -548,6 +548,20 @@ test('after the timer switched it off the toggle reads off and its tooltip says 
     assert.deepEqual(L.autoNotes({ ...AUTO_ON, on: false, skipped: 3, failed: 1, ended: null }), [], 'skipped and failed only matter while on');
 });
 
+test('the Auto toggle tooltip says which path answers: the fix while it reads the screen, or that Kelpi asks swarm-it', () => {
+    const warning = 'Auto-approve reads the screen: swarm-it is not the selected permissions provider; run "kelpi plugin service-select kelpi.agent.permissions local.swarm-view.permissions" and "kelpi install-hooks", then restart Claude sessions';
+    for (const [provider, expected] of [
+        [{ active: false, warning }, warning],
+        [{ active: true, warning: null }, "Answers Claude's permission requests through Kelpi, not from the screen"]
+    ]) {
+        const refs = autoRefs();
+        L.render(fakeDoc, refs, view({ ...fixture(), autoApprove: { ...AUTO_ON, provider } }), autoHandlers());
+        assert.equal(autoToggle(refs).attrs.title.split('\n')[1], expected);
+        assert.deepEqual(L.autoNotes({ ...AUTO_ON, on: false, provider }), [expected], 'shown while off too, so it can be fixed before a run');
+    }
+    assert.deepEqual(L.autoNotes(AUTO_ON), [], 'an older backend sends no provider');
+});
+
 test('the "log" link appears only when the log has entries and expands it under the header: newest first, refusals marked, Clear', () => {
     const entries = [
         { at: '2026-10-11T02:10:00.000Z', swarmName: 'BB', swarmWorkspaceID: 'ws2', paneID: 'x1', label: 'worker-2', command: 'npm test', ok: true },

@@ -423,7 +423,8 @@ export function buildSnapshot(store, now) {
         // Plain data copied here so views never see the Sets and Maps behind it.
         autoApprove: store.auto ? {
             on: store.auto.on, until: store.auto.until, since: store.auto.since, approved: store.auto.approved, skipped: store.auto.skipped,
-            failed: store.auto.failed, logCount: store.auto.log.length, paused: [...store.auto.paused.values()], ended: store.auto.ended
+            failed: store.auto.failed, logCount: store.auto.log.length, paused: [...store.auto.paused.values()], ended: store.auto.ended,
+            provider: { active: store.auto.provider.active, warning: store.auto.provider.warning }
         } : null
     };
 }
