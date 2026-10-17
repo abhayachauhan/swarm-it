@@ -179,9 +179,17 @@ test('other tools keep the screen path decisions: the same tool types, the never
         [request('mcp__shell__run', { opts: { cmd: 'git push origin' } }), 'git push'],
         [request('mcp__shell__run', { cmd: 'ls\ngit push' }), 'CONTROL'],
         [request('Write', { file_path: '/wt/w1/notes\n.md', content: 'x' }), 'CONTROL'],
-        // macOS paths ignore case, and `..` is resolved before the path is read.
+        // macOS paths ignore case. A path with `.` or `..` is never resolved as text: it waits, under a rule when one matches.
         [request('Edit', { file_path: '/Users/me/.Claude/Settings.json', old_string: 'a', new_string: 'b' }), 'agent settings write'],
-        [request('Write', { file_path: '/Users/me/repo/../.claude/hooks/x.sh', content: 'x' }), 'agent settings write'],
+        [request('Write', { file_path: '/Users/me/repo/../.claude/hooks/x.sh', content: 'x' }), '.claude or .codex folder, or .mcp.json'],
+        [request('Write', { file_path: '/wt/w1/link/../settings.json', content: 'x' }), 'PATH'],
+        [request('Write', { file_path: '/wt/w1/./a.ts', content: 'x' }), 'PATH'],
+        // MCP: deny by default. Words are split from snake, kebab and camel case.
+        [request('mcp__fs__writeFile', { path: '/tmp/x' }), 'MCP_CHANGES'],
+        [request('mcp__chat__sendMessage', { text: 'hi' }), 'MCP_CHANGES'],
+        [request('mcp__x__frobnicate', { a: 'b' }), 'MCP_UNKNOWN'],
+        [request('mcp__notion__notion-search', { query: 'x' }), 'allow'],
+        [request('mcp__claude_ai_Slack__slack_read_channel', { channel: 'c' }), 'allow'],
         [request('Write', { file_path: '/wt/w1/.claude/hooks/x.sh', content: 'x' }), '.claude or .codex folder, or .mcp.json'],
         [request('Write', { file_path: '/wt/w1/.mcp.json', content: '{}' }), '.claude or .codex folder, or .mcp.json'],
         [request('Write', { file_path: '/wt/w1/.git/x/../config', content: 'x' }), 'git hooks or config'],
@@ -218,8 +226,12 @@ test('a write through a symlink is judged by where it lands; one through a dangl
     symlinkSync(join(root, 'repo', '.git'), join(root, 'repo', 'g'));
     symlinkSync(join(root, 'nowhere', 'x'), join(root, 'repo', 'dangling'));
     symlinkSync(join(root, 'repo', 'loop'), join(root, 'repo', 'loop'));
+    // `link/..` climbs from the link's target: the kernel lands in .claude, text would say repo/settings.json.
+    mkdirSync(join(root, 'home', '.claude', 'hooks'), { recursive: true });
+    symlinkSync(join(root, 'home', '.claude', 'hooks'), join(root, 'repo', 'link'));
     const store = activeStore();
     try {
+        assert.equal(await judgeWrite(store, `${join(root, 'repo', 'link')}/../settings.json`), 'PATH');
         assert.equal(await judgeWrite(store, join(root, 'repo', 'g', 'hooks', 'pre-commit')), 'git hooks or config');
         assert.equal(await judgeWrite(store, join(root, 'repo', 'dangling')), 'SYMLINK');
         assert.equal(await judgeWrite(store, join(root, 'repo', 'loop', 'x')), 'PATH', 'a symlink loop is not taken for a missing folder');

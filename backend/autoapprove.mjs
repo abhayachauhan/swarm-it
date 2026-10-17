@@ -394,8 +394,16 @@ const strings = (value, out = []) => {
     return out;
 };
 const PATH_FS = { realpath, lstat, stat };
-/** MCP tool names (last `__` part) whose word says they change something: `write_file`, `send_message`, `cancel_build`. */
-export const MCP_CHANGES = /(?:^|[_-])(?:write|edit|create|delete|remove|exec|execute|run|shell|send|post|update|move|upload|put|set|save|apply|merge|cancel|trash|share|forward|reply|publish|deploy|unblock|retry|rebuild|restart|stop|kill|install)(?:[_-]|$)/i;
+/** The words of an MCP tool name (its last `__` part): `slack_send_message`, `sendMessage` and `notion-search` all split. */
+export const mcpWords = name => String(name).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+/** Any of these words leaves the call for the user: `write_file`, `sendMessage`, `cancel_build`. */
+export const MCP_CHANGE_WORDS = new Set(['write', 'edit', 'create', 'delete', 'remove', 'exec', 'execute', 'run', 'shell', 'send', 'post', 'update',
+    'move', 'upload', 'put', 'set', 'save', 'apply', 'merge', 'cancel', 'trash', 'share', 'forward', 'reply', 'publish', 'deploy', 'unblock',
+    'retry', 'rebuild', 'restart', 'stop', 'kill', 'install', 'add', 'insert', 'patch', 'modify', 'rename', 'copy', 'import', 'submit',
+    'approve', 'resolve', 'mark', 'label', 'archive', 'restore', 'complete', 'respond', 'invite', 'schedule', 'pause', 'resume', 'spawn', 'download']);
+/** One of these words is needed for the call to be answered at all: `get_issue`, `slack_read_channel`, `search_logs`. */
+export const MCP_READ_WORDS = new Set(['get', 'list', 'read', 'search', 'query', 'fetch', 'find', 'describe', 'view', 'show', 'lookup', 'count',
+    'aggregate', 'analyze', 'load', 'tail', 'whoami']);
 const MISSING = new Set(['ENOENT', 'ENOTDIR']);
 let stuckLookups = 0;
 /** One file system lookup, given until `end`; one that outlives it counts as stuck until it finally returns. */
@@ -453,8 +461,10 @@ export async function judgeRequest(toolName, toolInput, fs = PATH_FS) {
         if (never) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: never };
     }
     if (mcp) {
-        // An MCP tool that writes, sends or runs something is the user's call: its strings can't show where they land.
-        if (MCP_CHANGES.test(toolName.split('__').pop())) return { allow: false, text, reason: 'an MCP tool that changes something', code: 'MCP_CHANGES' };
+        // Deny by default: only a tool whose name says it reads is answered; one that writes, sends or runs is the user's.
+        const words = mcpWords(toolName.split('__').pop());
+        if (words.some(w => MCP_CHANGE_WORDS.has(w))) return { allow: false, text, reason: 'an MCP tool that changes something', code: 'MCP_CHANGES' };
+        if (!words.some(w => MCP_READ_WORDS.has(w))) return { allow: false, text, reason: 'an MCP tool whose name does not say it only reads', code: 'MCP_UNKNOWN' };
         for (const part of [text, ...parts]) {
             const rule = kelpiNever(part);
             if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule };
@@ -469,7 +479,9 @@ export async function judgeRequest(toolName, toolInput, fs = PATH_FS) {
     if (WRITES.has(toolName)) {
         // Claude sends absolute paths; anything else could not be followed through its symlinks.
         if (!text.startsWith('/')) return { allow: false, text, reason: 'not an absolute path', code: 'PATH' };
-        const landed = await realPath(posix.normalize(text), fs);
+        // `..` after a symlink climbs from the link's target, so it is never resolved as text: such a path waits.
+        if (text.split('/').some(s => s === '.' || s === '..')) return configWrite(text, [text, text.toLowerCase()]) ?? { allow: false, text, reason: 'a path with . or .. in it', code: 'PATH' };
+        const landed = await realPath(text, fs);
         if (!landed.path) return { allow: false, text, reason: landed.reason, code: landed.code };
         const real = landed.path;
         // A hard link has no symlink to follow: a second name for ~/.claude/settings.json looks like any file.
@@ -480,13 +492,18 @@ export async function judgeRequest(toolName, toolInput, fs = PATH_FS) {
                 if (!MISSING.has(error.code)) return { allow: false, text, reason: `could not tell where it writes (${error.code ?? message(error)})`, code: 'PATH' };
             }
         }
-        const paths = [text, ...new Set([posix.normalize(text).toLowerCase(), real.toLowerCase(), real])];
-        const settings = KELPI_NEVER.find(r => r.name === 'agent settings write');
-        if (paths.some(p => settings.test([p], p))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };
-        const rule = WRITE_NEVER.find(r => paths.some(p => r.test(p.toLowerCase())));
-        if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: rule.name };
+        const left = configWrite(text, [text, ...new Set([text.toLowerCase(), real.toLowerCase(), real])]);
+        if (left) return left;
     }
     return { allow: true, text };
+}
+
+/** A write to agent, git or shell config, by any of `paths`: the abstain, or null. */
+function configWrite(text, paths) {
+    const settings = KELPI_NEVER.find(r => r.name === 'agent settings write');
+    if (paths.some(p => settings.test([p], p))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };
+    const rule = WRITE_NEVER.find(r => paths.some(p => r.test(p.toLowerCase())));
+    return rule ? { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: rule.name } : null;
 }
 
 /**

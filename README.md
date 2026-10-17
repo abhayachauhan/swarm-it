@@ -94,8 +94,10 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
   commands wait for you as a result, such as `find . -name "*.ts"`, `node --test test/*.mjs` and
   `git restore --source HEAD x`. The screen fallback applies both lists too.
 - File reads, edits and writes, web fetches and read-only MCP tools are approved as before; any other tool waits
-  for you. An MCP tool whose name says it changes something (`write_file`, `send_message`, `cancel_build`, and
-  similar) waits for you, and Kelpi's list reads every string of an MCP call.
+  for you. An MCP tool is answered only when its name says it reads (`get_issue`, `slack_read_channel`,
+  `notion-search`) and no word in it says it changes something (`write_file`, `sendMessage`, `cancel_build`);
+  every other MCP tool waits for you. Kelpi's list also reads every string of an MCP call. A write path holding
+  `.` or `..` waits for you, since `..` after a symlink climbs from the link's target.
   Through Kelpi, a write to Claude's or Codex's settings, `.claude` folders or `.mcp.json`, git hooks or config,
   a shell startup file or a launch agent waits for you (symlinks are followed first, and a file with a second
   name through a hard link waits too), and so does any input
