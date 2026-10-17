@@ -80,8 +80,10 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
   over several lines or over 4 KiB, and a Bash call that asks to run outside Claude's sandbox. A few harmless
   commands wait for you as a result, such as `find . -name "*.ts"`, `node --test test/*.mjs` and
   `git restore --source HEAD x`.
-- Other tools are approved as before: file reads, edits and writes (not a write to Claude's or Codex's
-  settings), web fetches and MCP tools. Anything else waits for you.
+- File reads, edits and writes, web fetches and MCP tools are approved as before; any other tool waits for you.
+  Through Kelpi, a write to Claude's or Codex's settings or `.claude` folders, git hooks or `.git/config`, or a
+  shell startup file waits for you, and so does any input holding a control character. Writing a script and then
+  running it is not caught, as in Kelpi's own example.
 - A pane where Claude has exited is never answered, even if an old prompt is still on its screen.
 - Every approval and refusal goes in a log (**Swarm: list or clear the auto-approve log** in the palette).
   Each entry's `source` says whether it came through Kelpi (`provider`) or the screen (`screen`). Nothing is

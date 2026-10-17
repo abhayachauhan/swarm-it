@@ -3,6 +3,7 @@
 // Claude's PermissionRequest hook from the real tool input and the screen path sends no key. Otherwise every approval
 // goes through actions.approve, the SAME path as the Approve button (double live capture, hash and command match,
 // Enter only). Off by default and after every reload: the on/off state is never persisted; only the log is.
+import { posix } from 'node:path';
 import { approve } from './actions.mjs';
 import { ownedRequestPane, otherSwarmPane } from './store.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
@@ -370,12 +371,27 @@ const SCREEN_TOOLS = new Map([['Bash', 'command'], ['Edit', 'file_path'], ['Mult
 const WRITES = new Set(['Edit', 'MultiEdit', 'Write']);
 const KELPI_NEVER_PREFIX = 'never auto-approved: ';
 const KELPI_CODES = { 'multi-line command': 'MULTILINE', 'command too long': 'TOO_LONG', 'no command': 'NO_INPUT' };
+/** Control characters: the screen path never approves a prompt holding one, and a newline can start a second command. */
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/;
+/** Writes that change what Claude, git or a shell runs next, read on the path in lower case with `..` resolved (macOS
+ *  paths ignore case). Kelpi's agent settings rule is checked too. */
+const WRITE_NEVER = [
+    { name: '.claude or .codex folder', test: path => /(?:^|\/)\.(?:claude|codex)[^/]*\//.test(path) },
+    { name: 'git hooks or config', test: path => /(?:^|\/)\.git\/(?:hooks\/|config$)/.test(path) },
+    { name: 'shell startup file', test: path => /(?:^|\/)\.(?:zshrc|zshenv|zprofile|zlogin|bashrc|bash_profile|bash_login|profile)$/.test(path) }
+];
+/** Every string in a tool's input, however deep. */
+const strings = (value, out = []) => {
+    if (typeof value === 'string') out.push(value);
+    else if (value !== null && typeof value === 'object') for (const inner of Object.values(value)) strings(inner, out);
+    return out;
+};
 
 /**
  * Policy for one structured request: `{ allow: true, text }` or `{ allow: false, text, reason, code, rule? }`. `text` is
  * what the prompt would show. Bash: swarm-it's never list, then Kelpi's example policy (union, never weaker). Other
- * tools: the same tool types the screen path approves today ("Tool use" is an MCP tool), with the never list on their
- * text; an Edit or Write of Claude's or Codex's settings is left too (Kelpi's agent settings rule).
+ * tools: the same tool types the screen path approves today ("Tool use" is an MCP tool), never with a control character,
+ * with the never list on their text (and on each string of an MCP call); writes to agent, git or shell config are left.
  */
 export function judgeRequest(toolName, toolInput) {
     const input = toolInput !== null && typeof toolInput === 'object' && !Array.isArray(toolInput) ? toolInput : null;
@@ -383,21 +399,31 @@ export function judgeRequest(toolName, toolInput) {
     const field = SCREEN_TOOLS.get(toolName);
     if (!input || (!field && !mcp)) return { allow: false, text: '', reason: `auto-approve does not answer ${typeof toolName === 'string' ? toolName : 'this'} requests`, code: 'TOOL' };
     // As Claude's "Tool use" prompt draws an MCP call, `server - tool(key: "value", …)`, so the never list splits it the same way.
-    const text = mcp ? `${toolName}(${Object.entries(input).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(', ')})` : input[field];
+    const text = mcp ? `${toolName}(${Object.entries(input).map(([key, value]) => `${key}: ${typeof value === 'string' ? `"${value}"` : JSON.stringify(value)}`).join(', ')})` : input[field];
     if (typeof text !== 'string' || !text.trim()) return { allow: false, text: '', reason: `no ${field}`, code: 'NO_INPUT' };
     // Claude asks before running a command outside its sandbox: that prompt is the user's, whatever the command.
     if (toolName === 'Bash' && input.dangerouslyDisableSandbox) return { allow: false, text, reason: 'asks to run outside the sandbox', code: 'SANDBOX' };
     if (text.length > MAX_REQUEST_TEXT) return { allow: false, text, reason: 'too long to check', code: 'TOO_LONG' };
-    const never = neverAutoApprove(text);
-    if (never) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: never };
+    // JSON escapes would hide a newline from the never list (`ls\ngit push`), so each raw string is checked as well.
+    const parts = mcp ? strings(input) : [];
+    if (toolName !== 'Bash' && [text, ...parts].some(part => CONTROL.test(part))) return { allow: false, text, reason: 'holds a control character', code: 'CONTROL' };
+    for (const part of [text, ...parts]) {
+        const never = neverAutoApprove(part);
+        if (never) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: never };
+    }
     if (toolName === 'Bash') {
         const judged = judgeCommand(text);
         if (judged.allow) return { allow: true, text };
         if (judged.reason.startsWith(KELPI_NEVER_PREFIX)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: judged.reason.slice(KELPI_NEVER_PREFIX.length) };
         return { allow: false, text, reason: judged.reason, code: KELPI_CODES[judged.reason] ?? 'NEVER' };
     }
-    const settings = KELPI_NEVER.find(r => r.name === 'agent settings write');
-    if (WRITES.has(toolName) && settings.test([text], text)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };
+    if (WRITES.has(toolName)) {
+        const path = posix.normalize(text).toLowerCase();
+        const settings = KELPI_NEVER.find(r => r.name === 'agent settings write');
+        if ([text, path].some(p => settings.test([p], p))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };
+        const rule = WRITE_NEVER.find(r => r.test(path));
+        if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: rule.name };
+    }
     return { allow: true, text };
 }
 

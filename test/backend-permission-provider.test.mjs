@@ -171,6 +171,18 @@ test('other tools keep the screen path decisions: the same tool types, the never
         [request('Write', { file_path: '/Users/me/.claude/settings.json', content: '{}' }), 'agent settings write'],
         [request('Edit', { file_path: '/wt/w1/.claude/settings.local.json', old_string: 'a', new_string: 'b' }), 'agent settings write'],
         [request('mcp__shell__run', { cmd: 'git push origin main' }), 'git push'],
+        // JSON would escape these past the never list: the raw strings are read, and a control character is refused.
+        [request('mcp__shell__run', { opts: { cmd: 'git push origin' } }), 'git push'],
+        [request('mcp__shell__run', { cmd: 'ls\ngit push' }), 'CONTROL'],
+        [request('Write', { file_path: '/wt/w1/notes\n.md', content: 'x' }), 'CONTROL'],
+        // macOS paths ignore case, and `..` is resolved before the path is read.
+        [request('Edit', { file_path: '/Users/me/.Claude/Settings.json', old_string: 'a', new_string: 'b' }), 'agent settings write'],
+        [request('Write', { file_path: '/Users/me/repo/../.claude/hooks/x.sh', content: 'x' }), '.claude or .codex folder'],
+        [request('Write', { file_path: '/wt/w1/.git/x/../config', content: 'x' }), 'git hooks or config'],
+        [request('Write', { file_path: '/wt/w1/.git/hooks/pre-commit', content: 'x' }), 'git hooks or config'],
+        [request('Edit', { file_path: '/wt/w1/.GIT/config', old_string: 'a', new_string: 'b' }), 'git hooks or config'],
+        [request('Write', { file_path: '/Users/me/.zshrc', content: 'x' }), 'shell startup file'],
+        [request('Read', { file_path: '/wt/w1/.git/config' }), 'allow'],
         [request('NotebookEdit', { notebook_path: '/wt/w1/a.ipynb', new_source: 'x' }), 'TOOL'],
         [request('WebSearch', { query: 'x' }), 'TOOL'],
         [request('Edit', { old_string: 'a', new_string: 'b' }), 'NO_INPUT'],

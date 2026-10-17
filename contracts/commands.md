@@ -177,11 +177,15 @@ slept past the end wakes up off); the last `checkProvider` saw `activeProviderID
 abstains unread (`TOO_LONG`); then swarm-it's `NEVER_AUTO_APPROVE`, then Kelpi's example `judgeCommand` (its never list,
 multi-line `MULTILINE`), so the provider refuses the union of both lists. Other tools keep the screen path's tool types:
 `Edit`, `MultiEdit`, `Write`, `Read` (`file_path`), `WebFetch` (`url`) and `mcp__*` (drawn as `tool(key: "value", …)` like
-Claude's "Tool use" prompt) are checked against swarm-it's never list, and an `Edit`, `MultiEdit` or `Write` whose path is
-Claude's or Codex's settings is left (Kelpi's `agent settings write` rule). Any other tool abstains (`TOOL`).
+Claude's "Tool use" prompt, and every string in its input, however deep, checked on its own) are checked against swarm-it's
+never list; any control character but tab in them abstains (`CONTROL`), as the screen path never approves one. An `Edit`,
+`MultiEdit` or `Write` is left when its path (as given, and in lower case with `..` resolved, since macOS paths ignore case)
+breaks Kelpi's `agent settings write` rule or is in a `.claude*` or `.codex*` folder, a `.git/hooks/` file or `.git/config`,
+or a shell startup file (`.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`).
+Symlinks are not resolved, and a script written and then run is not caught. Any other tool abstains (`TOOL`).
 
 While on, every decision is appended to the `autoApproveLog` with `source: 'provider'`, `tool`, and on an abstain `reason`,
-`code` (`NEVER` with `rule`, `SANDBOX`, `MULTILINE`, `TOO_LONG`, `NO_INPUT`, `TOOL`, `AGENT`, `PAUSED`, `NOT_ACTIVE`, `ERROR`)
+`code` (`NEVER` with `rule`, `SANDBOX`, `MULTILINE`, `CONTROL`, `TOO_LONG`, `NO_INPUT`, `TOOL`, `AGENT`, `PAUSED`, `NOT_ACTIVE`, `ERROR`)
 and `skipped: true` (counted in `skipped`; not for `NOT_ACTIVE` or `ERROR`). The command is kept to 1000 characters. While
 off it abstains without logging. Screen-path entries carry `source: 'screen'`.
 
