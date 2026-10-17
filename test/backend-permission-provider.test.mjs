@@ -4,6 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { makeSwarmApi } from './backend-fake-api.mjs';
 import { NEVER_HITS, SAFE_BASIC, NEVER_A2, SAFE_A2, NEVER_EXPANSION, SAFE_EXPANSION } from './fixtures/never-commands.mjs';
 
@@ -177,12 +180,20 @@ test('other tools keep the screen path decisions: the same tool types, the never
         [request('Write', { file_path: '/wt/w1/notes\n.md', content: 'x' }), 'CONTROL'],
         // macOS paths ignore case, and `..` is resolved before the path is read.
         [request('Edit', { file_path: '/Users/me/.Claude/Settings.json', old_string: 'a', new_string: 'b' }), 'agent settings write'],
-        [request('Write', { file_path: '/Users/me/repo/../.claude/hooks/x.sh', content: 'x' }), '.claude or .codex folder'],
+        [request('Write', { file_path: '/Users/me/repo/../.claude/hooks/x.sh', content: 'x' }), 'agent settings write'],
+        [request('Write', { file_path: '/wt/w1/.claude/hooks/x.sh', content: 'x' }), '.claude or .codex folder, or .mcp.json'],
+        [request('Write', { file_path: '/wt/w1/.mcp.json', content: '{}' }), '.claude or .codex folder, or .mcp.json'],
         [request('Write', { file_path: '/wt/w1/.git/x/../config', content: 'x' }), 'git hooks or config'],
         [request('Write', { file_path: '/wt/w1/.git/hooks/pre-commit', content: 'x' }), 'git hooks or config'],
         [request('Edit', { file_path: '/wt/w1/.GIT/config', old_string: 'a', new_string: 'b' }), 'git hooks or config'],
+        [request('Write', { file_path: '/wt/w1/.git/worktrees/a/config.worktree', content: 'x' }), 'git hooks or config'],
+        [request('Write', { file_path: '/Users/me/.gitconfig', content: 'x' }), 'git hooks or config'],
         [request('Write', { file_path: '/Users/me/.zshrc', content: 'x' }), 'shell startup file'],
+        [request('Write', { file_path: '/wt/w1/.envrc', content: 'x' }), 'shell startup file'],
+        [request('Write', { file_path: '/Users/me/Library/LaunchAgents/x.plist', content: 'x' }), 'launch agent'],
+        [request('Write', { file_path: '/wt/w1/.github/workflows/ci.yml', content: 'x' }), 'allow'],
         [request('Read', { file_path: '/wt/w1/.git/config' }), 'allow'],
+        [request('mcp__shell__run', { opts: { 'ls\ngit push': 1 } }), 'CONTROL'],
         [request('NotebookEdit', { notebook_path: '/wt/w1/a.ipynb', new_source: 'x' }), 'TOOL'],
         [request('WebSearch', { query: 'x' }), 'TOOL'],
         [request('Edit', { old_string: 'a', new_string: 'b' }), 'NO_INPUT'],
@@ -193,6 +204,25 @@ test('other tools keep the screen path decisions: the same tool types, the never
         const decision = AA.decide(store, freshPane(args));
         const entry = store.auto.log.at(-1);
         assert.equal(decision.behavior === 'allow' ? 'allow' : entry.rule ?? entry.code, expected, `${args.toolName} ${JSON.stringify(args.toolInput)}`);
+    }
+});
+
+test('a write through a symlink is judged by where it lands; one through a dangling symlink waits for the user', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'swarm-perm-')));
+    mkdirSync(join(root, 'repo', '.git', 'hooks'), { recursive: true });
+    symlinkSync(join(root, 'repo', '.git'), join(root, 'repo', 'g'));
+    symlinkSync(join(root, 'nowhere', 'x'), join(root, 'repo', 'dangling'));
+    const store = activeStore();
+    const judge = path => {
+        const decision = AA.decide(store, freshPane(request('Write', { file_path: path, content: 'x' })));
+        return decision.behavior === 'allow' ? 'allow' : store.auto.log.at(-1).rule ?? store.auto.log.at(-1).code;
+    };
+    try {
+        assert.equal(judge(join(root, 'repo', 'g', 'hooks', 'pre-commit')), 'git hooks or config');
+        assert.equal(judge(join(root, 'repo', 'dangling')), 'SYMLINK');
+        assert.equal(judge(join(root, 'repo', 'src', 'new.ts')), 'allow', 'a folder that does not exist yet is fine');
+    } finally {
+        rmSync(root, { recursive: true });
     }
 });
 

@@ -179,13 +179,15 @@ multi-line `MULTILINE`), so the provider refuses the union of both lists. Other 
 `Edit`, `MultiEdit`, `Write`, `Read` (`file_path`), `WebFetch` (`url`) and `mcp__*` (drawn as `tool(key: "value", …)` like
 Claude's "Tool use" prompt, and every string in its input, however deep, checked on its own) are checked against swarm-it's
 never list; any control character but tab in them abstains (`CONTROL`), as the screen path never approves one. An `Edit`,
-`MultiEdit` or `Write` is left when its path (as given, and in lower case with `..` resolved, since macOS paths ignore case)
-breaks Kelpi's `agent settings write` rule or is in a `.claude*` or `.codex*` folder, a `.git/hooks/` file or `.git/config`,
-or a shell startup file (`.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`).
-Symlinks are not resolved, and a script written and then run is not caught. Any other tool abstains (`TOOL`).
+`MultiEdit` or `Write` is left when its path (as given, with `..` and symlinks resolved through its nearest existing folder,
+and in lower case, since macOS paths ignore case) breaks Kelpi's `agent settings write` rule or is in a `.claude*` or
+`.codex*` folder or `.mcp.json`; a `.git` file, any `.git/…/hooks/` file or `.git/…/config(.worktree)`, `.gitconfig` or
+`.config/git/`; a shell startup file (`.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.zlogout`, `.bashrc`, `.bash_profile`,
+`.bash_login`, `.bash_logout`, `.profile`, `.envrc`, `.config/fish/`); or `Library/LaunchAgents` or `LaunchDaemons`. A write
+through a dangling symlink abstains (`SYMLINK`). A script written and then run is not caught. Any other tool abstains (`TOOL`).
 
 While on, every decision is appended to the `autoApproveLog` with `source: 'provider'`, `tool`, and on an abstain `reason`,
-`code` (`NEVER` with `rule`, `SANDBOX`, `MULTILINE`, `CONTROL`, `TOO_LONG`, `NO_INPUT`, `TOOL`, `AGENT`, `PAUSED`, `NOT_ACTIVE`, `ERROR`)
+`code` (`NEVER` with `rule`, `SANDBOX`, `MULTILINE`, `CONTROL`, `SYMLINK`, `TOO_LONG`, `NO_INPUT`, `TOOL`, `AGENT`, `PAUSED`, `NOT_ACTIVE`, `ERROR`)
 and `skipped: true` (counted in `skipped`; not for `NOT_ACTIVE` or `ERROR`). The command is kept to 1000 characters. While
 off it abstains without logging. Screen-path entries carry `source: 'screen'`.
 

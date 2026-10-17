@@ -81,9 +81,9 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
   commands wait for you as a result, such as `find . -name "*.ts"`, `node --test test/*.mjs` and
   `git restore --source HEAD x`.
 - File reads, edits and writes, web fetches and MCP tools are approved as before; any other tool waits for you.
-  Through Kelpi, a write to Claude's or Codex's settings or `.claude` folders, git hooks or `.git/config`, or a
-  shell startup file waits for you, and so does any input holding a control character. Writing a script and then
-  running it is not caught, as in Kelpi's own example.
+  Through Kelpi, a write to Claude's or Codex's settings, `.claude` folders or `.mcp.json`, git hooks or config,
+  a shell startup file or a launch agent waits for you (symlinks are followed first), and so does any input
+  holding a control character. Writing a script and then running it is not caught, as in Kelpi's own example.
 - A pane where Claude has exited is never answered, even if an old prompt is still on its screen.
 - Every approval and refusal goes in a log (**Swarm: list or clear the auto-approve log** in the palette).
   Each entry's `source` says whether it came through Kelpi (`provider`) or the screen (`screen`). Nothing is

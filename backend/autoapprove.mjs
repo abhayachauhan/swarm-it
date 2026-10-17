@@ -4,6 +4,7 @@
 // goes through actions.approve, the SAME path as the Approve button (double live capture, hash and command match,
 // Enter only). Off by default and after every reload: the on/off state is never persisted; only the log is.
 import { posix } from 'node:path';
+import { realpathSync, lstatSync } from 'node:fs';
 import { approve } from './actions.mjs';
 import { ownedRequestPane, otherSwarmPane } from './store.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
@@ -373,19 +374,33 @@ const KELPI_NEVER_PREFIX = 'never auto-approved: ';
 const KELPI_CODES = { 'multi-line command': 'MULTILINE', 'command too long': 'TOO_LONG', 'no command': 'NO_INPUT' };
 /** Control characters: the screen path never approves a prompt holding one, and a newline can start a second command. */
 const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/;
-/** Writes that change what Claude, git or a shell runs next, read on the path in lower case with `..` resolved (macOS
- *  paths ignore case). Kelpi's agent settings rule is checked too. */
+/** Writes that change what Claude, git, a shell or launchd runs next, read on the path in lower case with `..` and symlinks
+ *  resolved (macOS paths ignore case). Kelpi's agent settings rule is checked too. */
 const WRITE_NEVER = [
-    { name: '.claude or .codex folder', test: path => /(?:^|\/)\.(?:claude|codex)[^/]*\//.test(path) },
-    { name: 'git hooks or config', test: path => /(?:^|\/)\.git\/(?:hooks\/|config$)/.test(path) },
-    { name: 'shell startup file', test: path => /(?:^|\/)\.(?:zshrc|zshenv|zprofile|zlogin|bashrc|bash_profile|bash_login|profile)$/.test(path) }
+    { name: '.claude or .codex folder, or .mcp.json', test: path => /(?:^|\/)\.(?:claude|codex)[^/]*\/|(?:^|\/)\.mcp\.json$/.test(path) },
+    { name: 'git hooks or config', test: path => /(?:^|\/)\.git(?:$|\/(?:.*\/)?(?:hooks\/|config(?:\.worktree)?$))|(?:^|\/)\.gitconfig$|\/\.config\/git\//.test(path) },
+    { name: 'shell startup file', test: path => /(?:^|\/)\.(?:zshrc|zshenv|zprofile|zlogin|zlogout|bashrc|bash_profile|bash_login|bash_logout|profile|envrc)$|\/\.config\/fish\//.test(path) },
+    { name: 'launch agent', test: path => /\/library\/launch(?:agents|daemons)\//.test(path) }
 ];
-/** Every string in a tool's input, however deep. */
+/** Every string in a tool's input, keys included, however deep. */
 const strings = (value, out = []) => {
     if (typeof value === 'string') out.push(value);
-    else if (value !== null && typeof value === 'object') for (const inner of Object.values(value)) strings(inner, out);
+    else if (value !== null && typeof value === 'object') for (const [key, inner] of Object.entries(value)) { out.push(key); strings(inner, out); }
     return out;
 };
+/** An absolute path with symlinks resolved through its nearest existing folder; null when a dangling symlink is in the way. */
+function realPath(path) {
+    if (!path.startsWith('/')) return path;
+    let dir = path;
+    let rest = '';
+    for (;;) {
+        try { return posix.join(realpathSync(dir), rest); } catch { /* not there (yet): try its folder */ }
+        // A dangling symlink points at a target only the write would create.
+        try { if (lstatSync(dir).isSymbolicLink()) return null; } catch { /* missing */ }
+        rest = posix.join(posix.basename(dir), rest);
+        dir = posix.dirname(dir);
+    }
+}
 
 /**
  * Policy for one structured request: `{ allow: true, text }` or `{ allow: false, text, reason, code, rule? }`. `text` is
@@ -418,10 +433,12 @@ export function judgeRequest(toolName, toolInput) {
         return { allow: false, text, reason: judged.reason, code: KELPI_CODES[judged.reason] ?? 'NEVER' };
     }
     if (WRITES.has(toolName)) {
-        const path = posix.normalize(text).toLowerCase();
+        const real = realPath(posix.normalize(text));
+        if (real === null) return { allow: false, text, reason: 'writes through a symlink that points nowhere yet', code: 'SYMLINK' };
+        const paths = [text, ...new Set([posix.normalize(text).toLowerCase(), real.toLowerCase(), real])];
         const settings = KELPI_NEVER.find(r => r.name === 'agent settings write');
-        if ([text, path].some(p => settings.test([p], p))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };
-        const rule = WRITE_NEVER.find(r => r.test(path));
+        if (paths.some(p => settings.test([p], p))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };
+        const rule = WRITE_NEVER.find(r => paths.some(p => r.test(p.toLowerCase())));
         if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: rule.name };
     }
     return { allow: true, text };
