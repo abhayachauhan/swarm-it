@@ -5,6 +5,9 @@ import { homedir } from 'node:os';
 const ROOT_KEYS = ['version', 'orchestrator', 'workers'];
 const ORCH_KEYS = ['paneID', 'label'];
 const WORKER_KEYS = ['paneID', 'label', 'task', 'resultPath', 'worktreePath', 'parent'];
+/** Written by swarm-spawn so a dead worker can be retried; absent in older manifests, which still load. */
+const OPTIONAL_WORKER_KEYS = ['taskPath', 'model', 'mode', 'dir', 'startedAt'];
+export const MAX_SETTING_CHARS = 40;
 
 /**
  * Absolute path of the manifest for a workspace. Returns null for an id that could escape the directory.
@@ -33,8 +36,8 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 const isNonEmptyString = value => typeof value === 'string' && value.length > 0;
 const isStringOrNull = value => value === null || typeof value === 'string';
 
-function checkKeys(obj, allowed, where, errors) {
-    for (const key of Object.keys(obj)) if (!allowed.includes(key)) errors.push(`${where}: unexpected property "${key}"`);
+function checkKeys(obj, allowed, where, errors, optional = []) {
+    for (const key of Object.keys(obj)) if (!allowed.includes(key) && !optional.includes(key)) errors.push(`${where}: unexpected property "${key}"`);
     for (const key of allowed) if (!(key in obj)) errors.push(`${where}: missing "${key}"`);
 }
 
@@ -71,7 +74,7 @@ export function validateManifest(obj) {
             obj.workers.forEach((worker, index) => {
                 const where = `manifest.workers[${index}]`;
                 if (!isObject(worker)) { errors.push(`${where}: must be an object`); return; }
-                checkKeys(worker, WORKER_KEYS, where, errors);
+                checkKeys(worker, WORKER_KEYS, where, errors, OPTIONAL_WORKER_KEYS);
                 for (const key of ['paneID', 'label']) {
                     if (key in worker && !isNonEmptyString(worker[key])) errors.push(`${where}.${key}: must be a non-empty string`);
                 }
@@ -79,8 +82,18 @@ export function validateManifest(obj) {
                 for (const key of ['resultPath', 'worktreePath', 'parent']) {
                     if (key in worker && !isStringOrNull(worker[key])) errors.push(`${where}.${key}: must be a string or null`);
                 }
+                for (const key of OPTIONAL_WORKER_KEYS) {
+                    if (key in worker && !isStringOrNull(worker[key])) errors.push(`${where}.${key}: must be a string or null`);
+                }
+                for (const key of ['model', 'mode', 'startedAt']) {
+                    if (typeof worker[key] === 'string' && worker[key].length > MAX_SETTING_CHARS) errors.push(`${where}.${key}: must be at most ${MAX_SETTING_CHARS} characters`);
+                }
+                for (const key of ['taskPath', 'dir']) {
+                    if (typeof worker[key] === 'string' && worker[key].length > MAX_TASK_CHARS) errors.push(`${where}.${key}: must be at most ${MAX_TASK_CHARS} characters`);
+                }
+                if (typeof worker.startedAt === 'string' && Number.isNaN(Date.parse(worker.startedAt))) errors.push(`${where}.startedAt: must be an ISO time`);
                 if (isNonEmptyString(worker.label) && !isSafeLabel(worker.label)) errors.push(`${where}.label: BAD_LABEL, must match ^[A-Za-z0-9._ -]{1,40}$`);
-                for (const key of ['resultPath', 'worktreePath']) {
+                for (const key of ['resultPath', 'worktreePath', 'taskPath', 'dir']) {
                     if (typeof worker[key] === 'string' && !isSafePath(worker[key])) errors.push(`${where}.${key}: must be an absolute path without ".." segments`);
                 }
                 if (isNonEmptyString(worker.paneID)) {

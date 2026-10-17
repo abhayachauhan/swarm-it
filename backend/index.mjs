@@ -203,12 +203,17 @@ export function registerAll(api, deps = modules) {
             if (/ENOENT|no such file/i.test(`${error?.code ?? ''} ${text(error)}`)) names = new Set();
         }
         const swarms = [];
+        const dead = [];
         for (const [id, name] of st.workspaceNames) {
             if (W.isWorkersName(name) || (names && !names.has(`${id}.json`))) continue;
             const result = await M.readManifest(api, M.manifestPath(id, homedir(), st.settings.manifestDir));
-            if (!result.ok || st.panes.get(result.manifest.orchestrator.paneID)?.workspaceID !== id) continue;
-            swarms.push({ workspaceID: id, name, orchestrator: result.manifest.orchestrator, workers: result.manifest.workers });
+            if (!result.ok) continue;
+            const swarm = { workspaceID: id, name, orchestrator: result.manifest.orchestrator, workers: result.manifest.workers };
+            // A swarm whose coordinator pane is gone is not shown, but auto-clean still tidies its closed workers.
+            if (st.panes.get(result.manifest.orchestrator.paneID)?.workspaceID !== id) dead.push(swarm);
+            else swarms.push(swarm);
         }
+        st.deadSwarms = dead;
         const colors = swarms.some(s => s.workspaceID !== st.workspaceID) ? await groupColors() : new Map();
         for (const swarm of swarms) swarm.color = colors.get(swarm.workspaceID) ?? null;
         st.swarms = swarms;
@@ -405,9 +410,14 @@ export function registerAll(api, deps = modules) {
      */
     async function cleanFinished(others, followed) {
         const closed = id => !st.panes.has(id);
+        // Workers of a closed coordinator: only the ones whose pane is already gone. An open pane is left running.
+        const orphans = st.deadSwarms.filter(s => !(st.manifest && s.workspaceID === st.workspaceID))
+            .flatMap(s => s.workers).filter(w => closed(w.paneID) && !followed.has(w.paneID));
+        for (const w of orphans) st.gone.add(w.paneID);
         const candidates = [
             ...st.manifestWorkers.filter(w => closed(w.paneID) || actionableWorker(st, w.paneID)),
-            ...others.flatMap(s => s.workers).filter(w => !followed.has(w.paneID) && (closed(w.paneID) || S.otherSwarmPane(st, w.paneID)))
+            ...others.flatMap(s => s.workers).filter(w => !followed.has(w.paneID) && (closed(w.paneID) || S.otherSwarmPane(st, w.paneID))),
+            ...orphans
         ];
         const result = await W.autoClean(api, st, candidates, Date.now());
         setWarning('autoclean', result.kept.length ? `kept ${result.kept.map(k => `${k.label} (${k.error})`).join('; ')}` : null);

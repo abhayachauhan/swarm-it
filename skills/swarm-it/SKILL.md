@@ -45,6 +45,17 @@ the user before spawning more.
    node ~/.claude/skills/swarm-it/manifest-writer.mjs remove-worker <workspace-id> <pane-id>
    ```
 
+## Retry and cleanup
+
+- A worker died or wrote no result: `~/.claude/skills/swarm-it/swarm-retry <pane-id>:<label> [--model m]`. It reads the
+  worker's task file, mode, model and directory from the manifest, starts it again through `swarm-spawn`, and prints
+  the new `<pane-id>:<label>`. It refuses while the old pane still runs Claude, and for a worker started before the
+  manifest recorded these (no task path).
+- `swarm-spawn` first runs `manifest-writer.mjs prune`: it drops workers whose pane is gone (once their result is
+  10 minutes old, or at once when their coordinator is gone) and deletes manifests of closed coordinators with no live
+  worker. Result files always stay. Run it by hand with `kelpi pane list --json | node manifest-writer.mjs prune`.
+- Reusing a label moves the old result to `~/.kelpi-swarm/results/archive/<label>.<UTC time>.md` instead of deleting it.
+
 ## Rules
 
 - Labels, task paths and `--path` may use only letters, digits, `.`, `_`, `-` (and `/`, `~` in paths): every value is

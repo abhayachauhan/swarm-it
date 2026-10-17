@@ -41,6 +41,16 @@ Argument objects are plain JSON. `paneID` always means the Kelpi pane id (never 
 
 Labels must match `^[A-Za-z0-9._ -]{1,40}$`. `resultPath` and `worktreePath` must be absolute, with no `..` segment and no control character. An invalid manifest is rejected whole.
 
+Optional worker fields, written by `swarm-spawn` so `swarm-retry` can start a dead worker again; manifests without them still load: `taskPath` and `dir` (absolute, no `..`, at most 1000 characters, or null), `model` and `mode` (at most 40 characters, or null) and `startedAt` (ISO time, at most 40 characters, or null). The finish time is not stored: it is the result file's modification time.
+
+## Pruning and archive
+
+`manifest-writer prune [--keep <workspace-id>] [--older-than-minutes 10]` reads `kelpi pane list --json` on stdin (an empty or malformed list prunes nothing) and works on every manifest. A worker whose pane is gone is dropped when its coordinator is gone (the coordinator pane is missing, or sits in another workspace), or when its result file is older than the minutes given. A manifest whose coordinator is gone and which has no live worker pane is deleted. The workspace named by `--keep` counts as having a live coordinator. Result files are never touched. `swarm-spawn` runs it after `set-orchestrator`, before it spawns, so a restarted coordinator keeps its swarm.
+
+The rail's Done count is the workers of a live swarm that finished and are not archived, so the prune leaves a closed-pane worker with a result for 10 minutes, the same delay as auto-clean, before it drops out of the manifest. A worker with no result stays and reads as an error until someone dismisses it. The backend does the same for a swarm whose coordinator pane is gone: it reads that manifest (still never showing it) and auto-clean archives its workers whose panes are already closed, after `autoCleanMinutes`. It never closes an open pane there and never edits or deletes the file; `prune` does that.
+
+`swarm-spawn` moves a reused label's old result to `~/.kelpi-swarm/results/archive/<label>.<UTC time as YYYYMMDDTHHMMSSZ>.md`. Nothing reads that folder unless a worker's `resultPath` names it; the usual result-path policy applies to it.
+
 ## Prompt parsing
 
 A permission prompt counts only when its question sits within the last 12 non-empty lines of the capture. `command` is every line between the header and the question, joined with newlines. `promptHash` is sha256 over the whole block (header through last option, lines trimmed and whitespace-collapsed), so changing any line changes it.

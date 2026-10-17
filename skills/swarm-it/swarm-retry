@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# swarm-retry <pane-id>:<label> [--model sonnet]
+# Start a dead worker again through swarm-spawn, with the label, task file, mode, model and
+# directory recorded in the manifest. Prints <pane-id>:<label> of the new pane, ready for swarm-wait.
+# The old result is archived by swarm-spawn. Refuses while the old pane still runs Claude.
+set -euo pipefail
+
+usage() { echo "usage: swarm-retry <pane-id>:<label> [--model sonnet]" >&2; exit 1; }
+bad() { echo "$1" >&2; exit 1; }
+[ $# -ge 1 ] || usage
+worker=$1; shift
+newmodel=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) [ $# -ge 2 ] || usage; newmodel=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[[ $worker == *:* ]] || usage
+pane=${worker%%:*} label=${worker#*:}
+
+# Same character rules as swarm-spawn: every value is typed into a shell.
+[[ $pane =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || bad "pane id must be letters, digits, dot, dash or underscore"
+[[ $label =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $label != *..* ]] || bad "label must be letters, digits, dot, dash or underscore"
+[[ -z $newmodel || $newmodel =~ ^[A-Za-z0-9.-]+$ ]] || bad "mode and model must be plain words"
+
+MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
+SPAWN="$(dirname "$(realpath "$0")")/swarm-spawn"
+
+orch=$(kelpi pane id)
+panes=$(kelpi pane list --json)
+ws=$(jq -r --arg p "$orch" '.[] | select(.id == $p) | .workspace_id' <<<"$panes")
+[ -n "$ws" ] || bad "cannot find this pane's workspace"
+manifest=$(node "$MW" show "$ws") || bad "no swarm manifest for this workspace"
+rec=$(jq -c --arg p "$pane" --arg l "$label" '.workers[] | select(.paneID == $p and .label == $l)' <<<"$manifest")
+[ -n "$rec" ] || bad "no worker $pane:$label in this swarm's manifest"
+
+task=$(jq -r '.taskPath // empty' <<<"$rec")
+[ -n "$task" ] || bad "worker $label has no recorded task path (started before swarm-retry existed); run swarm-spawn again by hand"
+mode=$(jq -r '.mode // empty' <<<"$rec") model=$(jq -r '.model // empty' <<<"$rec") dir=$(jq -r '.dir // empty' <<<"$rec")
+[ -z "$newmodel" ] || model=$newmodel
+
+# A worker whose Claude still runs would be started twice: Kelpi reports it as running, waiting, or holding a session.
+if [ "$(jq -r --arg p "$pane" '[.[] | select(.id == $p and (.status == "running" or .status == "waitingForInput" or ((.agent_session_id // "") != "")))] | length' <<<"$panes")" != 0 ]; then
+  bad "worker $label still runs Claude in pane $pane; close it first or wait for it"
+fi
+
+[[ -z $mode || $mode =~ ^[A-Za-z]+$ ]] || bad "recorded mode must be a plain word"
+[[ -z $model || $model =~ ^[A-Za-z0-9.-]+$ ]] || bad "recorded model must be a plain word"
+[[ $task =~ ^[A-Za-z0-9._/~-]+$ && ( -z $dir || $dir =~ ^[A-Za-z0-9._/~-]+$ ) ]] || bad "recorded task path and dir must be letters, digits, dot, dash, underscore or slash"
+
+args=("$label" "$task")
+[ -z "$mode" ] || args+=(--mode "$mode")
+[ -z "$model" ] || args+=(--model "$model")
+[ -z "$dir" ] || args+=(--path "$dir")
+new=$("$SPAWN" "${args[@]}")
+# The new pane has its own entry; drop the dead one so the label is listed once.
+node "$MW" remove-worker "$ws" "$pane" >/dev/null
+echo "$new"

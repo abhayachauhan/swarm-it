@@ -99,3 +99,97 @@ test('atomic write leaves no temp file', () => {
   for (let i = 0; i < 5; i++) run(d, 'add-worker', 'ws2', `w${i}`, `l${i}`, 't', '-')
   assert.deepEqual(fs.readdirSync(d), ['ws2.json'])
 })
+
+const RETRY = ['--task-path', '/plans/t.md', '--model', 'sonnet', '--mode', 'auto', '--dir', '/repos/x', '--started-at', '2026-10-17T01:02:03Z']
+
+test('add-worker records the retry fields, schema valid, and leaves them out when not given', () => {
+  const d = tmpDir()
+  run(d, 'init', 'ws', 'orch', 'coordinator')
+  assert.equal(run(d, 'add-worker', 'ws', 'w1', 'one', 't', '/tmp/r/one.md', '-', '-', ...RETRY).status, 0)
+  assert.equal(run(d, 'add-worker', 'ws', 'w2', 'two', 't', '-').status, 0)
+  const m = JSON.parse(run(d, 'show', 'ws').stdout)
+  assert.deepEqual(validate(m), [])
+  assert.deepEqual(
+    { taskPath: m.workers[0].taskPath, model: m.workers[0].model, mode: m.workers[0].mode, dir: m.workers[0].dir, startedAt: m.workers[0].startedAt },
+    { taskPath: '/plans/t.md', model: 'sonnet', mode: 'auto', dir: '/repos/x', startedAt: '2026-10-17T01:02:03Z' })
+  assert.deepEqual(Object.keys(m.workers[1]), ['paneID', 'label', 'task', 'resultPath', 'worktreePath', 'parent'], 'old shape kept')
+})
+
+test('add-worker refuses bad retry fields and writes nothing', () => {
+  const d = tmpDir()
+  run(d, 'init', 'ws', 'orch', 'coordinator')
+  const before = fs.readFileSync(path.join(d, 'ws.json'), 'utf8')
+  for (const bad of [['--task-path', 'rel/t.md'], ['--task-path', '/a/../t.md'], ['--dir', 'x'], ['--model', 'a b'], ['--mode', 'auto;id'],
+    ['--started-at', 'yesterday'], ['--model', 'x'.repeat(41)], ['--nope', 'x'], ['--model']]) {
+    assert.notEqual(run(d, 'add-worker', 'ws', 'w1', 'one', 't', '-', '-', '-', ...bad).status, 0, bad.join(' '))
+  }
+  assert.equal(fs.readFileSync(path.join(d, 'ws.json'), 'utf8'), before)
+})
+
+// A swarm file with a coordinator and workers; resultAges is minutes since each result was written (null = no result file).
+function swarm(d, ws, orch, workers) {
+  run(d, 'init', ws, orch, 'coordinator')
+  for (const [pane, ageMin] of workers) {
+    const result = path.join(d, `${ws}-${pane}.md`)
+    if (ageMin !== null) {
+      fs.writeFileSync(result, 'done')
+      const t = new Date(Date.now() - ageMin * 60000)
+      fs.utimesSync(result, t, t)
+    }
+    run(d, 'add-worker', ws, pane, pane, 't', result)
+  }
+  return result => path.join(d, `${ws}-${result}.md`)
+}
+
+function prune(d, panes, ...args) {
+  const r = spawnSync(process.execPath, [script, 'prune', ...args], {
+    env: { ...process.env, SWARM_MANIFEST_DIR: d }, encoding: 'utf8', input: JSON.stringify(panes),
+  })
+  return { ...r, out: r.status === 0 ? JSON.parse(r.stdout) : null }
+}
+const workersOf = (d, ws) => JSON.parse(run(d, 'show', ws).stdout).workers.map((w) => w.paneID)
+
+test('prune drops a dead worker only once its result is old; live panes and result-less workers stay', () => {
+  const d = tmpDir()
+  swarm(d, 'live', 'orch', [['old', 30], ['fresh', 2], ['nores', null], ['alive', 30]])
+  const r = prune(d, [{ id: 'orch', workspace_id: 'live' }, { id: 'alive', workspace_id: 'live' }])
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(r.out, { droppedWorkers: ['old'], deletedManifests: [] })
+  assert.deepEqual(workersOf(d, 'live'), ['fresh', 'nores', 'alive'])
+  assert.equal(fs.existsSync(path.join(d, 'live-old.md')), true, 'result files always stay')
+  assert.deepEqual(prune(d, [{ id: 'orch', workspace_id: 'live' }], '--older-than-minutes', '1').out.droppedWorkers, ['fresh', 'alive'])
+})
+
+test('prune of a dead coordinator drops its dead workers and deletes the file when no worker pane is live', () => {
+  const d = tmpDir()
+  swarm(d, 'dead', 'orch', [['a', null], ['b', 1]])
+  swarm(d, 'half', 'orch2', [['c', null], ['d', null]])
+  const r = prune(d, [{ id: 'other', workspace_id: 'x' }, { id: 'd', workspace_id: 'half' }])
+  assert.deepEqual(r.out, { droppedWorkers: ['a', 'b', 'c'], deletedManifests: ['dead'] })
+  assert.deepEqual(fs.readdirSync(d).filter((n) => n.endsWith('.json')), ['half.json'], 'a live worker pane keeps its manifest')
+  assert.deepEqual(workersOf(d, 'half'), ['d'])
+  assert.equal(fs.existsSync(path.join(d, 'dead-b.md')), true, 'results stay')
+})
+
+test('prune treats a coordinator in another workspace as gone, and --keep protects a restarted coordinator', () => {
+  const d = tmpDir()
+  swarm(d, 'mine', 'old-orch', [['a', null]])
+  swarm(d, 'wrongws', 'o2', [['b', null]])
+  const r = prune(d, [{ id: 'new-orch', workspace_id: 'mine' }, { id: 'o2', workspace_id: 'elsewhere' }], '--keep', 'mine')
+  assert.deepEqual(r.out, { droppedWorkers: ['b'], deletedManifests: ['wrongws'] }, 'a coordinator in another workspace is not the swarm\'s coordinator')
+  assert.deepEqual(workersOf(d, 'mine'), ['a'], '--keep: nothing of the current swarm goes')
+})
+
+test('prune re-parents children of a dropped worker and refuses an empty or malformed pane list', () => {
+  const d = tmpDir()
+  swarm(d, 'p', 'orch', [['parent', 30]])
+  run(d, 'add-worker', 'p', 'kid', 'kid', 't', '-', '-', 'parent')
+  assert.equal(prune(d, [{ id: 'orch', workspace_id: 'p' }, { id: 'kid', workspace_id: 'p' }]).status, 0)
+  assert.equal(JSON.parse(run(d, 'show', 'p').stdout).workers[0].parent, null)
+  const before = fs.readdirSync(d)
+  for (const bad of [[], {}, [{ nope: 1 }], 'x']) {
+    const r = prune(d, bad)
+    assert.notEqual(r.status, 0, JSON.stringify(bad))
+  }
+  assert.deepEqual(fs.readdirSync(d), before, 'nothing deleted')
+})
