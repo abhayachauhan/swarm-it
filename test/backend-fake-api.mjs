@@ -25,6 +25,9 @@ export const PROMPT_TEXT = [
  * @param {Map<string,any>} [opts.storage] pass the same Map to simulate a plugin reload
  * @param {boolean} [opts.createShellPane] workspaces.create also lists one shell pane in the new workspace, as the host does
  * @param {boolean|string} [opts.createFails] workspaces.create throws (the host's "plugin invocation has expired" by default)
+ * @param {{selected?: string|null, active?: string|null, missing?: boolean, listFails?: string}} [opts.permissions] Kelpi 0.2.18+:
+ *   adds `providers.register` and `services.list` listing kelpi.agent.permissions (active defaults to selected). Absent: an
+ *   older Kelpi with neither.
  */
 export function makeFakeApi(opts = {}) {
     const calls = [];
@@ -136,8 +139,28 @@ export function makeFakeApi(opts = {}) {
                 }
                 destructive.push({ name: `services.call:${service}.${method}`, args });
                 throw new Error(`unexpected service call ${service}.${method}`);
-            }
+            },
+            ...(opts.permissions ? {
+                async list() {
+                    record('services.list');
+                    const p = api.permissions;
+                    if (p.listFails) throw new Error(p.listFails);
+                    if (p.missing) return [];
+                    const selected = p.selected ?? null;
+                    return [{ id: 'kelpi.agent.permissions', title: 'Agent permissions', version: 1, methods: ['decide'], providers: [], selectedProviderID: selected, activeProviderID: p.active !== undefined ? p.active : selected }];
+                }
+            } : {})
         },
+        /** Tests change the provider selection here, as `kelpi plugin service-select` would. */
+        permissions: opts.permissions ? { ...opts.permissions } : null,
+        providerMethods: new Map(),
+        ...(opts.permissions ? {
+            providers: {
+                register(id, methods) { record('providers.register', id); api.providerMethods.set(id, methods); return () => api.providerMethods.delete(id); }
+            }
+        } : {}),
+        /** Kelpi asking the registered provider, as Claude's PermissionRequest hook does through `kelpi event permission-request`. */
+        decide(args) { return api.providerMethods.get('local.swarm-view.permissions').decide(args, {}); },
         panes: {
             async moveToWorkspace(paneID, workspaceID, o) {
                 record('panes.moveToWorkspace', paneID, workspaceID, o);
@@ -248,6 +271,7 @@ export function makeSwarmApi(extra = {}) {
         createFails: extra.createFails,
         noAgentEvents: extra.noAgentEvents,
         storage: extra.storage,
-        groups: extra.groups
+        groups: extra.groups,
+        permissions: extra.permissions
     });
 }

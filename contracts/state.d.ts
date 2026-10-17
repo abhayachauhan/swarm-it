@@ -111,6 +111,9 @@ export interface AutoApproveState {
     paused: { paneID: string; label: string; reason: string; at: string }[];
     /** Set by the last switch-off: by the timer ('expired', announced once in the rail footer) or the user. Null while on or never used. */
     ended: { reason: 'expired' | 'user'; at: string } | null;
+    /** ADDITIVE (permission provider). active: Kelpi asks swarm-it's kelpi.agent.permissions provider, so the screen path sends
+     *  no key. warning: while not active, one line naming `kelpi plugin service-select …` and `kelpi install-hooks`. */
+    provider?: { active: boolean; warning: string | null };
 }
 
 /** ADDITIVE (auto-approve). One line of the auto-approve log. */
@@ -128,6 +131,10 @@ export interface AutoApproveEntry {
     /** True when the card was left for the user without trying (code 'NEVER'); `rule` names the list entry it matched. */
     skipped?: boolean;
     rule?: string;
+    /** ADDITIVE (permission provider). Which path decided: Kelpi's permission request, or the screen. Absent on older entries. */
+    source?: 'provider' | 'screen';
+    /** ADDITIVE (permission provider). Claude's tool name, on provider entries. */
+    tool?: string;
 }
 
 /** What the backend pushes to views: command `get-state` result and event `local.swarm-view.snapshot` data. */

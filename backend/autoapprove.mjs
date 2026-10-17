@@ -1,9 +1,14 @@
 // Auto-approve for unattended (overnight) runs. The user turns it on knowingly: it bypasses their own ask rules.
-// Every approval goes through actions.approve, the SAME path as the Approve button (double live capture, hash and
-// command match, Enter only). There is no other way to send a key from here. Off by default and after every reload:
-// the on/off state is never persisted; only the log is.
+// Two ways to answer, never both at once. With swarm-it the active kelpi.agent.permissions provider, `decide` answers
+// Claude's PermissionRequest hook from the real tool input and the screen path sends no key. Otherwise every approval
+// goes through actions.approve, the SAME path as the Approve button (double live capture, hash and command match,
+// Enter only). Off by default and after every reload: the on/off state is never persisted; only the log is.
+import { posix } from 'node:path';
+import { realpath, lstat } from 'node:fs/promises';
 import { approve } from './actions.mjs';
 import { ownedRequestPane, otherSwarmPane } from './store.mjs';
+import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
+import { judgeCommand, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -16,8 +21,29 @@ export const RATE_WINDOW_MS = Number(process.env.SWARM_AUTO_RATE_WINDOW_MS) || 1
  *  is still showing right after Enter did not take the key, and must not be fed Enter every scan. */
 export const SAME_PROMPT_GRACE_MS = Number(process.env.SWARM_AUTO_SAME_PROMPT_GRACE_MS) || 15000;
 
+/** Kelpi 0.2.18+: Claude's PermissionRequest hook asks the selected provider of this service (Kelpi docs/plugin-services.md). */
+export const PERMISSIONS_SERVICE = 'kelpi.agent.permissions';
+export const PROVIDER_ID = 'local.swarm-view.permissions';
+export const SELECT_COMMAND = `kelpi plugin service-select ${PERMISSIONS_SERVICE} ${PROVIDER_ID}`;
+const FIX = `run "${SELECT_COMMAND}" and "kelpi install-hooks", then restart Claude sessions`;
+/** While the provider is active, a recognised card this old on a pane `decide` never heard about is logged once (NOT_ASKED). */
+export const NOT_ASKED_GRACE_MS = Number(process.env.SWARM_NOT_ASKED_GRACE_MS) || 6000;
+/** A decision for the pane this long before its card was raised still counts as Kelpi having asked. */
+const ASKED_WINDOW_MS = 60000;
+/** Longer tool input is left for the user unread, so `decide` stays well inside Kelpi's 2 second deadline: the never
+ *  list reads the whole text once per segment, so 16 KiB of `a;a;…` took 1.6 s, 4 KiB about 0.1 s. */
+export const MAX_REQUEST_TEXT = 4096;
+/** Finding where a write lands may take this long in all; slower (a hung network mount) and the write waits for the user. */
+export const PATH_CHECK_MS = Number(process.env.SWARM_PATH_CHECK_MS) || 500;
+/** A hung lookup holds one of libuv's 4 threads, so once this many outlive their time no new ones start. */
+const MAX_STUCK_LOOKUPS = 2;
+/** Provider log entries keep this many characters of the command. */
+const LOG_TEXT_CAP = 1000;
+const ABSTAIN = Object.freeze({ behavior: 'abstain' });
+
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
 const iso = ms => new Date(ms).toISOString();
+const message = error => String(error?.message ?? error);
 
 export const NEVER_REASON = 'on the never-auto-approve list';
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
@@ -164,7 +190,16 @@ export function createState() {
         /** { reason: 'expired' | 'user', at } after the last switch-off, null while on or never used. */
         ended: null,
         /** Bumped by every turnOn and turnOff; run() stops after an await when it changed. */
-        generation: 0
+        generation: 0,
+        /** performance.now() at which `until` falls, so setting the clock back cannot extend a run; null with until. */
+        deadline: null,
+        /** registered: `decide` is registered with Kelpi. active: Kelpi lists it as the active provider (checkProvider).
+         *  warning: the one-line fix while it is not active. */
+        provider: { registered: false, active: false, warning: null, checkedAt: 0 },
+        /** paneID to the last time `decide` was called for it, on or off. */
+        asked: new Map(),
+        /** Card ids logged once as NOT_ASKED while the provider is active. */
+        seenNotAsked: new Set()
     };
 }
 
@@ -200,31 +235,41 @@ export const logEntries = store => [...store.auto.log].reverse();
  * Turn on for `hours` (default 12; null or 0 means until turned off). Counters, the rate guard and the tried set
  * restart. Already-open recognised cards are approved on the next run.
  */
-export function turnOn(store, hours, now = Date.now()) {
-    let until = null;
-    if (hours === undefined) until = iso(now + DEFAULT_HOURS * 3600000);
-    else if (hours === null || hours === 0) until = null;
-    else if (typeof hours === 'number' && Number.isFinite(hours) && hours > 0 && hours <= MAX_HOURS) until = iso(now + hours * 3600000);
+export function turnOn(store, hours, now = Date.now(), mono = performance.now()) {
+    let endAt = null;
+    if (hours === undefined) endAt = now + DEFAULT_HOURS * 3600000;
+    else if (hours === null || hours === 0) endAt = null;
+    else if (typeof hours === 'number' && Number.isFinite(hours) && hours > 0 && hours <= MAX_HOURS) endAt = now + hours * 3600000;
     else return fail(`hours must be a number between 0 and ${MAX_HOURS} (0 or null: until turned off)`, 'BAD_ARGS');
     const a = store.auto;
-    a.on = true; a.until = until; a.since = iso(now); a.ended = null; a.generation += 1;
+    a.on = true; a.since = iso(now); a.ended = null; a.generation += 1;
+    setUntil(store, endAt, now, mono);
     a.approved = 0; a.skipped = 0; a.failed = 0;
     a.tried = new Set(); a.seenUnrecognised = new Set(); a.seenNever = new Set(); a.recent = new Map(); a.paused = new Map(); a.lastApproved = new Map();
+    a.seenNotAsked = new Set();
     return { ok: true };
+}
+
+/** The end of the run: `until` on the wall clock (shown, and ends a run the Mac slept through) and `deadline` on the monotonic one. */
+export function setUntil(store, endAt, now = Date.now(), mono = performance.now()) {
+    const a = store.auto;
+    a.until = endAt === null ? null : iso(endAt);
+    a.deadline = endAt === null ? null : mono + (endAt - now);
 }
 
 export function turnOff(store, reason, now = Date.now()) {
     const a = store.auto;
     if (!a.on) return false;
-    a.on = false; a.until = null; a.generation += 1;
+    a.on = false; a.until = null; a.deadline = null; a.generation += 1;
     a.ended = { reason, at: iso(now) };
     return true;
 }
 
-/** Switch off by itself once the time ran out. Returns true when it just did. */
-export function expireIfDue(store, now = Date.now()) {
+/** Switch off by itself once the time ran out on either clock. Returns true when it just did. */
+export function expireIfDue(store, now = Date.now(), mono = performance.now()) {
     const a = store.auto;
-    if (!a.on || !a.until || now < Date.parse(a.until)) return false;
+    if (!a.on || !a.until) return false;
+    if (now < Date.parse(a.until) && !(a.deadline !== null && mono >= a.deadline)) return false;
     return turnOff(store, 'expired', now);
 }
 
@@ -251,6 +296,8 @@ export async function run(api, store, now = Date.now()) {
     let changed = expireIfDue(store, now);
     const a = store.auto;
     if (!a.on) return changed;
+    // Kelpi asks `decide` directly: the screen never presses Enter for auto-approve, so no prompt is answered twice.
+    if (a.provider.active) return (await noteNotAsked(store, now)) || changed;
     // index.mjs runs this inside its serial queue, so nothing interleaves; the generation check is belt and braces.
     const generation = a.generation;
     for (const item of [...store.attention]) {
@@ -271,7 +318,7 @@ export async function run(api, store, now = Date.now()) {
         if (never) {
             if (!a.seenNever.has(item.id)) {
                 a.seenNever.add(item.id); a.skipped += 1; changed = true;
-                await appendLog(store, { at: iso(now), ...describePane(store, item.paneID), paneID: item.paneID, command: item.command ?? '', ok: false, skipped: true, reason: NEVER_REASON, rule: never, code: 'NEVER' });
+                await appendLog(store, { at: iso(now), ...describePane(store, item.paneID), paneID: item.paneID, command: item.command ?? '', ok: false, skipped: true, reason: NEVER_REASON, rule: never, code: 'NEVER', source: 'screen' });
             }
             continue;
         }
@@ -293,10 +340,206 @@ export async function run(api, store, now = Date.now()) {
         } else a.failed += 1;
         await appendLog(store, {
             at: iso(now), ...who, paneID: item.paneID, command: item.command ?? '', ok: result.ok === true,
-            ...(result.ok ? {} : { reason: result.error ?? 'refused', code: result.code ?? '' })
+            ...(result.ok ? {} : { reason: result.error ?? 'refused', code: result.code ?? '' }), source: 'screen'
         });
         changed = true;
     }
+    return changed;
+}
+
+/**
+ * Provider active: a recognised card that sat NOT_ASKED_GRACE_MS on a pane `decide` never heard about comes from a Claude
+ * session without the PermissionRequest hook (hooks load when Claude starts). Logged and counted once; the card stays.
+ */
+async function noteNotAsked(store, now) {
+    const a = store.auto;
+    let changed = false;
+    for (const item of [...store.attention]) {
+        if (item.type !== 'Request' || item.handledAt || item.snoozedUntil || item.approvable === false) continue;
+        if (a.seenNotAsked.has(item.id) || !ownedRequestPane(store, item.paneID)) continue;
+        const created = Date.parse(item.createdAt);
+        if (!(now - created >= NOT_ASKED_GRACE_MS)) continue;
+        const asked = a.asked.get(item.paneID);
+        if (asked !== undefined && asked >= created - ASKED_WINDOW_MS) continue;
+        a.seenNotAsked.add(item.id); a.skipped += 1; changed = true;
+        await appendLog(store, {
+            at: iso(now), ...describePane(store, item.paneID), paneID: item.paneID, command: item.command ?? '', ok: false, skipped: true,
+            reason: 'Kelpi never asked swarm-it about this prompt: restart Claude in this pane (hooks load at start) or run "kelpi install-hooks"',
+            code: 'NOT_ASKED', source: 'screen'
+        });
+    }
+    return changed;
+}
+
+/** The input field each tool's prompt shows, for the tools whose prompt the screen path recognises (notify.mjs HEADER). */
+const SCREEN_TOOLS = new Map([['Bash', 'command'], ['Edit', 'file_path'], ['MultiEdit', 'file_path'], ['Write', 'file_path'], ['Read', 'file_path'], ['WebFetch', 'url']]);
+const WRITES = new Set(['Edit', 'MultiEdit', 'Write']);
+const KELPI_NEVER_PREFIX = 'never auto-approved: ';
+const KELPI_CODES = { 'multi-line command': 'MULTILINE', 'command too long': 'TOO_LONG', 'no command': 'NO_INPUT' };
+/** Control characters: the screen path never approves a prompt holding one, and a newline can start a second command. */
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/;
+/** Writes that change what Claude, git, a shell or launchd runs next, read on the path in lower case with `..` and symlinks
+ *  resolved (macOS paths ignore case). Kelpi's agent settings rule is checked too. */
+const WRITE_NEVER = [
+    { name: '.claude or .codex folder, or .mcp.json', test: path => /(?:^|\/)\.(?:claude|codex)[^/]*\/|(?:^|\/)\.mcp\.json$/.test(path) },
+    { name: 'git hooks or config', test: path => /(?:^|\/)\.git(?:$|\/(?:.*\/)?(?:hooks\/|config(?:\.worktree)?$))|(?:^|\/)\.gitconfig$|\/\.config\/git\//.test(path) },
+    { name: 'shell startup file', test: path => /(?:^|\/)\.(?:zshrc|zshenv|zprofile|zlogin|zlogout|bashrc|bash_profile|bash_login|bash_logout|profile|envrc)$|\/\.config\/fish\//.test(path) },
+    { name: 'launch agent', test: path => /\/library\/launch(?:agents|daemons)\//.test(path) }
+];
+/** Every string in a tool's input, keys included, however deep. */
+const strings = (value, out = []) => {
+    if (typeof value === 'string') out.push(value);
+    else if (value !== null && typeof value === 'object') for (const [key, inner] of Object.entries(value)) { out.push(key); strings(inner, out); }
+    return out;
+};
+const PATH_FS = { realpath, lstat };
+const MISSING = new Set(['ENOENT', 'ENOTDIR']);
+let stuckLookups = 0;
+/** One file system lookup, given until `end`; one that outlives it counts as stuck until it finally returns. */
+function lookup(fn, path, end) {
+    let late = false;
+    const run = Promise.resolve().then(() => fn(path)).finally(() => { if (late) stuckLookups -= 1; });
+    return withTimeout(run, Math.max(1, end - performance.now()), 'checking where a write lands').catch(error => {
+        if (error.code === 'TIMEOUT') { late = true; stuckLookups += 1; }
+        throw error;
+    });
+}
+/** Where an absolute path lands, symlinks resolved through its nearest existing folder: `{ path }`, or why it can't be told. */
+async function realPath(path, fs) {
+    const end = performance.now() + PATH_CHECK_MS;
+    const unknown = error => ({ code: 'PATH', reason: `could not tell where it writes (${error.code ?? message(error)})` });
+    let dir = path;
+    let rest = '';
+    for (;;) {
+        if (stuckLookups >= MAX_STUCK_LOOKUPS) return { code: 'PATH', reason: 'earlier path lookups are still stuck' };
+        try { return { path: posix.join(await lookup(fs.realpath, dir, end), rest) }; } catch (error) {
+            if (!MISSING.has(error.code)) return unknown(error);
+        }
+        // A dangling symlink points at a target only the write would create.
+        try { if ((await lookup(fs.lstat, dir, end)).isSymbolicLink()) return { code: 'SYMLINK', reason: 'writes through a symlink that points nowhere yet' }; } catch (error) {
+            if (!MISSING.has(error.code)) return unknown(error);
+        }
+        rest = posix.join(posix.basename(dir), rest);
+        dir = posix.dirname(dir);
+    }
+}
+
+/**
+ * Policy for one structured request: `{ allow: true, text }` or `{ allow: false, text, reason, code, rule? }`. `text` is
+ * what the prompt would show. Bash: swarm-it's never list, then Kelpi's example policy (union, never weaker). Other
+ * tools: the same tool types the screen path approves today ("Tool use" is an MCP tool), never with a control character,
+ * with the never list on their text (and on each string of an MCP call); writes to agent, git or shell config are left,
+ * and so is a write whose path is not absolute or cannot be followed in time. `fs` is for tests.
+ */
+export async function judgeRequest(toolName, toolInput, fs = PATH_FS) {
+    const input = toolInput !== null && typeof toolInput === 'object' && !Array.isArray(toolInput) ? toolInput : null;
+    const mcp = typeof toolName === 'string' && /^mcp__./.test(toolName);
+    const field = SCREEN_TOOLS.get(toolName);
+    if (!input || (!field && !mcp)) return { allow: false, text: '', reason: `auto-approve does not answer ${typeof toolName === 'string' ? toolName : 'this'} requests`, code: 'TOOL' };
+    // As Claude's "Tool use" prompt draws an MCP call, `server - tool(key: "value", …)`, so the never list splits it the same way.
+    const text = mcp ? `${toolName}(${Object.entries(input).map(([key, value]) => `${key}: ${typeof value === 'string' ? `"${value}"` : JSON.stringify(value)}`).join(', ')})` : input[field];
+    if (typeof text !== 'string' || !text.trim()) return { allow: false, text: '', reason: `no ${field}`, code: 'NO_INPUT' };
+    // Claude asks before running a command outside its sandbox: that prompt is the user's, whatever the command.
+    if (toolName === 'Bash' && input.dangerouslyDisableSandbox) return { allow: false, text, reason: 'asks to run outside the sandbox', code: 'SANDBOX' };
+    if (text.length > MAX_REQUEST_TEXT) return { allow: false, text, reason: 'too long to check', code: 'TOO_LONG' };
+    // JSON escapes would hide a newline from the never list (`ls\ngit push`), so each raw string is checked as well.
+    const parts = mcp ? strings(input) : [];
+    if (toolName !== 'Bash' && [text, ...parts].some(part => CONTROL.test(part))) return { allow: false, text, reason: 'holds a control character', code: 'CONTROL' };
+    for (const part of [text, ...parts]) {
+        const never = neverAutoApprove(part);
+        if (never) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: never };
+    }
+    if (toolName === 'Bash') {
+        const judged = judgeCommand(text);
+        if (judged.allow) return { allow: true, text };
+        if (judged.reason.startsWith(KELPI_NEVER_PREFIX)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: judged.reason.slice(KELPI_NEVER_PREFIX.length) };
+        return { allow: false, text, reason: judged.reason, code: KELPI_CODES[judged.reason] ?? 'NEVER' };
+    }
+    if (WRITES.has(toolName)) {
+        // Claude sends absolute paths; anything else could not be followed through its symlinks.
+        if (!text.startsWith('/')) return { allow: false, text, reason: 'not an absolute path', code: 'PATH' };
+        const landed = await realPath(posix.normalize(text), fs);
+        if (!landed.path) return { allow: false, text, reason: landed.reason, code: landed.code };
+        const real = landed.path;
+        const paths = [text, ...new Set([posix.normalize(text).toLowerCase(), real.toLowerCase(), real])];
+        const settings = KELPI_NEVER.find(r => r.name === 'agent settings write');
+        if (paths.some(p => settings.test([p], p))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };
+        const rule = WRITE_NEVER.find(r => paths.some(p => r.test(p.toLowerCase())));
+        if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: rule.name };
+    }
+    return { allow: true, text };
+}
+
+/**
+ * The kelpi.agent.permissions@1 `decide`. Allow only while the window is on (checked on both clocks every call), swarm-it is
+ * the active provider and the request passes judgeRequest and the rate guard; otherwise abstain, so Claude shows its own
+ * prompt and the rail's card works as before. Never denies, never rejects, awaits only a write's path lookup (at most
+ * PATH_CHECK_MS). Every decision made while on is logged with `source: 'provider'`; while off it abstains without logging.
+ */
+export async function decide(store, args, now = Date.now(), mono = performance.now()) {
+    const a = store.auto;
+    let paneID = '?';
+    let tool = '';
+    let text = '';
+    try {
+        paneID = typeof args?.paneID === 'string' && args.paneID ? args.paneID : '?';
+        tool = typeof args?.toolName === 'string' ? args.toolName : '';
+        a.asked.set(paneID, now);
+        expireIfDue(store, now, mono);
+        if (!a.on) return ABSTAIN;
+        const entry = (fields) => void appendLog(store, {
+            at: iso(now), ...describePane(store, paneID), paneID, command: text.length > LOG_TEXT_CAP ? `${text.slice(0, LOG_TEXT_CAP)}…` : text,
+            tool, source: 'provider', ...fields
+        });
+        const leave = (reason, code, extra = {}) => { a.skipped += 1; entry({ ok: false, skipped: true, reason, code, ...extra }); return ABSTAIN; };
+        const judged = await judgeRequest(args.toolName, args.toolInput, a.fs);
+        // Turned off while a path was being looked up: off means abstain, unlogged.
+        if (!a.on) return ABSTAIN;
+        text = judged.text;
+        // Kelpi only asks the selected provider, but until checkProvider confirms it, the screen path is the one answering.
+        if (!a.provider.active) { entry({ ok: false, reason: 'swarm-it is not confirmed as the active provider yet; the screen path answers', code: 'NOT_ACTIVE' }); return ABSTAIN; }
+        if (args.agent !== 'claude') return leave('not a Claude pane', 'AGENT');
+        if (!judged.allow) return leave(judged.reason, judged.code, judged.rule ? { rule: judged.rule } : {});
+        const stamps = (a.recent.get(paneID) ?? []).filter(t => now - t < RATE_WINDOW_MS);
+        if (!a.paused.has(paneID) && stamps.length >= RATE_MAX) {
+            a.paused.set(paneID, { paneID, label: describePane(store, paneID).label, at: iso(now), reason: `more than ${RATE_MAX} auto-approvals in ${Math.round(RATE_WINDOW_MS / 60000)} minutes; its prompts are left for you` });
+        }
+        if (a.paused.has(paneID)) return leave('paused by the rate guard', 'PAUSED');
+        a.approved += 1; stamps.push(now); a.recent.set(paneID, stamps);
+        entry({ ok: true });
+        return { behavior: 'allow' };
+    } catch (error) {
+        try {
+            if (a.on) void appendLog(store, { at: iso(now), swarmName: '', swarmWorkspaceID: '', label: paneID, paneID, command: '', tool, source: 'provider', ok: false, reason: `error: ${message(error)}`, code: 'ERROR' });
+        } catch { /* abstain all the same */ }
+        return ABSTAIN;
+    }
+}
+
+/**
+ * Whether Kelpi asks swarm-it's provider, from `api.services.list()`; sets `provider.active` and the one-line `warning`.
+ * Returns true when either changed. Never throws: any failure leaves the screen path answering.
+ */
+export async function checkProvider(api, store, now = Date.now()) {
+    const p = store.auto.provider;
+    let active = false;
+    let warning = null;
+    if (!p.registered) warning = `Auto-approve reads the screen: this Kelpi cannot take permission decisions from plugins (0.2.18 or later can); after updating, ${FIX}`;
+    else {
+        try {
+            const services = await withTimeout(Promise.resolve().then(() => api.services.list()), READ_TIMEOUT_MS, 'listing services');
+            const service = (Array.isArray(services) ? services : []).find(s => s?.id === PERMISSIONS_SERVICE);
+            if (!service) warning = `Auto-approve reads the screen: this Kelpi has no ${PERMISSIONS_SERVICE} service; update Kelpi, then ${FIX}`;
+            else if (service.activeProviderID === PROVIDER_ID) active = true;
+            else if (service.selectedProviderID === PROVIDER_ID) warning = `Auto-approve reads the screen: swarm-it is the selected permissions provider but Kelpi asks ${service.activeProviderID ?? 'none'}; reload the plugin, or ${FIX}`;
+            else warning = `Auto-approve reads the screen: swarm-it is not the selected permissions provider; ${FIX}`;
+        } catch (error) {
+            warning = `Auto-approve reads the screen: could not check the permissions provider (${message(error)}); ${FIX}`;
+        }
+    }
+    p.checkedAt = now;
+    const changed = p.active !== active || p.warning !== warning;
+    p.active = active; p.warning = warning;
     return changed;
 }
 
@@ -305,6 +548,9 @@ export function snapshotPart(store) {
     const a = store.auto;
     return {
         on: a.on, until: a.until, since: a.since, approved: a.approved, skipped: a.skipped, failed: a.failed,
-        logCount: a.log.length, paused: [...a.paused.values()], ended: a.ended
+        logCount: a.log.length, paused: [...a.paused.values()], ended: a.ended, provider: providerPart(a)
     };
 }
+
+/** contracts/state.d.ts AutoApproveState.provider: which path answers, and the fix while it is the screen. */
+export const providerPart = a => ({ active: a.provider.active, warning: a.provider.warning });

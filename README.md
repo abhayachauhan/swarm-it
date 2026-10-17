@@ -69,10 +69,45 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
 4 hours, 12 hours, or until 9am. It covers every Claude pane, not only swarm workers.
 
 - It's off after every install or reload, and never turns on by itself.
+- **Through Kelpi (Kelpi 0.2.18 or later).** swarm-it is a `kelpi.agent.permissions` provider: Claude's
+  own permission request reaches the plugin with the real command, so nothing is read off the screen.
+  Select it once, then restart Claude sessions that started before (**Restart Claude** in the pane menu),
+  because Claude loads hooks when it starts:
+
+  ```sh
+  kelpi plugin service-select kelpi.agent.permissions local.swarm-view.permissions
+  kelpi install-hooks
+  ```
+
+  While Auto is off, and for anything it does not approve, the plugin abstains: Claude shows its normal
+  prompt and the rail's Approve and Deny work as before. `kelpi plugin service-select kelpi.agent.permissions default`
+  undoes the selection.
+- **Screen fallback.** Until swarm-it is the selected provider, or on an older Kelpi, Auto reads prompts off
+  the screen and presses Enter as before, and while it is on the rail's ⚠ and the status bar tooltip say how
+  to fix that. Once the provider is active the screen path never presses Enter, so no prompt is answered twice.
+  Prompts already showing when you turn Auto on then wait for you, and a prompt from a session Kelpi never asked
+  about is logged as `NOT_ASKED`.
 - Some commands are never auto-approved: for example `sudo`, `git reset --hard`, `kubectl delete`,
   `terraform apply`, writes to AWS, and anything piped into a shell. Those stay on the rail for you.
+  Through Kelpi the list also takes in every rule of Kelpi's own auto-approve example, and leaves a command
+  over several lines or over 4 KiB, and a Bash call that asks to run outside Claude's sandbox. A few harmless
+  commands wait for you as a result, such as `find . -name "*.ts"`, `node --test test/*.mjs` and
+  `git restore --source HEAD x`.
+- File reads, edits and writes, web fetches and MCP tools are approved as before; any other tool waits for you.
+  Through Kelpi, a write to Claude's or Codex's settings, `.claude` folders or `.mcp.json`, git hooks or config,
+  a shell startup file or a launch agent waits for you (symlinks are followed first), and so does any input
+  holding a control character, a path that isn't absolute, or one it can't follow within half a second. These
+  checks catch mistakes, not an agent set on getting round them: writing a script and then running it is not
+  caught, as in Kelpi's own example, and neither is a folder swapped for a symlink after the write was approved.
 - A pane where Claude has exited is never answered, even if an old prompt is still on its screen.
 - Every approval and refusal goes in a log (**Swarm: list or clear the auto-approve log** in the palette).
+  Each entry's `source` says whether it came through Kelpi (`provider`) or the screen (`screen`). Nothing is
+  logged while Auto is off.
+- **Headless workers.** Kelpi asks the provider for `claude -p` workers too. Claude Code's hooks reference
+  says that in sessions that can't show a prompt it "still runs these hooks, and if no hook returns a
+  decision, it denies the tool call"; Kelpi's `docs/plugin-services.md` (Agent permission decisions) says the
+  same, and `kelpi event permission-request` only needs the pane id every Kelpi pane sets. So a worker's
+  request that swarm-it leaves is denied, not shown as a prompt. This has not been tried live yet.
 
 ### Run last suggested command
 
@@ -124,7 +159,8 @@ You need Kelpi, Claude Code, and Kelpi's Claude Code hooks (`kelpi install-hooks
 - Results live in `~/.kelpi-swarm/results/`. The rail refuses to read files outside that folder or a worker's
   trusted worktree.
 - The plugin reads worker screens to spot Claude's permission prompts. Approving sends a single Enter, and
-  only after a fresh capture confirms the prompt hasn't changed.
+  only after a fresh capture confirms the prompt hasn't changed. With swarm-it selected as Kelpi's permissions
+  provider, auto-approve answers Claude's permission requests directly instead.
 
 Plugin settings (`kelpi plugin settings local.swarm-view`): hide workers in the swarm workspace, default snooze,
 coordinator label, manifest folder, and the folders worker worktrees must live in.

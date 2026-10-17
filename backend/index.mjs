@@ -46,10 +46,14 @@ const GROUP_COLORS = new Set(['red', 'orange', 'yellow', 'green', 'blue', 'purpl
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
 const text = error => String(error?.message ?? error);
 
-/** Status bar patch for the counts item (contracts/commands.md). */
-export function countsPatch(counts, hasError) {
+const COUNTS_TOOLTIP = 'Swarm: waiting / running / finished';
+/** While auto-approve is on, which path answers is re-checked on every scan; while off, at most this often. */
+const PROVIDER_CHECK_MS = Number(process.env.SWARM_PROVIDER_CHECK_MS) || 60000;
+
+/** Status bar patch for the counts item (contracts/commands.md). `note` (the auto-approve fallback warning) joins the tooltip. */
+export function countsPatch(counts, hasError, note = null) {
     const tone = counts.waiting > 0 ? 'warning' : hasError ? 'error' : counts.running > 0 ? 'info' : 'default';
-    return { text: `Swarm ${counts.waiting}/${counts.running}/${counts.finished}`, badge: counts.waiting > 0 ? String(counts.waiting) : '', tone };
+    return { text: `Swarm ${counts.waiting}/${counts.running}/${counts.finished}`, badge: counts.waiting > 0 ? String(counts.waiting) : '', tone, tooltip: note ? `${COUNTS_TOOLTIP}. ${note}` : COUNTS_TOOLTIP };
 }
 
 /**
@@ -95,9 +99,12 @@ export function registerAll(api, deps = modules) {
 
     async function publish() {
         if (disposed) return null;
+        // The screen fallback only matters while auto-approve is on: then the rail's ⚠ and the status bar say how to fix it.
+        const fallback = st.auto.on ? st.auto.provider.warning : null;
+        setWarning('auto-approve', fallback);
         const snapshot = snapshotNow();
         const hasError = snapshot.workers.some(w => !w.archived && w.state === 'error');
-        const patch = countsPatch(snapshot.counts, hasError);
+        const patch = countsPatch(snapshot.counts, hasError, fallback);
         const patchJSON = JSON.stringify(patch);
         if (patchJSON !== lastCounts) {
             try { await api.contributions.update({ items: { [COUNTS_ITEM]: patch } }); lastCounts = patchJSON; } catch { /* status bar is best effort */ }
@@ -442,6 +449,7 @@ export function registerAll(api, deps = modules) {
         await loadSettings();
         await S.load(st);
         await AA.load(st);
+        await AA.checkProvider(api, st);
         const snap = await api.snapshot();
         seqFloor = snap?.sequence ?? 0;
         S.seedFromSnapshot(st, snap, Date.now());
@@ -630,6 +638,10 @@ export function registerAll(api, deps = modules) {
             for (const item of orchOpen) if (item.promptHash !== hash) { await A.handleItem(att, item.id); changed = true; }
         }
         if (await settleOrphans()) changed = true;
+        // Which path answers can change at any time (`kelpi plugin service-select`): re-check before auto-approving.
+        if (st.auto.on || Date.now() - st.auto.provider.checkedAt >= PROVIDER_CHECK_MS) {
+            if (await AA.checkProvider(api, st)) changed = true;
+        }
         // Auto-approve newly raised cards (and switch itself off when its time ran out) on this timer too.
         if (await AA.run(api, st, Date.now())) changed = true;
         // A due hide retry also runs through settle (autoHide), on this timer.
@@ -644,6 +656,33 @@ export function registerAll(api, deps = modules) {
     }, PROMPT_SCAN_MS);
     scanTimer.unref?.();
     disposers.push(() => clearInterval(scanTimer));
+
+    // kelpi.agent.permissions@1 (Kelpi 0.2.18+): Claude's PermissionRequest hook asks `decide` once the user selects it.
+    // `decide` answers from memory (a write also looks up its path); the publish, and a selection re-check when it was asked
+    // unconfirmed, is queued.
+    let providerPublishQueued = false;
+    const decide = async args => {
+        let decision = { behavior: 'abstain' };
+        const wasOn = st.auto.on;
+        try { decision = await AA.decide(st, args); } catch { /* abstain */ }
+        // Off before and after: nothing was logged or counted, so there is nothing to show.
+        if ((wasOn || st.auto.on) && !providerPublishQueued) {
+            providerPublishQueued = true;
+            serial(async () => {
+                providerPublishQueued = false;
+                if (!st.auto.provider.active) await AA.checkProvider(api, st);
+                await publish();
+            }).catch(() => {});
+        }
+        return decision;
+    };
+    try {
+        if (typeof api.providers?.register === 'function') {
+            const off = api.providers.register(AA.PROVIDER_ID, { decide });
+            if (typeof off === 'function') disposers.push(off);
+            st.auto.provider.registered = true;
+        }
+    } catch { /* an older Kelpi: auto-approve keeps reading the screen */ }
 
     // Subscribe after queueing init so no event can run before the initial load.
     const ready = serial(init).catch(error => { setWarning('init', text(error)); });
@@ -798,7 +837,9 @@ export function registerAll(api, deps = modules) {
             const result = AA.turnOn(st, endAt === null ? args.hours : (endAt - now) / 3600000, now);
             if (!result.ok) return result;
             // Exactly the time asked for, not one recomputed from fractional hours.
-            if (endAt !== null) st.auto.until = new Date(endAt).toISOString();
+            if (endAt !== null) AA.setUntil(st, endAt, now);
+            // Provider or screen: decided before anything is approved.
+            await AA.checkProvider(api, st);
             // Cards already open are approved now; the user opted in knowing that.
             await AA.run(api, st, Date.now());
         } else if (args.on === false) {
