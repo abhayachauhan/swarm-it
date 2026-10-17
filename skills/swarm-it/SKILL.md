@@ -35,8 +35,10 @@ the user before spawning more.
    ~/.claude/skills/swarm-it/swarm-wait <pane-id>:<label> [<pane-id>:<label> ...]
    ```
 
-   Run it with `run_in_background`. It exits when every result exists or a pane closes, and prints
-   each result's first lines. Read the result files for the detail.
+   Run it with `run_in_background`. It exits when every result exists, a pane closes, or a worker's Claude
+   ends with no result, and prints each result's first lines. A worker that stopped prints
+   `FAILED <pane>:<label> <reason>` (for example "usage limit reached"); the Swarm View plugin on Kelpi
+   0.2.18+ supplies the reason. Read the result files for the detail.
 4. Clean up: the rail only counts finished workers, so nothing needs clearing there. To close their panes:
    `kelpi plugin run local.swarm-view.clear-done`. Per worker:
 

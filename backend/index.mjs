@@ -14,6 +14,7 @@ import * as autoapprove from './autoapprove.mjs';
 import * as suggested from './suggested.mjs';
 import * as restart from './restart.mjs';
 import * as workers from './workers.mjs';
+import * as exits from './exits.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 
 export const PLUGIN_ID = 'local.swarm-view';
@@ -31,7 +32,7 @@ export const RUN_VIEW = `${PLUGIN_ID}.run`;
 /** Backend to sidebar: the one signal that gives the rail the keyboard (emitted as 'focus-rail', host-prefixed). */
 export const FOCUS_EVENT = 'focus-rail';
 
-export const modules = { store, manifest, attention, actions, collapse, notify, autoapprove, suggested, restart, workers };
+export const modules = { store, manifest, attention, actions, collapse, notify, autoapprove, suggested, restart, workers, exits };
 
 const MANIFEST_RELOAD_MS = 1000;
 /** Every other swarm's manifest is re-read at most this often (one directory listing, then one read per manifest). */
@@ -58,7 +59,7 @@ export function countsPatch(counts, hasError) {
  * @returns {(() => void) & { ready: Promise<void>, store: object }}
  */
 export function registerAll(api, deps = modules) {
-    const { store: S, manifest: M, attention: A, actions: X, collapse: C, notify: N, autoapprove: AA = autoapprove, suggested: R = suggested, restart: RS = restart, workers: W = workers } = deps;
+    const { store: S, manifest: M, attention: A, actions: X, collapse: C, notify: N, autoapprove: AA = autoapprove, suggested: R = suggested, restart: RS = restart, workers: W = workers, exits: E = exits } = deps;
     /** Writes text to the system clipboard; resolves true when it worked. Tests inject one. */
     const clipboard = deps.clipboard ?? R.pbcopy;
     const st = S.createStore(api);
@@ -645,6 +646,19 @@ export function registerAll(api, deps = modules) {
     listen('state.changed', onStateChanged);
     listen('daemon.notification', onNotification);
     listen('settings.changed', async () => { await loadSettings(); await settle({ publishAlways: true }); });
+
+    async function onAgentEvent(event) {
+        if (!await E.onAgentEvent(st, event, Date.now())) return;
+        try { await S.persist(st); } catch { /* kept in memory */ }
+        await publish();
+    }
+    // Kelpi 0.2.18+ only; on an older host the rail keeps reading the screen.
+    if (typeof api.agents?.onEvent === 'function') {
+        try {
+            const off = api.agents.onEvent(event => serial(() => onAgentEvent(event)).catch(() => {}));
+            if (typeof off === 'function') disposers.push(off);
+        } catch { /* host refused the subscription */ }
+    }
 
     const command = (name, run) => {
         const id = `${PLUGIN_ID}.${name}`;

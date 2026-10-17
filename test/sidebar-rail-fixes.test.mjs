@@ -104,3 +104,45 @@ test('Auto off: the toggle opens the duration menu, a choice turns it on; on, on
     await app.pointerClick(toggle());
     assert.deepEqual(sent(app, 'auto-approve').at(-1).args, { on: false });
 });
+
+const stoppedRow = (app, paneID) => find(app.refs.list, n => n.className.includes('att-stopped') && n.dataset.paneId === paneID)[0] ?? null;
+
+test('a worker whose Claude exited with no result is under Needs you with its label and reason, not under Running', async () => {
+    const snap = fixture();
+    const run = snap.workers.find(w => w.paneID === 'p-run');
+    run.state = 'waiting';
+    run.stopped = { reason: 'usage limit reached' };
+    const app = await bootApp({ snapshot: snap });
+    const row = stoppedRow(app, 'p-run');
+    assert.ok(row, 'the stopped row is drawn');
+    assert.equal(row.textContent, 'api-docs stopped: usage limit reachedGo to pane');
+    assert.equal(app.row('p-run'), null, 'not also a Running row');
+    assert.equal(app.button(row, 'Approve'), null);
+    await app.pointerClick(app.button(row, 'Go to pane'));
+    assert.deepEqual(app.reveals, ['p-run']);
+    // Keyboard: Enter goes to the pane, Y points at the pane instead of approving.
+    app.emit('local.swarm-view.focus-rail', {});
+    await app.pointerClick(row);
+    await app.press('Enter');
+    assert.deepEqual(app.reveals, ['p-run', 'p-run']);
+    await app.press('y');
+    assert.match(app.footerText(), /stopped: open its pane/);
+    assert.equal(sent(app, 'approve').length, 0);
+    // A result arrives later (the worker is done) or the stop is cleared: the row goes.
+    const cleared = { ...snap, sequence: snap.sequence + 1, workers: snap.workers.map(w => (w.paneID === 'p-run' ? { ...w, stopped: undefined } : w)) };
+    app.emit('local.swarm-view.snapshot', cleared);
+    await app.flush();
+    assert.equal(stoppedRow(app, 'p-run'), null);
+    assert.ok(app.row('p-run'), 'back under Running');
+});
+
+test('a stopped worker that also has a permission card shows only the card, and an archived or finished one shows no stopped row', async () => {
+    const snap = fixture();
+    snap.workers.find(w => w.paneID === 'p-wait').stopped = { reason: 'x' };
+    snap.workers.find(w => w.paneID === 'p-arch').stopped = { reason: 'x' };
+    snap.workers.find(w => w.paneID === 'p-done').stopped = { reason: 'x' };
+    const app = await bootApp({ snapshot: snap });
+    assert.equal(stoppedRow(app, 'p-wait'), null, 'its Request card wins');
+    assert.equal(stoppedRow(app, 'p-arch'), null);
+    assert.equal(stoppedRow(app, 'p-done'), null);
+});

@@ -50,6 +50,19 @@ Every worker writes a short result with three headings: **Goal**, **Done** and *
 shows them as cards, with buttons to open or reload the file. Send a follow-up from the same view: a
 finished worker picks up its own conversation again with your message.
 
+### Workers that stop without a result
+
+On Kelpi 0.2.18 or newer the plugin listens to Claude's hook events (`api.agents.onEvent`). A worker's last
+line in the rail is then the last line of Claude's final reply, not a screen read. If a worker's Claude ends
+with no result file, the worker shows under **Needs you** as "`<label>` stopped: `<reason>`", for example
+"usage limit reached", "rate limit reached" or "stopped with an error: ...", with a **Go to pane** button.
+On older Kelpi nothing changes: the rail reads the screen and shows no stopped row.
+
+`swarm-wait` also ends for such a worker and prints `FAILED <pane>:<label> <reason>`. The plugin tells it through
+a small file, `~/.kelpi-swarm/exits/<pane-id>.json` (`{ paneID, label, reason, at }`; under the `manifestDir`
+setting, or `$SWARM_MANIFEST_DIR` for `swarm-wait`, when that is set). The file goes away when Claude starts
+again in that pane. Workers with no result path are never marked stopped.
+
 ### Auto-approve
 
 For an unattended run, the rail's **Auto** button approves permission prompts for a set time: 10 minutes,
@@ -103,7 +116,7 @@ You need Kelpi, Claude Code, and Kelpi's Claude Code hooks (`kelpi install-hooks
 ## How it works
 
 - `skills/swarm-it/swarm-spawn` splits a pane, adds it to the swarm manifest (`~/.kelpi-swarm/<workspace>.json`),
-  and starts `claude -p` on a task file. `swarm-wait` waits until every result file exists.
+  and starts `claude -p` on a task file. `swarm-wait` waits until every result file exists, a pane closes, or a worker's Claude ends with no result.
 - Results live in `~/.kelpi-swarm/results/`. The rail refuses to read files outside that folder or a worker's
   trusted worktree.
 - The plugin reads worker screens to spot Claude's permission prompts. Approving sends a single Enter, and

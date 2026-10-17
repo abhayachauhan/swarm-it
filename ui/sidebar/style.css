@@ -76,8 +76,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 /* Shown only once app.js has measured that the clamped command really overflows two lines. */
 .att-more-maybe { display: none; }
 .att-more-maybe.att-overflow { display: block; }
-/* A worker waiting on a prompt the rail cannot read: no command, only Go to pane. */
-.att-waiting { border-left-color: var(--warn); }
+/* A worker waiting on a prompt the rail cannot read, or whose Claude exited with no result: no command, only Go to pane. */
+.att-waiting, .att-stopped { border-left-color: var(--warn); }
 /* "from <swarm>": that swarm's Group colour (Kelpi's named colours), the accent when it has none. Text stays --fg. */
 .swarm-tag, .swarm-line { --tag: var(--accent); }
 [data-color="red"] { --tag: #e5484d; }

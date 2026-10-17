@@ -30,6 +30,7 @@ export function makeFakeApi(opts = {}) {
     const calls = [];
     const destructive = [];
     const listeners = new Map();
+    const agentListeners = new Set();
     const commands = new Map();
     const storage = opts.storage ?? new Map();
     const files = { ...(opts.files ?? {}) };
@@ -69,6 +70,14 @@ export function makeFakeApi(opts = {}) {
                 listeners.get(name).add(fn);
                 return () => listeners.get(name).delete(fn);
             }
+        },
+        // Kelpi 0.2.18+ only: opts.noAgentEvents leaves it out, as an older host does.
+        agents: opts.noAgentEvents ? undefined : { onEvent(fn) { agentListeners.add(fn); return () => agentListeners.delete(fn); } },
+        agentListeners,
+        /** Deliver one agent hook event (AgentHookEvent) to the plugin's listeners and let it settle. */
+        async agentEvent(event) {
+            await Promise.all([...agentListeners].map(fn => fn(event)));
+            await api.idle();
         },
         async emit(name, data) { record('emit', name); api.emitted.push({ name, data }); return { name }; },
         commands: {
@@ -237,6 +246,7 @@ export function makeSwarmApi(extra = {}) {
         closeFails: extra.closeFails,
         createShellPane: extra.createShellPane,
         createFails: extra.createFails,
+        noAgentEvents: extra.noAgentEvents,
         storage: extra.storage,
         groups: extra.groups
     });

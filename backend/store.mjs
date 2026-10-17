@@ -110,6 +110,12 @@ export function createStore(api) {
         panes: new Map(),
         workspaceNames: new Map(),
         lastLines: new Map(),
+        /** paneID to the last line of Claude's final reply (agent Stop event): preferred over a screen read. Cleared when Claude starts a turn. */
+        agentLines: new Map(),
+        /** paneID to the message of the last agent error event. */
+        agentErrors: new Map(),
+        /** paneID to { reason, at } for a worker whose Claude exited without a result (backend/exits.mjs). */
+        exits: new Map(),
         resultExists: new Map(),
         errored: new Set(),
         gone: new Set(),
@@ -272,9 +278,13 @@ export function lastLineOf(text) {
 export async function refreshWorker(store, paneID) {
     const worker = store.manifestWorkers.find(w => w.paneID === paneID);
     if (!worker) return;
-    try {
-        store.lastLines.set(paneID, lastLineOf(await capturePane(store.api, paneID, 30)));
-    } catch { /* pane may be gone; keep the previous line */ }
+    // Claude's own final reply beats the screen; the screen read is the fallback.
+    if (store.agentLines.has(paneID)) store.lastLines.set(paneID, store.agentLines.get(paneID));
+    else {
+        try {
+            store.lastLines.set(paneID, lastLineOf(await capturePane(store.api, paneID, 30)));
+        } catch { /* pane may be gone; keep the previous line */ }
+    }
     await refreshResult(store, worker);
 }
 
@@ -319,7 +329,8 @@ export function deriveState(store, worker) {
     if (store.restarts.has(worker.paneID)) return pane.status === 'waitingForInput' ? 'waiting' : 'running';
     if (store.errored.has(worker.paneID)) return 'error';
     if (hasResult) return 'done';
-    if (pane.status === 'waitingForInput') return 'waiting';
+    // Claude exited with no result: the user must look at it, so it counts as waiting.
+    if (store.exits.has(worker.paneID) || pane.status === 'waitingForInput') return 'waiting';
     return store.seenRunning.has(worker.paneID) ? 'waiting' : 'running';
 }
 
@@ -331,11 +342,14 @@ export function currentWorkers(store, now) {
     return store.manifestWorkers.map(mw => {
         const pane = store.panes.get(mw.paneID);
         const first = Date.parse(store.firstSeen[mw.paneID] ?? '');
+        const state = deriveState(store, mw);
+        const exit = store.exits.get(mw.paneID);
         return {
             paneID: mw.paneID,
             label: mw.label,
             task: mw.task ?? '',
-            state: deriveState(store, mw),
+            state,
+            ...(exit && state === 'waiting' ? { stopped: { reason: exit.reason } } : {}),
             elapsedSeconds: Number.isNaN(first) ? 0 : Math.max(0, Math.floor((nowMs - first) / 1000)),
             lastLine: store.lastLines.get(mw.paneID) ?? '',
             resultPath: mw.resultPath ?? null,
@@ -464,7 +478,7 @@ export function pruneHistory(store, cap = HISTORY_CAP) {
         const kept = trim([...store[name]]);
         if (kept) store[name] = new Set(kept);
     }
-    for (const name of ['sessions', 'resultExists']) {
+    for (const name of ['sessions', 'resultExists', 'exits']) {
         const kept = trim([...store[name].keys()]);
         if (kept) { const ok = new Set(kept); for (const id of [...store[name].keys()]) if (!ok.has(id)) store[name].delete(id); }
     }
@@ -504,6 +518,7 @@ export async function persist(store) {
     await set('results', [...store.resultExists].filter(([, exists]) => exists === true).map(([id]) => id));
     await set('sessions', Object.fromEntries(store.sessions));
     await set('restarts', Object.fromEntries(store.restarts));
+    await set('exits', Object.fromEntries(store.exits));
     store.sessionsDirty = false;
 }
 
@@ -513,9 +528,12 @@ const stringMap = value => new Map(value && typeof value === 'object' && !Array.
 /** Load persisted state. Missing or malformed values fall back to empty. */
 export async function load(store) {
     const { storage } = store.api;
-    const [attention, pins, accepted, archived, restored, firstSeen, hidden, gone, results, sessions, restarts] = await Promise.all(
-        ['attention', 'pins', 'accepted', 'archived', 'restored', 'firstSeen', 'hiddenWorkspaceID', 'gone', 'results', 'sessions', 'restarts'].map(key => storage.get(key))
+    const [attention, pins, accepted, archived, restored, firstSeen, hidden, gone, results, sessions, restarts, exits] = await Promise.all(
+        ['attention', 'pins', 'accepted', 'archived', 'restored', 'firstSeen', 'hiddenWorkspaceID', 'gone', 'results', 'sessions', 'restarts', 'exits'].map(key => storage.get(key))
     );
+    for (const [id, exit] of Object.entries(exits && typeof exits === 'object' && !Array.isArray(exits) ? exits : {})) {
+        if (typeof exit?.reason === 'string' && typeof exit.at === 'string') store.exits.set(id, { reason: exit.reason, at: exit.at });
+    }
     // Sessions seen before the reload stay known; ids reported live since activation win.
     for (const [id, session] of stringMap(sessions)) if (!store.sessions.has(id) && SESSION_ID.test(session)) store.sessions.set(id, session);
     for (const [id, hash] of stringMap(restarts)) store.restarts.set(id, hash);

@@ -64,6 +64,7 @@
     /**
      * The three sections of the rail, in reading order. Each is { key, title, rows }; empty ones are not drawn.
      *   needs:   one 'request' row per permission card (a waiting worker with a card appears only here), then one
+     *            'stopped' row per worker whose Claude exited with no result (worker.stopped), then one
      *            'waiting' row per worker waiting for input whose prompt the backend cannot read (snapshot.waitingPanes);
      *   running: live workers (running, or waiting without a card);
      *   done:    no rows, only `count`: how many workers finished (done or error).
@@ -77,6 +78,12 @@
             if (carded.has(item.paneID)) continue;
             carded.add(item.paneID);
             needs.push({ kind: 'request', paneID: item.paneID, item });
+        }
+        // A worker whose Claude exited with no result: the reason and its label, so it is seen without opening the pane.
+        for (const worker of activeWorkers(snapshot)) {
+            if (!worker.stopped || isFinished(worker) || carded.has(worker.paneID)) continue;
+            carded.add(worker.paneID);
+            needs.push({ kind: 'stopped', paneID: worker.paneID, worker });
         }
         for (const entry of Array.isArray(snapshot.waitingPanes) ? snapshot.waitingPanes : []) {
             if (!entry || carded.has(entry.paneID)) continue;
@@ -318,7 +325,7 @@
                 // On a card, Enter shows or shortens the command; on a worker it opens the thread.
                 if (selected.kind === 'request') return other({ ui: toggleExpanded(disarm(active), selected.item.id, nowMs) });
                 // A worker waiting on a prompt the rail cannot read: Enter goes to its pane.
-                if (selected.kind === 'waiting') return other({ reveal: selected.paneID });
+                if (selected.kind === 'waiting' || selected.kind === 'stopped') return other({ reveal: selected.paneID });
                 return other({ effect: effect('open-thread', { paneID: selected.paneID }) });
             case 'e': {
                 if (!selected || selected.kind !== 'worker') return other({ notice: 'Select a worker to archive.' });
@@ -333,6 +340,7 @@
             }
             case 'y': case 'n': {
                 if (selected && selected.kind === 'waiting') return other({ notice: 'The rail cannot read this prompt: answer it in the pane.' });
+                if (selected && selected.kind === 'stopped') return other({ notice: 'This worker stopped: open its pane to see why.' });
                 const item = selected ? requestForPane(snapshot, selected.paneID) : null;
                 if (!item) return other({ notice: 'No permission request on this worker.' });
                 if (item.approvable === false) return handled({ notice: 'Unrecognised prompt: answer it in the pane.', ui: disarm(active) });
@@ -520,6 +528,22 @@
         node.append(h(doc, 'div', 'att-text', `${label} is waiting for you`));
         const actions = h(doc, 'div', 'att-actions');
         actions.append(button(doc, 'Go to pane', 'btn btn-primary', () => handlers.onReveal(row.paneID, 'Go to pane'), 'Show the pane so you can answer it there (Enter)'));
+        node.append(actions);
+        node.addEventListener('click', () => handlers.onSelect(row.paneID));
+        return node;
+    }
+
+    /** A worker whose Claude exited with no result: "<label> stopped: <reason>" and Go to pane. Nothing to approve. */
+    function buildStoppedRow(doc, row, selected, view, handlers) {
+        const worker = row.worker;
+        const node = h(doc, 'div', 'att att-stopped');
+        node.setAttribute('role', 'option');
+        node.setAttribute('tabindex', '-1');
+        node.setAttribute('aria-current', selected ? 'true' : 'false');
+        node.dataset.paneId = row.paneID;
+        node.append(h(doc, 'div', 'att-text', `${worker.label || String(row.paneID).slice(0, 8)} stopped: ${worker.stopped.reason}`));
+        const actions = h(doc, 'div', 'att-actions');
+        actions.append(button(doc, 'Go to pane', 'btn btn-primary', () => handlers.onReveal(row.paneID, 'Go to pane'), 'Show the pane to see why it stopped (Enter)'));
         node.append(actions);
         node.addEventListener('click', () => handlers.onSelect(row.paneID));
         return node;
@@ -806,6 +830,7 @@
                 const selected = row.paneID === ui.selectedPaneID;
                 if (row.kind === 'request') return buildRequestRow(doc, row, selected, view, handlers);
                 if (row.kind === 'waiting') return buildWaitingRow(doc, row, selected, view, handlers);
+                if (row.kind === 'stopped') return buildStoppedRow(doc, row, selected, view, handlers);
                 return buildThreadRow(doc, row, selected, view, handlers);
             };
             for (const section of secs) {
@@ -834,7 +859,7 @@
         markLayout, layoutLocked, layoutLockRemaining, askClose, cancelClose,
         reduceKey, attentionEffect, describeResult, displayCommand, statusLine, reviewEffect, buildSectionHead,
         AUTO_DEFAULT_HOURS, formatClock, autoLabel, autoEndedText, autoNotes, autoAlerts, autoOnEffect, autoOffEffect, autoLogEffect, autoLogClearEffect, buildAutoControls, buildAutoLog,
-        nextNineAm, autoChoices, autoChoiceEffect, groupColor, fromTag, swarmSummary, buildOtherSwarms, buildWaitingRow, buildSwarmTag,
+        nextNineAm, autoChoices, autoChoiceEffect, groupColor, fromTag, swarmSummary, buildOtherSwarms, buildWaitingRow, buildStoppedRow, buildSwarmTag,
         KEY_HINT, warningsOf, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,
     };
 })();
