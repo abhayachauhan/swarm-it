@@ -2,7 +2,7 @@
 // The id is the live one Kelpi reports, else the plugin's own copy (store.sessions), which outlives Claude exiting.
 import { parsePrompt, PROMPT_CAPTURE_LINES } from './notify.mjs';
 import { capturePane, rememberSession, SESSION_ID } from './store.mjs';
-import { sendText, showsClaudeInput } from './actions.mjs';
+import { sendText, showsClaudeInput, textProblem } from './actions.mjs';
 
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
 const message = error => String(error?.message ?? error);
@@ -13,6 +13,8 @@ export const EXIT_TIMEOUT_MS = Number(process.env.SWARM_RESTART_EXIT_TIMEOUT_MS)
 export const EXIT_POLL_MS = 250;
 /** Time for the shell to draw its prompt after Claude has gone. */
 export const SHELL_SETTLE_MS = 500;
+/** Time for typed text to show on screen before it is checked. */
+export const TYPE_SETTLE_MS = 150;
 
 const RULE = /^\s*[─━]{20,}\s*$/;
 const BACKGROUND = /\bWaiting for \d+ background|\b\d+ background (?:agent|task)s? (?:running|still)/i;
@@ -27,6 +29,35 @@ export function claudeInputEmpty(text) {
         return /^(?:Try ".*")?$/.test(input[1].trim()) && RULE.test(lines[i + 1] ?? '');
     }
     return false;
+}
+
+/**
+ * Type the resume line without Enter, check what reached the shell, then press Enter. Kelpi types text as a bracketed
+ * paste; a shell whose paste widget is broken (zsh after Homebrew removed its old functions folder) keeps the
+ * paste end's `~`, so `claude --resume <id>~` would open Claude's session picker. A stray `~` is erased; anything
+ * else that does not match is left unsent.
+ */
+export async function typeResumeLine(api, paneID, line, sleep = pause) {
+    const problem = textProblem(line);
+    if (problem) return fail(problem, 'BAD_TEXT');
+    const typed = async () => {
+        await sleep(TYPE_SETTLE_MS);
+        try { return (await capturePane(api, paneID, 10)).split('\n').filter(l => l.trim()).at(-1) ?? ''; } catch { return ''; }
+    };
+    try {
+        await api.terminal.send(paneID, line, { bare: true });
+        let screen = await typed();
+        if (screen.includes(`${line}~`)) {
+            await api.terminal.sendKey(paneID, 'backspace');
+            screen = await typed();
+            if (screen.includes(`${line}~`)) return fail('the shell kept a stray ~ after the resume line; nothing was run', 'TYPED_WRONG');
+        }
+        if (!screen.includes(line)) return fail('the resume line did not reach the shell as typed; nothing was run', 'TYPED_WRONG');
+        await api.terminal.sendKey(paneID, 'enter');
+        return { ok: true, paneID };
+    } catch (error) {
+        return fail(`send failed: ${message(error)}`, 'SEND_FAILED');
+    }
 }
 
 async function freshPane(api, paneID) {
@@ -60,7 +91,7 @@ export async function restartClaude(api, store, paneID, deps = {}) {
     if (!atClaude) {
         // Claude has already exited: the pane is back at its shell.
         if (pane.agentSessionID || pane.status === 'running') return done(fail('Claude is busy in this pane; wait for it to finish', 'BUSY'));
-        const sent = await sendText(api, paneID, resumeLine);
+        const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
         return done(sent.ok ? { ok: true, paneID, session, resumed: true } : sent);
     }
     if (pane.status === 'running') return done(fail('Claude is mid-reply; wait for it to finish', 'BUSY'));
@@ -80,7 +111,7 @@ export async function restartClaude(api, store, paneID, deps = {}) {
             // Gone once its input box is and either Kelpi cleared the session or Claude printed its goodbye line.
             if (showsClaudeInput(text) || (now.agentSessionID && !/Resume this session with/.test(text))) continue;
             await sleep(SHELL_SETTLE_MS);
-            const sent = await sendText(api, paneID, resumeLine);
+            const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
             return sent.ok ? { ok: true, paneID, session, resumed: true } : sent;
         }
         return fail(`Claude did not exit within ${Math.round(timeoutMs / 1000)}s; nothing more was typed`, 'EXIT_TIMEOUT');

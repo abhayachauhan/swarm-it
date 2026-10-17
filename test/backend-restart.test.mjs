@@ -19,14 +19,42 @@ function setup({ screen = claudeScreen(), pane = {} } = {}) {
     });
     // /exit: Claude quits, Kelpi's SessionEnd hook clears the session, the shell comes back.
     const send = api.terminal.send;
-    api.terminal.send = async (paneID, text) => {
+    api.terminal.send = async (paneID, text, options) => {
         const r = await send(paneID, text);
         if (text === '/exit') { api.captureStore.c1 = SHELL; api.paneList[0].agentSessionID = null; }
+        // A bare send is typed at the shell prompt; `echo` mimics a shell that keeps the paste end's `~`.
+        if (options?.bare) api.captureStore.c1 += (api.mangle ?? (t => t))(text) + (api.echo ?? '');
         return r;
+    };
+    const sendKey = api.terminal.sendKey;
+    api.terminal.sendKey = async (paneID, key) => {
+        if (key === 'backspace') api.captureStore.c1 = api.captureStore.c1.slice(0, -1);
+        return sendKey(paneID, key);
     };
     return api;
 }
 const sent = api => api.callsTo('terminal.send').map(c => c.args[1]);
+const keys = api => api.callsTo('terminal.sendKey').map(c => c.args[1]);
+
+test('a stray ~ left by a broken shell paste is erased before Enter', async () => {
+    const api = setup({ screen: SHELL, pane: { agentSessionID: null } });
+    api.echo = '~';
+    const store = createStore(api);
+    store.sessions.set('c1', SID);
+    const { result } = await restartClaude(api, store, 'c1', noSleep);
+    assert.equal(result.resumed, true);
+    assert.deepEqual(keys(api), ['backspace', 'enter']);
+});
+
+test('the resume line is not run when the shell shows something else', async () => {
+    const api = setup({ screen: SHELL, pane: { agentSessionID: null } });
+    api.mangle = text => text.replace('--resume', '-resume');
+    const store = createStore(api);
+    store.sessions.set('c1', SID);
+    const { result } = await restartClaude(api, store, 'c1', noSleep);
+    assert.equal(result.code, 'TYPED_WRONG');
+    assert.deepEqual(keys(api), []);
+});
 const noSleep = { sleep: async () => {} };
 
 test('claudeInputEmpty: only an empty input box between the rules', () => {
