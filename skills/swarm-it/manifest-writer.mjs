@@ -16,6 +16,8 @@ import os from 'node:os'
 import path from 'node:path'
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+// prune leaves another swarm's manifest alone this long after its last write.
+const FRESH_MS = Number(process.env.SWARM_PRUNE_FRESH_MS ?? 60000)
 
 function fail(msg) {
   process.stderr.write(`manifest-writer: ${msg}\n`)
@@ -208,6 +210,8 @@ switch (cmd) {
       const id = name.endsWith('.json') ? name.slice(0, -5) : null
       if (id === null || !ID_RE.test(id) || id.includes('..')) continue
       const f = path.join(d, name)
+      // Another coordinator may be writing its manifest right now; a save here would drop its new worker.
+      try { if (id !== keep && Date.now() - fs.statSync(f).mtimeMs < FRESH_MS) continue } catch { continue }
       let m
       try { m = JSON.parse(fs.readFileSync(f, 'utf8')) } catch { continue }
       if (!m || !m.orchestrator || !Array.isArray(m.workers)) continue
@@ -237,6 +241,15 @@ switch (cmd) {
       m.workers = kept
       save(f, m)
       out.droppedWorkers.push(...dropped)
+    }
+    // The plugin's exits/<pane-id>.json files for swarm-wait: a closed pane's is never read again.
+    out.removedExits = []
+    let exits = []
+    try { exits = fs.readdirSync(path.join(d, 'exits')) } catch {}
+    for (const name of exits) {
+      const pane = name.endsWith('.json') ? name.slice(0, -5) : null
+      if (pane === null || !ID_RE.test(pane) || live.has(pane)) continue
+      try { fs.unlinkSync(path.join(d, 'exits', name)); out.removedExits.push(pane) } catch {}
     }
     process.stdout.write(JSON.stringify(out) + '\n')
     break

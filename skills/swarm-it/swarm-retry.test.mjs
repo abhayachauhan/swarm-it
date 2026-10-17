@@ -82,6 +82,9 @@ test('swarm-spawn prunes dead swarms first and keeps its own, the live ones and 
   fs.writeFileSync(path.join(s.results, 'gone.md'), 'kept')
   fs.writeFileSync(path.join(s.manifestDir, 'DEAD.json'), JSON.stringify({ version: 1, orchestrator: { paneID: 'nope', label: 'coordinator' },
     workers: [{ paneID: 'x', label: 'gone', task: 't', resultPath: path.join(s.results, 'gone.md'), worktreePath: null, parent: null }] }))
+  // Written an hour ago: prune leaves a manifest written in the last minute alone.
+  const old = new Date(Date.now() - 3600000)
+  fs.utimesSync(path.join(s.manifestDir, 'DEAD.json'), old, old)
   assert.equal(spawn(s).status, 0)
   assert.deepEqual(fs.readdirSync(s.manifestDir).filter((n) => n.endsWith('.json')), ['WS.json'])
   assert.equal(fs.readFileSync(path.join(s.results, 'gone.md'), 'utf8'), 'kept')

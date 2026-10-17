@@ -38,7 +38,9 @@ the user before spawning more.
    Run it with `run_in_background`. It exits when every result exists, a pane closes, or a worker's Claude
    ends with no result, and prints each result's first lines. A worker that stopped prints
    `FAILED <pane>:<label> <reason>` (for example "usage limit reached"); the Swarm View plugin on Kelpi
-   0.2.18+ supplies the reason. Read the result files for the detail.
+   0.2.18+ supplies the reason. It gives up after an hour (`--timeout <seconds>` to change) and prints `TIMEOUT`
+   with the pane's last lines; a TIMEOUT worker may still be working, so check before retrying. Read the result
+   files for the detail.
 4. Clean up: the rail only counts finished workers, so nothing needs clearing there. To close their panes:
    `kelpi plugin run local.swarm-view.clear-done`. Per worker:
 
@@ -55,7 +57,8 @@ the user before spawning more.
   manifest recorded these (no task path).
 - `swarm-spawn` first runs `manifest-writer.mjs prune`: it drops workers whose pane is gone (once their result is
   10 minutes old, or at once when their coordinator is gone) and deletes manifests of closed coordinators with no live
-  worker. Result files always stay. Run it by hand with `kelpi pane list --json | node manifest-writer.mjs prune`.
+  worker. It leaves another swarm's manifest written in the last minute alone, and removes the plugin's exit files
+  of closed panes. Result files always stay. Run it by hand with `kelpi pane list --json | node manifest-writer.mjs prune`.
 - Reusing a label moves the old result to `~/.kelpi-swarm/results/archive/<label>.<UTC time>.md` instead of deleting it.
 
 ## Rules

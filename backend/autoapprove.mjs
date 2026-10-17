@@ -4,11 +4,11 @@
 // goes through actions.approve, the SAME path as the Approve button (double live capture, hash and command match,
 // Enter only). Off by default and after every reload: the on/off state is never persisted; only the log is.
 import { posix } from 'node:path';
-import { realpath, lstat } from 'node:fs/promises';
+import { realpath, lstat, stat } from 'node:fs/promises';
 import { approve } from './actions.mjs';
 import { ownedRequestPane, otherSwarmPane } from './store.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
-import { judgeCommand, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
+import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -314,7 +314,8 @@ export async function run(api, store, now = Date.now()) {
         // live check would refuse this one as stale, so leave it for the scan instead of logging a failure.
         if (supersededBy(store, item)) continue;
         // A dangerous command is left as a card for the user, counted in skipped and logged once.
-        const never = neverAutoApprove(item.command ?? '');
+        // Both never lists, as the provider applies: the screen fallback must not be the weaker path.
+        const never = neverAutoApprove(item.command ?? '') ?? kelpiNever(item.command ?? '');
         if (never) {
             if (!a.seenNever.has(item.id)) {
                 a.seenNever.add(item.id); a.skipped += 1; changed = true;
@@ -392,7 +393,9 @@ const strings = (value, out = []) => {
     else if (value !== null && typeof value === 'object') for (const [key, inner] of Object.entries(value)) { out.push(key); strings(inner, out); }
     return out;
 };
-const PATH_FS = { realpath, lstat };
+const PATH_FS = { realpath, lstat, stat };
+/** MCP tool names (last `__` part) whose word says they change something: `write_file`, `send_message`, `cancel_build`. */
+export const MCP_CHANGES = /(?:^|[_-])(?:write|edit|create|delete|remove|exec|execute|run|shell|send|post|update|move|upload|put|set|save|apply|merge|cancel|trash|share|forward|reply|publish|deploy|unblock|retry|rebuild|restart|stop|kill|install)(?:[_-]|$)/i;
 const MISSING = new Set(['ENOENT', 'ENOTDIR']);
 let stuckLookups = 0;
 /** One file system lookup, given until `end`; one that outlives it counts as stuck until it finally returns. */
@@ -449,6 +452,14 @@ export async function judgeRequest(toolName, toolInput, fs = PATH_FS) {
         const never = neverAutoApprove(part);
         if (never) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: never };
     }
+    if (mcp) {
+        // An MCP tool that writes, sends or runs something is the user's call: its strings can't show where they land.
+        if (MCP_CHANGES.test(toolName.split('__').pop())) return { allow: false, text, reason: 'an MCP tool that changes something', code: 'MCP_CHANGES' };
+        for (const part of [text, ...parts]) {
+            const rule = kelpiNever(part);
+            if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule };
+        }
+    }
     if (toolName === 'Bash') {
         const judged = judgeCommand(text);
         if (judged.allow) return { allow: true, text };
@@ -461,6 +472,14 @@ export async function judgeRequest(toolName, toolInput, fs = PATH_FS) {
         const landed = await realPath(posix.normalize(text), fs);
         if (!landed.path) return { allow: false, text, reason: landed.reason, code: landed.code };
         const real = landed.path;
+        // A hard link has no symlink to follow: a second name for ~/.claude/settings.json looks like any file.
+        if (typeof fs.stat === 'function') {
+            try {
+                if ((await lookup(fs.stat, real, performance.now() + PATH_CHECK_MS)).nlink > 1) return { allow: false, text, reason: 'writes to a file with more than one name (hard link)', code: 'HARDLINK' };
+            } catch (error) {
+                if (!MISSING.has(error.code)) return { allow: false, text, reason: `could not tell where it writes (${error.code ?? message(error)})`, code: 'PATH' };
+            }
+        }
         const paths = [text, ...new Set([posix.normalize(text).toLowerCase(), real.toLowerCase(), real])];
         const settings = KELPI_NEVER.find(r => r.name === 'agent settings write');
         if (paths.some(p => settings.test([p], p))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: settings.name };

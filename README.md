@@ -92,10 +92,13 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
   Through Kelpi the list also takes in every rule of Kelpi's own auto-approve example, and leaves a command
   over several lines or over 4 KiB, and a Bash call that asks to run outside Claude's sandbox. A few harmless
   commands wait for you as a result, such as `find . -name "*.ts"`, `node --test test/*.mjs` and
-  `git restore --source HEAD x`.
-- File reads, edits and writes, web fetches and MCP tools are approved as before; any other tool waits for you.
+  `git restore --source HEAD x`. The screen fallback applies both lists too.
+- File reads, edits and writes, web fetches and read-only MCP tools are approved as before; any other tool waits
+  for you. An MCP tool whose name says it changes something (`write_file`, `send_message`, `cancel_build`, and
+  similar) waits for you, and Kelpi's list reads every string of an MCP call.
   Through Kelpi, a write to Claude's or Codex's settings, `.claude` folders or `.mcp.json`, git hooks or config,
-  a shell startup file or a launch agent waits for you (symlinks are followed first), and so does any input
+  a shell startup file or a launch agent waits for you (symlinks are followed first, and a file with a second
+  name through a hard link waits too), and so does any input
   holding a control character, a path that isn't absolute, or one it can't follow within half a second. These
   checks catch mistakes, not an agent set on getting round them: writing a script and then running it is not
   caught, as in Kelpi's own example, and neither is a folder swapped for a symlink after the write was approved.

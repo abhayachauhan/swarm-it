@@ -195,7 +195,11 @@ and in lower case, since macOS paths ignore case) breaks Kelpi's `agent settings
 `.codex*` folder or `.mcp.json`; a `.git` file, any `.git/…/hooks/` file or `.git/…/config(.worktree)`, `.gitconfig` or
 `.config/git/`; a shell startup file (`.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.zlogout`, `.bashrc`, `.bash_profile`,
 `.bash_login`, `.bash_logout`, `.profile`, `.envrc`, `.config/fish/`); or `Library/LaunchAgents` or `LaunchDaemons`. A write
-through a dangling symlink abstains (`SYMLINK`). So does (`PATH`) a write whose path is not absolute, or whose lookup fails
+through a dangling symlink abstains (`SYMLINK`), and so does one to an existing file with more than one hard link
+(`HARDLINK`), since a hard link has no symlink to follow. An MCP tool whose last name part says it changes something
+(`MCP_CHANGES`: `write`, `edit`, `create`, `delete`, `send`, `post`, `update`, `cancel`, `run` and the other words in
+`MCP_CHANGES` in backend/autoapprove.mjs) abstains, and Kelpi's never list is also run on every string of an MCP call.
+The screen fallback runs both never lists on the prompt's command. So does (`PATH`) a write whose path is not absolute, or whose lookup fails
 other than not found (a symlink loop, no access) or runs out of time; the lookups are async, and once 2 have outlived
 their time no new ones start until they return, so a hung network mount cannot take every libuv thread. Turning
 auto-approve off during a lookup abstains unlogged. A script written and then run is not caught, nor a folder swapped for
@@ -203,7 +207,7 @@ a symlink between the decision and the write: the checks catch mistakes, not a d
 (`TOOL`).
 
 While on, every decision is appended to the `autoApproveLog` with `source: 'provider'`, `tool`, and on an abstain `reason`,
-`code` (`NEVER` with `rule`, `SANDBOX`, `MULTILINE`, `CONTROL`, `SYMLINK`, `PATH`, `TOO_LONG`, `NO_INPUT`, `TOOL`, `AGENT`, `PAUSED`, `NOT_ACTIVE`, `ERROR`)
+`code` (`NEVER` with `rule`, `SANDBOX`, `MULTILINE`, `CONTROL`, `SYMLINK`, `HARDLINK`, `MCP_CHANGES`, `PATH`, `TOO_LONG`, `NO_INPUT`, `TOOL`, `AGENT`, `PAUSED`, `NOT_ACTIVE`, `ERROR`)
 and `skipped: true` (counted in `skipped`; not for `NOT_ACTIVE` or `ERROR`). The command is kept to 1000 characters. While
 off it abstains without logging. Screen-path entries carry `source: 'screen'`.
 

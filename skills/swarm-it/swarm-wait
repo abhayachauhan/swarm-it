@@ -4,11 +4,12 @@
 # its pane has closed, or its Claude exited without a result. Prints one status line per worker as it finishes.
 # The Swarm View plugin (Kelpi 0.2.18+) writes $SWARM_MANIFEST_DIR/exits/<pane-id>.json
 # ({"reason": "..."}, default dir ~/.kelpi-swarm) when it sees a worker's Claude end without a result.
-# Only that file marks a worker failed, so a Claude still starting up is never reported.
+# A Claude still starting up is never reported: only that file or a closed pane marks a worker failed.
 set -uo pipefail
 RES="$HOME/.kelpi-swarm/results"
 EXITS="${SWARM_MANIFEST_DIR:-$HOME/.kelpi-swarm}/exits"
-limit=1800
+# An hour: an Opus worker with a self-review round outlasted the old 30 minutes (2026-10-17).
+limit=3600
 workers=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -34,7 +35,8 @@ for ((t = 0; t < limit; t += 2)); do
       done_[$label]=1 failed=$((failed + 1)) finished=$((finished + 1))
       reason=$(jq -r '.reason // empty' "$EXITS/$pane.json" 2>/dev/null)
       echo "FAILED $pane:$label ${reason:-Claude exited without a result}"
-    elif ! grep -qx "$pane" <<<"$live"; then
+    # An empty list is a failed `kelpi pane list`, not every pane closing at once.
+    elif [ -n "$live" ] && ! grep -qx "$pane" <<<"$live"; then
       done_[$label]=1 failed=$((failed + 1)) finished=$((finished + 1))
       echo "FAILED $label: pane closed with no result"
     fi

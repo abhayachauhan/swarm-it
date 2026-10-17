@@ -25,6 +25,7 @@ esac
 `, { mode: 0o755 })
   return {
     home,
+    bin,
     result: label => path.join(home, '.kelpi-swarm', 'results', `${label}.md`),
     exit: (pane, body) => fs.writeFileSync(path.join(home, '.kelpi-swarm', 'exits', `${pane}.json`), typeof body === 'string' ? body : JSON.stringify(body)),
     run: (args, env = {}) => spawnSync(script, args, { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ...env }, encoding: 'utf8' })
@@ -46,6 +47,15 @@ test('a worker is not failed while its Claude is still starting up: no exit file
   assert.equal(status, 2)
   assert.doesNotMatch(stdout, /FAILED/)
   assert.match(stdout, /^TIMEOUT w1, last lines:\nscreen of P1$/m)
+})
+
+test('a failed `kelpi pane list` (no output) never marks a live worker FAILED as a closed pane', () => {
+  const s = setup()
+  fs.writeFileSync(path.join(s.bin, 'kelpi'), '#!/bin/sh\ncase "$1 $2" in\n  "pane list") exit 1 ;;\n  "pane capture") echo "screen of $4" ;;\nesac\n', { mode: 0o755 })
+  const { status, stdout } = s.run(['P1:w1', '--timeout', '1'])
+  assert.equal(status, 2)
+  assert.doesNotMatch(stdout, /FAILED/)
+  assert.match(stdout, /^TIMEOUT w1, last lines:/m)
 })
 
 test('a result beats an exit file: the worker is DONE and the run succeeds', () => {

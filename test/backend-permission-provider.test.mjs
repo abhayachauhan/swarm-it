@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, rmSync, writeFileSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeSwarmApi } from './backend-fake-api.mjs';
@@ -421,4 +421,45 @@ test('the vendored Kelpi policy is the example file unchanged', async () => {
     const text = await readFile(new URL('../backend/kelpi-policy.mjs', import.meta.url), 'utf8');
     const body = text.split('\n').slice(2).join('\n');
     assert.equal(createHash('sha256').update(body).digest('hex'), '735828ae9741c5bb82ed9635a006f01b26844d083cf8518ce20755c3ff4fce87');
+});
+
+test('the screen fallback leaves what only Kelpi\'s never list catches, as the provider does', async () => {
+    for (const command of ['kelpi plugin service-select kelpi.agent.permissions x', 'claude --dangerously-skip-permissions -p hi', 'kelpi install-hooks']) {
+        const { api, dispose } = await start();
+        await api.command('auto-approve', { on: true });
+        api.captureStore.w1 = prompt(command);
+        await sleep(100);
+        assert.equal(enters(api), 0, `${command}: no Enter from the screen path`);
+        const entry = (await logOf(api)).find(e => e.source === 'screen');
+        assert.deepEqual([entry?.ok, entry?.code], [false, 'NEVER'], command);
+        await api.command('auto-approve', { on: false });
+        dispose();
+    }
+});
+
+test('an MCP tool that changes something waits for the user; Kelpi\'s never list reads every MCP string', async () => {
+    const store = activeStore();
+    const judge = async (tool, input) => {
+        const decision = await AA.decide(store, freshPane(request(tool, input)));
+        return decision.behavior === 'allow' ? 'allow' : store.auto.log.at(-1).rule ?? store.auto.log.at(-1).code;
+    };
+    assert.equal(await judge('mcp__filesystem__write_file', { path: '/tmp/x', content: 'y' }), 'MCP_CHANGES');
+    assert.equal(await judge('mcp__claude_ai_Slack__slack_send_message', { channel: 'c', text: 'hi' }), 'MCP_CHANGES');
+    assert.equal(await judge('mcp__buildkite__cancel_build', { build: '1' }), 'MCP_CHANGES');
+    assert.equal(await judge('mcp__filesystem__read_file', { path: '/Users/me/.claude/settings.json' }), 'agent settings write');
+    assert.equal(await judge('mcp__linear__list_issues', { query: 'bug' }), 'allow', 'a read-only MCP call is still answered');
+});
+
+test('a write to a file with more than one name (a hard link) waits for the user', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'swarm-perm-')));
+    writeFileSync(join(root, 'settings.json'), '{}');
+    linkSync(join(root, 'settings.json'), join(root, 'n.json'));
+    writeFileSync(join(root, 'plain.ts'), '');
+    const store = activeStore();
+    try {
+        assert.equal(await judgeWrite(store, join(root, 'n.json')), 'HARDLINK');
+        assert.equal(await judgeWrite(store, join(root, 'plain.ts')), 'allow');
+    } finally {
+        rmSync(root, { recursive: true });
+    }
 });

@@ -141,9 +141,11 @@ function swarm(d, ws, orch, workers) {
   return result => path.join(d, `${ws}-${result}.md`)
 }
 
+// Manifests written a moment ago count as fresh; 0 lets these tests prune what they just wrote.
 function prune(d, panes, ...args) {
+  const fresh = args[0] === '--fresh-ms' ? (args.shift(), args.shift()) : '0'
   const r = spawnSync(process.execPath, [script, 'prune', ...args], {
-    env: { ...process.env, SWARM_MANIFEST_DIR: d }, encoding: 'utf8', input: JSON.stringify(panes),
+    env: { ...process.env, SWARM_MANIFEST_DIR: d, SWARM_PRUNE_FRESH_MS: fresh }, encoding: 'utf8', input: JSON.stringify(panes),
   })
   return { ...r, out: r.status === 0 ? JSON.parse(r.stdout) : null }
 }
@@ -154,7 +156,7 @@ test('prune drops a dead worker only once its result is old; live panes and resu
   swarm(d, 'live', 'orch', [['old', 30], ['fresh', 2], ['nores', null], ['alive', 30]])
   const r = prune(d, [{ id: 'orch', workspace_id: 'live' }, { id: 'alive', workspace_id: 'live' }])
   assert.equal(r.status, 0, r.stderr)
-  assert.deepEqual(r.out, { droppedWorkers: ['old'], deletedManifests: [] })
+  assert.deepEqual(r.out, { droppedWorkers: ['old'], deletedManifests: [], removedExits: [] })
   assert.deepEqual(workersOf(d, 'live'), ['fresh', 'nores', 'alive'])
   assert.equal(fs.existsSync(path.join(d, 'live-old.md')), true, 'result files always stay')
   assert.deepEqual(prune(d, [{ id: 'orch', workspace_id: 'live' }], '--older-than-minutes', '1').out.droppedWorkers, ['fresh', 'alive'])
@@ -165,7 +167,7 @@ test('prune of a dead coordinator drops its dead workers and deletes the file wh
   swarm(d, 'dead', 'orch', [['a', null], ['b', 1]])
   swarm(d, 'half', 'orch2', [['c', null], ['d', null]])
   const r = prune(d, [{ id: 'other', workspace_id: 'x' }, { id: 'd', workspace_id: 'half' }])
-  assert.deepEqual(r.out, { droppedWorkers: ['a', 'b', 'c'], deletedManifests: ['dead'] })
+  assert.deepEqual(r.out, { droppedWorkers: ['a', 'b', 'c'], deletedManifests: ['dead'], removedExits: [] })
   assert.deepEqual(fs.readdirSync(d).filter((n) => n.endsWith('.json')), ['half.json'], 'a live worker pane keeps its manifest')
   assert.deepEqual(workersOf(d, 'half'), ['d'])
   assert.equal(fs.existsSync(path.join(d, 'dead-b.md')), true, 'results stay')
@@ -176,8 +178,27 @@ test('prune treats a coordinator in another workspace as gone, and --keep protec
   swarm(d, 'mine', 'old-orch', [['a', null]])
   swarm(d, 'wrongws', 'o2', [['b', null]])
   const r = prune(d, [{ id: 'new-orch', workspace_id: 'mine' }, { id: 'o2', workspace_id: 'elsewhere' }], '--keep', 'mine')
-  assert.deepEqual(r.out, { droppedWorkers: ['b'], deletedManifests: ['wrongws'] }, 'a coordinator in another workspace is not the swarm\'s coordinator')
+  assert.deepEqual(r.out, { droppedWorkers: ['b'], deletedManifests: ['wrongws'], removedExits: [] }, 'a coordinator in another workspace is not the swarm\'s coordinator')
   assert.deepEqual(workersOf(d, 'mine'), ['a'], '--keep: nothing of the current swarm goes')
+})
+
+test('prune leaves another swarm\'s manifest written in the last minute alone, but still prunes its own', () => {
+  const d = tmpDir()
+  swarm(d, 'busy', 'gone-orch', [['a', null]])
+  swarm(d, 'mine', 'orch', [['old', 30]])
+  const r = prune(d, [{ id: 'orch', workspace_id: 'mine' }], '--fresh-ms', '60000', '--keep', 'mine')
+  assert.deepEqual(r.out, { droppedWorkers: ['old'], deletedManifests: [], removedExits: [] })
+  assert.deepEqual(workersOf(d, 'busy'), ['a'], 'a coordinator may be adding a worker to it right now')
+})
+
+test('prune removes the exit files of closed panes and keeps those of live panes', () => {
+  const d = tmpDir()
+  swarm(d, 'live', 'orch', [])
+  fs.mkdirSync(path.join(d, 'exits'))
+  for (const pane of ['closed', 'alive']) fs.writeFileSync(path.join(d, 'exits', `${pane}.json`), '{"reason":"x"}')
+  const r = prune(d, [{ id: 'orch', workspace_id: 'live' }, { id: 'alive', workspace_id: 'live' }])
+  assert.deepEqual(r.out.removedExits, ['closed'])
+  assert.deepEqual(fs.readdirSync(path.join(d, 'exits')), ['alive.json'])
 })
 
 test('prune re-parents children of a dropped worker and refuses an empty or malformed pane list', () => {
