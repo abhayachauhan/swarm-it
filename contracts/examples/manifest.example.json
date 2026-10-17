@@ -8,7 +8,12 @@
       "task": "Investigate lag in the repo list and propose a fix",
       "resultPath": "/Users/you/repos/example/.swarm/repo-lag.md",
       "worktreePath": "/Users/you/repos/example-wt-repo-lag",
-      "parent": null
+      "parent": null,
+      "taskPath": "/Users/you/repos/plans/repo-lag.md",
+      "model": "sonnet",
+      "mode": "auto",
+      "dir": "/Users/you/repos/example-wt-repo-lag",
+      "startedAt": "2026-10-17T01:02:03Z"
     },
     {
       "paneID": "pane-w-2",

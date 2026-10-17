@@ -26,11 +26,18 @@ bad() { echo "$1" >&2; exit 1; }
 [ -f "$task" ] || { echo "no task file: $task" >&2; exit 1; }
 task=$(cd "$(dirname "$task")" && pwd)/$(basename "$task")
 [[ $task =~ ^[A-Za-z0-9._/~-]+$ ]] || bad "task path must be letters, digits, dot, dash, underscore or slash"
+# The manifest records dir so swarm-retry can start the worker again: it must be absolute, with no `..`.
+dir=$(cd "${dir/#\~/$HOME}" 2>/dev/null && pwd) || bad "no such directory: $dir"
+[[ $dir =~ ^[A-Za-z0-9._/-]+$ ]] || bad "dir must be letters, digits, dot, dash, underscore or slash"
 
 MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
 RES="$HOME/.kelpi-swarm/results"
-mkdir -p "$RES"
-rm -f "$RES/$label.md"
+mkdir -p "$RES/archive"
+# Reusing a label keeps the old result under results/archive/ (the rail only reads results/<label>.md).
+if [ -e "$RES/$label.md" ]; then
+  mv -n "$RES/$label.md" "$RES/archive/$label.$(date -u +%Y%m%dT%H%M%SZ).md"
+  [ ! -e "$RES/$label.md" ] || { echo "cannot archive the old result for $label" >&2; exit 1; }
+fi
 
 orch=$(kelpi pane id)
 me=$(kelpi pane list --json | jq -c --arg p "$orch" '.[] | select(.id == $p)')
@@ -40,6 +47,8 @@ ws=$(jq -r '.workspace_id' <<<"$me")
 node "$MW" show "$ws" >/dev/null 2>&1 || node "$MW" init "$ws" "$orch" coordinator >/dev/null
 # A restarted coordinator gets a new pane id; the rail ignores a swarm whose coordinator pane is gone.
 [ "$(node "$MW" show "$ws" | jq -r '.orchestrator.paneID')" = "$orch" ] || node "$MW" set-orchestrator "$ws" "$orch" >/dev/null
+# Drop dead workers and dead swarms' manifests. After set-orchestrator, so a restarted coordinator keeps its own manifest.
+kelpi pane list --json | node "$MW" prune --keep "$ws" >/dev/null 2>&1 || echo "warning: could not prune old swarm manifests" >&2
 # Label the coordinator pane so it is easy to spot; never rename a pane the user already labelled.
 [ "$(jq -r '.label // empty' <<<"$me")" ] || kelpi pane name --target "$orch" coordinator >/dev/null
 
@@ -53,7 +62,8 @@ if [ -n "$workers" ]; then
 else
   pane=$(kelpi pane split --name "$label" --path "$dir" --json | jq -r '.pane_id // .id')
 fi
-node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" >/dev/null
+node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" \
+  --task-path "$task" --model "$model" --mode "$mode" --dir "$dir" --started-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
 
 FORMAT="Write the result as markdown with three headings, ## Goal, ## Done and ## Next. Goal is one plain sentence saying what you were asked to do. Done is at most three short bullets saying what is now true or what you found, in plain words, with no code, file dumps or tool narration. Next is at most two bullets of what a human must decide or do, or the words Nothing pending. Keep the whole file under 80 words."
 

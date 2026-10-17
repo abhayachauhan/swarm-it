@@ -117,6 +117,10 @@ You need Kelpi, Claude Code, and Kelpi's Claude Code hooks (`kelpi install-hooks
 
 - `skills/swarm-it/swarm-spawn` splits a pane, adds it to the swarm manifest (`~/.kelpi-swarm/<workspace>.json`),
   and starts `claude -p` on a task file. `swarm-wait` waits until every result file exists, a pane closes, or a worker's Claude ends with no result.
+- Each worker's manifest entry also records `taskPath`, `model`, `mode`, `dir` and `startedAt`. `swarm-retry
+  <pane-id>:<label>` uses them to start a dead worker again. `swarm-spawn` first prunes dead workers and dead
+  swarms' manifests (`manifest-writer prune`), and moves the old result of a reused label to
+  `results/archive/`. Result files are never deleted.
 - Results live in `~/.kelpi-swarm/results/`. The rail refuses to read files outside that folder or a worker's
   trusted worktree.
 - The plugin reads worker screens to spot Claude's permission prompts. Approving sends a single Enter, and

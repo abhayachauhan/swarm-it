@@ -105,6 +105,8 @@ export function createStore(api) {
         manifestWorkers: [],
         /** Every live swarm: { workspaceID, name, orchestrator, workers }. Only their Request cards are shown globally. */
         swarms: [],
+        /** Manifests whose coordinator pane is gone; kept only so auto-clean can tidy their closed workers. */
+        deadSwarms: [],
         /** Worker pane id to { misses, label, swarmName, swarmWorkspaceID } while it waits for input with no prompt parsed. */
         unparsed: new Map(),
         panes: new Map(),
@@ -469,7 +471,7 @@ export const HISTORY_CAP = 500;
  */
 export function pruneHistory(store, cap = HISTORY_CAP) {
     const keep = new Set([...store.panes.keys(), ...store.manifestWorkers.map(w => w.paneID),
-        ...store.swarms.flatMap(s => [s.orchestrator?.paneID, ...s.workers.map(w => w.paneID)])]);
+        ...[...store.swarms, ...store.deadSwarms].flatMap(s => [s.orchestrator?.paneID, ...s.workers.map(w => w.paneID)])]);
     const trim = ids => {
         let extra = ids.filter(id => !keep.has(id)).length - cap;
         return extra > 0 ? ids.filter(id => keep.has(id) || extra-- <= 0) : null;
