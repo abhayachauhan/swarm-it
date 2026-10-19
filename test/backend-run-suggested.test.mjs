@@ -101,13 +101,14 @@ test('confirm refuses a target pane outside the source pane\'s workspace', async
     assert.equal(api.callsTo('terminal.send').length, 0);
 });
 
-test('a ! suggestion defaults to Claude\'s own session; other commands, a busy Claude or many lines default to a new pane', async () => {
+test('a one-line suggestion defaults to Claude\'s own session; a busy Claude or many lines default to a new pane', async () => {
     const { defaultTarget } = modules.suggested;
     const claude = { id: 'c1', agent: 'claude', status: 'idle' };
     assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, claude), 'c1');
     assert.equal(defaultTarget({ kind: 'inline', command: 'aws sso login' }, claude), 'c1');
-    assert.equal(defaultTarget({ kind: 'bare', command: 'curl -s x' }, claude), 'new');
-    assert.equal(defaultTarget({ kind: 'fence', command: 'ls' }, claude), 'new');
+    assert.equal(defaultTarget({ kind: 'bare', command: 'curl -s x' }, claude), 'c1');
+    assert.equal(defaultTarget({ kind: 'fence', command: 'ls' }, claude), 'c1');
+    assert.equal(defaultTarget({ kind: 'fence', command: 'cd x\nls' }, claude), 'new');
     assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running' }), 'new', 'mid-reply');
     assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running', backgroundTasks: 0 }), 'new', 'mid-reply');
     // Kelpi keeps a pane "running" after the turn ends while background shells or agents run (backgroundTasks > 0).

@@ -200,16 +200,15 @@ export function runTargets(panes, source, exclude = []) {
 }
 
 /**
- * Where Run points first: Claude's own session when Claude wrote the command with `!` (it was meant for you to run
- * there), the pane is a Claude that is not mid-reply, and the command is one line. Otherwise a new shell pane.
+ * Where Run points first: Claude's own session, so the output lands in the conversation, when the pane is a Claude
+ * that is not mid-reply and the command is one line. Otherwise a new shell pane.
  * Kelpi keeps a pane "running" after the turn ends while background shells or agents run; it reports those as
  * `backgroundTasks`, so running with background tasks is a Claude at its prompt.
  */
 export function defaultTarget(found, source) {
-    const bang = found?.kind === 'bang' || found?.kind === 'inline';
     const oneLine = typeof found?.command === 'string' && !found.command.trim().includes('\n');
     const midReply = source?.status === 'running' && !(source.backgroundTasks > 0);
-    return bang && oneLine && isAgent(source) && !midReply ? source.id : 'new';
+    return oneLine && isAgent(source) && !midReply ? source.id : 'new';
 }
 
 /** Text typed into an agent pane runs as Claude Code's `!` shell command, so its output lands in the session. */
