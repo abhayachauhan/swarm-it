@@ -109,6 +109,9 @@ test('a ! suggestion defaults to Claude\'s own session; other commands, a busy C
     assert.equal(defaultTarget({ kind: 'bare', command: 'curl -s x' }, claude), 'new');
     assert.equal(defaultTarget({ kind: 'fence', command: 'ls' }, claude), 'new');
     assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running' }), 'new', 'mid-reply');
+    assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running', backgroundTasks: 0 }), 'new', 'mid-reply');
+    // Kelpi keeps a pane "running" after the turn ends while background shells or agents run (backgroundTasks > 0).
+    assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running', backgroundTasks: 2 }), 'c1', 'turn over, background work left');
     assert.equal(defaultTarget({ kind: 'bang', command: 'a\nb' }, claude), 'new');
     assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { id: 's1' }), 'new', 'not a Claude pane');
     const { api } = await setup();

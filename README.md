@@ -121,7 +121,9 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
 When Claude asks you to run a command yourself (a line starting `! `, a code block, or a command in its
 reply), press `cmd+shift+u` or the pane header button. The plugin finds the last suggestion, rejoins it
 where the terminal wrapped it, and shows it in an editable box. Nothing runs until you press **Run**. It can
-run in a new shell pane beside Claude, or in another shell pane in the same workspace. **Copy** puts the
+run in a new shell pane beside Claude, or in another shell pane in the same workspace. A one-line `! `
+command defaults to Claude's own pane, so its output lands in the conversation, unless Claude is mid-reply.
+Background shells or agents still running after Claude's reply do not count as mid-reply. **Copy** puts the
 fixed command on the clipboard instead.
 
 ### Restart Claude
