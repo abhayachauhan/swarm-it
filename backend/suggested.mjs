@@ -4,6 +4,7 @@
 // the run view's Run button sent `confirmed: true`.
 import { spawn } from 'node:child_process';
 import { textProblem } from './actions.mjs';
+import { parsePrompt } from './notify.mjs';
 import { CAPTURE_TIMEOUT_MS } from './store.mjs';
 import { withTimeout } from './safepath.mjs';
 
@@ -189,7 +190,7 @@ export async function suggestionIn(api, paneID) {
         return fail(`capture failed: ${message(error)}`, 'CAPTURE_FAILED');
     }
     const found = findSuggested(captured);
-    return found ? { ok: true, ...found } : fail('no suggested command found in this pane', 'NO_COMMAND');
+    return found ? { ok: true, ...found, promptOpen: parsePrompt(captured) !== null } : fail('no suggested command found in this pane', 'NO_COMMAND');
 }
 
 /** Panes the run view offers besides "a new shell pane": shells in the source pane's workspace, agents marked. */
@@ -201,14 +202,15 @@ export function runTargets(panes, source, exclude = []) {
 
 /**
  * Where Run points first: Claude's own session, so the output lands in the conversation, when the pane is a Claude
- * that is not mid-reply and the command is one line. Otherwise a new shell pane.
- * Kelpi keeps a pane "running" after the turn ends while background shells or agents run; it reports those as
- * `backgroundTasks`, so running with background tasks is a Claude at its prompt.
+ * that is not mid-reply, shows no permission prompt (Run presses Enter) and the command is one line. Otherwise a new
+ * shell pane. Kelpi's "running" can outlast the turn: it holds while background shells or agents run (reported as
+ * `backgroundTasks`), and sometimes sticks after the turn ends. Claude Code's own title starts with ✳ when idle.
  */
 export function defaultTarget(found, source) {
     const oneLine = typeof found?.command === 'string' && !found.command.trim().includes('\n');
-    const midReply = source?.status === 'running' && !(source.backgroundTasks > 0);
-    return oneLine && isAgent(source) && !midReply ? source.id : 'new';
+    const idleTitle = /^✳\s/.test(source?.title ?? '');
+    const midReply = source?.status === 'running' && !(source.backgroundTasks > 0) && !idleTitle;
+    return oneLine && !found.promptOpen && isAgent(source) && !midReply ? source.id : 'new';
 }
 
 /** Text typed into an agent pane runs as Claude Code's `!` shell command, so its output lands in the session. */

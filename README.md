@@ -122,8 +122,9 @@ When Claude asks you to run a command yourself (a line starting `! `, a code blo
 reply), press `cmd+shift+u` or the pane header button. The plugin finds the last suggestion, rejoins it
 where the terminal wrapped it, and shows it in an editable box. Nothing runs until you press **Run**. It can
 run in a new shell pane beside Claude, or in another shell pane in the same workspace. A one-line
-command defaults to Claude's own pane, so its output lands in the conversation, unless Claude is mid-reply.
-Background shells or agents still running after Claude's reply do not count as mid-reply. **Copy** puts the
+command defaults to Claude's own pane, so its output lands in the conversation, unless Claude is mid-reply
+or showing a permission prompt. Background shells or agents still running after Claude's reply do not count
+as mid-reply. **Copy** puts the
 fixed command on the clipboard instead.
 
 ### Restart Claude

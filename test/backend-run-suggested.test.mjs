@@ -113,11 +113,23 @@ test('a one-line suggestion defaults to Claude\'s own session; a busy Claude or 
     assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running', backgroundTasks: 0 }), 'new', 'mid-reply');
     // Kelpi keeps a pane "running" after the turn ends while background shells or agents run (backgroundTasks > 0).
     assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running', backgroundTasks: 2 }), 'c1', 'turn over, background work left');
+    // Kelpi's status can stay "running" after the turn ends; Claude Code's own title says idle with a leading ✳.
+    assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running', title: '✳ EC2 warm pool' }), 'c1', 'stale running, idle title');
+    assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { ...claude, status: 'running', title: '◑ EC2 warm pool' }), 'new', 'spinner title');
+    assert.equal(defaultTarget({ kind: 'bang', command: 'ls', promptOpen: true }, { ...claude, title: '✳ EC2 warm pool' }), 'new', 'permission prompt showing');
     assert.equal(defaultTarget({ kind: 'bang', command: 'a\nb' }, claude), 'new');
     assert.equal(defaultTarget({ kind: 'bang', command: 'ls' }, { id: 's1' }), 'new', 'not a Claude pane');
     const { api } = await setup();
     await api.command('run-suggested', {}, { paneID: 'c1' });
     assert.equal(api.callsTo('openView')[0].args[1].state.defaultTarget, 'c1');
+});
+
+test('run-suggested defaults to a new pane while Claude shows a permission prompt, since Run presses Enter', async () => {
+    const PROMPT = ['╭──────────────────╮', ' Bash command', '', '   npm test', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n');
+    const { api } = await setup({ captures: { c1: `${CLAUDE}\n${PROMPT}`, s1: '$' } });
+    const result = await api.command('run-suggested', {}, { paneID: 'c1' });
+    assert.equal(result.command, JOINED);
+    assert.equal(api.callsTo('openView')[0].args[1].state.defaultTarget, 'new');
 });
 
 test('copy-suggested puts the joined command on the clipboard, or opens the view when there is none', async () => {
