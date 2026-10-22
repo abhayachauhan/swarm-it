@@ -60,15 +60,20 @@ For a larger change, ask for separate Codex and Claude reviews with distinct foc
 
 ### Hand off between Claude and Codex
 
-In a Kelpi pane, tell the current agent **“hand this goal off to Codex”** or **“hand this goal off
-to Claude.”** The shared skill asks that agent to write a short Goal / Key points / Next summary.
-The plugin saves it privately under `~/.kelpi-swarm/handoffs/`, opens a new pane in the same
-workspace, and starts the other CLI with the summary as context. The original conversation stays
-open. The receiving agent checks the current files before continuing; the handoff does not copy the
-full chat or its hidden tool state.
+Click **Hand off to other CLI** in the pane header or pane menu. Kelpi takes that pane's session
+ID, finds its exact local transcript, opens the other CLI in the same working directory, and asks
+it to read the transcript, summarize the current goal and key points, and continue the work.
+The source pane closes shortly after Kelpi sends the target command. If Kelpi has no session ID
+or cannot find the transcript, it leaves the source open and reports the error.
 
-The plugin command is `local.swarm-view.handoff`. The skill calls it through
-`node skills/swarm-it/swarm-handoff.mjs --from codex --to claude` (or the reverse) with a JSON
+You can also tell the current agent **“hand this goal off to Codex”** or **“hand this goal off to
+Claude.”** The agent writes a short Goal / Key points / Next summary, and the plugin saves it
+privately under `~/.kelpi-swarm/handoffs/` for the receiving CLI. A Claude session ID cannot be
+resumed by Codex, or a Codex ID by Claude; the ID identifies the source transcript instead.
+
+The button runs `local.swarm-view.request-handoff`. The conversational path uses
+`local.swarm-view.handoff`; the skill calls it through
+`node skills/swarm-it/swarm-handoff.mjs --from codex --to claude --quit-source` (or the reverse) with a JSON
 summary on standard input. It requires `KELPI_PANE_ID`, which Kelpi sets in its panes.
 
 ### Workers that stop without a result

@@ -23,7 +23,7 @@ export const COMMANDS = [
     'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
     'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
-    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff'
+    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff'
 ].map(name => `${PLUGIN_ID}.${name}`);
 export const COUNTS_ITEM = `${PLUGIN_ID}.counts`;
 export const SNAPSHOT_EVENT = 'snapshot';
@@ -788,6 +788,7 @@ export function registerAll(api, deps = modules) {
     command('capture-worker', async args => needPane(args) ?? X.captureWorker(api, st, args.paneID, args.lines));
     command('send-to-worker', async args => needPane(args) ?? X.sendToWorker(api, st, args.paneID, args.text));
     command('handoff', async args => H.handoff(api, st, args));
+    command('request-handoff', async (args, context) => H.requestHandoff(api, st, args, context));
     command('open-result', async args => opensResult(args, () => X.openResult(api, st, args.paneID)));
     command('dismiss-worker', async args => needPane(args) ?? after(await X.dismissWorker(api, st, args.paneID)));
     command('approve', async args => needItem(args) ?? after(await X.approve(api, st, args.itemID, args.promptHash)));

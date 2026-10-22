@@ -162,6 +162,15 @@ Finding the suggestion (`findSuggested`): the LAST of a line starting `! ` (afte
 
 The run view shows the command in an editable text box and a "Run in" menu: "A new shell pane next to this one", then the source workspace's shell panes (agents labelled). The menu starts on `defaultTarget` (`defaultTarget()` in `backend/suggested.mjs`): the source pane itself, so the output lands in the conversation, when the command is one line (any kind: `! ` line, inline, fenced or bare), the pane is a Claude that is not mid-reply, and the capture shows no permission prompt (`parsePrompt`; `run-suggested` passes it as `promptOpen`, because Run presses Enter); otherwise the new shell pane. Run on an agent pane types the text as one `! ` line. Mid-reply means `status === 'running'` with no `backgroundTasks` and a title that does not start with `✳ `. Kelpi's `running` can outlast the turn: it holds while background shells or agents run (their count is `backgroundTasks`), and it can stick after the turn ends with no background tasks. Claude Code sets its own title to `✳ <topic>` when idle and a spinner glyph when busy. Run, Copy and Cancel; empty text, control characters and invisible format characters (`\p{Cf}`: bidi overrides, zero-width) are refused in the view as well as in the backend. A multi-line command shows "N lines: each runs as its own command." and the text box grows to fit (up to 20 rows).
 
+## Hand off between Claude and Codex
+
+| Command | Args | Result | Notes |
+|---|---|---|---|
+| `local.swarm-view.request-handoff` | `{ paneID? }` | `{ ok, paneID, fromAgent, toAgent, sourceSessionID, sourceCloseScheduled, handoffPath }` | Pane header and menu action. Uses the invocation pane's session ID to find its exact local Claude or Codex transcript. Opens the other CLI in the same directory, instructs it to read and summarize the transcript, and closes the source a few seconds after sending the target command. On a missing ID or transcript, reports an error and keeps the source open. |
+| `local.swarm-view.handoff` | `{ sourcePaneID, fromAgent, toAgent, goal, keyPoints, next?, sourceSessionID?, quitSource? }` | `{ ok, paneID, fromAgent, toAgent, sourceSessionID, sourceCloseScheduled, handoffPath }` | Conversational handoff with a source-authored summary. Saves a private Markdown file under the manifest directory's `handoffs/` folder. `quitSource` closes the source after sending the target command. |
+
+The source session ID identifies a transcript; it is never passed to the receiving CLI's native resume command.
+
 ## Added: restart Claude
 
 "Restart Claude (quit and resume)" is in the pane header, the pane menu (`when: { "pane.type": "shell" }`) and the palette. Logic in `backend/restart.mjs`.
