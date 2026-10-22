@@ -6,7 +6,7 @@
 import { posix } from 'node:path';
 import { realpath, lstat, stat } from 'node:fs/promises';
 import { approve } from './actions.mjs';
-import { ownedRequestPane, otherSwarmPane } from './store.mjs';
+import { actionableWorker, ownedRequestPane, otherSwarmPane } from './store.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
 
@@ -536,7 +536,14 @@ export async function decide(store, args, now = Date.now(), mono = performance.n
         // Kelpi only asks the selected provider, but until checkProvider confirms it, the screen path is the one answering.
         if (!a.provider.active) { entry({ ok: false, reason: 'swarm-it is not confirmed as the active provider yet; the screen path answers', code: 'NOT_ACTIVE' }); return ABSTAIN; }
         if (args.agent !== 'claude' && args.agent !== 'codex') return leave('unknown agent', 'AGENT');
-        if (args.agent === 'codex' && (args.toolName !== 'Bash' || store.panes.get(paneID)?.agent !== 'codex')) {
+        const pane = store.panes.get(paneID);
+        const other = otherSwarmPane(store, paneID);
+        const recordedWorker = actionableWorker(store, paneID) ?? (other?.role === 'worker' ? other.swarm.workers.find(w => w.paneID === paneID) : null);
+        // Kelpi can leave agent blank for an active Codex TUI. In that case require a live, owned Codex worker
+        // whose result has not landed; an explicitly different agent or an unknown pane never qualifies.
+        const codexPane = pane?.agent === 'codex' || (pane && !pane.agent && (pane.type ?? 'shell') === 'shell'
+            && recordedWorker?.agent === 'codex' && store.resultExists.get(paneID) !== true);
+        if (args.agent === 'codex' && (args.toolName !== 'Bash' || !codexPane)) {
             return leave('Codex request is not a verified Bash pane', 'AGENT');
         }
         if (!judged.allow) return leave(judged.reason, judged.code, judged.rule ? { rule: judged.rule } : {});

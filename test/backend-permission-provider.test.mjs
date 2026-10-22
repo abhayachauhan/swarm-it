@@ -93,6 +93,22 @@ test('a verified Codex Bash pane shares the Auto policy; other Codex requests ab
     assert.deepEqual(await AA.decide(store, { paneID: 'codex-pane', agent: 'codex', toolName: 'apply_patch', toolInput: { command: '*** Begin Patch' } }), ABSTAIN);
 });
 
+test('a live manifest Codex worker qualifies when Kelpi leaves agent metadata blank', async () => {
+    const store = activeStore();
+    store.panes.set('codex-pane', { id: 'codex-pane', agent: null, type: 'shell', workspaceID: 'ws1', status: 'idle' });
+    store.manifestWorkers.push({ paneID: 'codex-pane', agent: 'codex' });
+    const args = { paneID: 'codex-pane', agent: 'codex', toolName: 'Bash', toolInput: { command: 'pwd' } };
+    assert.deepEqual(await AA.decide(store, args), ALLOW);
+    store.resultExists.set('codex-pane', true);
+    assert.deepEqual(await AA.decide(store, args), ABSTAIN, 'completed worker');
+    store.resultExists.set('codex-pane', false);
+    store.panes.get('codex-pane').agent = 'claude';
+    assert.deepEqual(await AA.decide(store, args), ABSTAIN, 'explicitly different agent');
+    store.panes.get('codex-pane').agent = null;
+    store.manifestWorkers.length = 0;
+    assert.deepEqual(await AA.decide(store, args), ABSTAIN, 'unowned pane');
+});
+
 test('a never-list command abstains: swarm-it rules first, then the Kelpi example rules, then multi-line and length', async () => {
     const { api, dispose } = await start({ permissions: SELECTED });
     await api.command('auto-approve', { on: true });
