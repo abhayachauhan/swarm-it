@@ -1,5 +1,7 @@
 # Claude and Codex support plan
 
+> Historical implementation plan from October 2026. Versions and remaining checks below describe that planning snapshot. For current behavior, see the [README](../README.md), [feature guide](features.md), and [setup guide](setup.md).
+
 ## Current baseline (22 October 2026)
 
 - This checkout is `local.swarm-view` 0.1.0. Worker creation and retry launch `claude -p`; the manifest has no agent kind. Follow-up, restart, prompt recognition, auto-approve fallback, and “run suggested command” contain Claude-specific behavior.
