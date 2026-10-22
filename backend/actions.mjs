@@ -172,6 +172,21 @@ export async function openResult(api, store, paneID) {
     return { ok: true, path: checked.path };
 }
 
+/** Open an explicit http(s) result link beside its worker, never an arbitrary URL scheme. */
+export async function openWebLink(api, store, paneID, url) {
+    if (typeof paneID !== 'string' || !worker(store, paneID)) return fail('pane is not a worker in the manifest', 'NOT_WORKER');
+    if (typeof url !== 'string' || url.length > 2048) return fail('invalid web link', 'BAD_URL');
+    let parsed;
+    try { parsed = new URL(url); } catch { return fail('invalid web link', 'BAD_URL'); }
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+        return fail('only ordinary http(s) links can be opened', 'BAD_URL');
+    }
+    try {
+        const result = await api.command({ command: 'web-open', url: parsed.toString(), pane_id: paneID, target: paneID, direction: 'horizontal', focus: true });
+        return result?.ok ? { ok: true } : fail(result?.error || 'Kelpi could not open the link', 'OPEN_FAILED');
+    } catch (error) { return fail(`Kelpi could not open the link: ${message(error)}`, 'OPEN_FAILED'); }
+}
+
 export async function captureWorker(api, store, paneID, lines = 60) {
     if (typeof paneID !== 'string' || !paneID) return fail('paneID is required', 'BAD_ARGS');
     if (!worker(store, paneID)) return fail(`pane ${paneID} is not a worker in the manifest`, 'NOT_WORKER');

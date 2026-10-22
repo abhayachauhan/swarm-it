@@ -21,7 +21,7 @@ import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 export const PLUGIN_ID = 'local.swarm-view';
 export const COMMANDS = [
     'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
-    'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result',
+    'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
     'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff'
 ].map(name => `${PLUGIN_ID}.${name}`);
@@ -801,6 +801,7 @@ export function registerAll(api, deps = modules) {
     command('handoff', async args => H.handoff(api, st, args));
     command('request-handoff', async (args, context) => H.requestHandoff(api, st, args, context));
     command('open-result', async args => opensResult(args, () => X.openResult(api, st, args.paneID)));
+    command('open-web-link', async args => needPane(args) ?? X.openWebLink(api, st, args.paneID, args.url));
     command('dismiss-worker', async args => needPane(args) ?? after(await X.dismissWorker(api, st, args.paneID)));
     command('approve', async args => needItem(args) ?? after(await X.approve(api, st, args.itemID, args.promptHash)));
     command('deny', async args => needItem(args) ?? after(await X.deny(api, st, args.itemID)));

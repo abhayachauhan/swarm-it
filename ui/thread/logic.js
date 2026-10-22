@@ -124,6 +124,33 @@ export function normalizeMessage(text) {
     return typeof text === 'string' ? text.trim() : '';
 }
 
+/** Split result prose into plain text and safe web links without interpreting HTML or Markdown. */
+export function linkSegments(text) {
+    if (typeof text !== 'string' || !text) return [];
+    const segments = [];
+    const pattern = /\[([^\]\n]+)\]\((https?:\/\/[^\s)`]+)\)|(https?:\/\/[^\s<>"'`\])]+)/gi;
+    let start = 0;
+    for (const match of text.matchAll(pattern)) {
+        const at = match.index;
+        if (at > start) segments.push({ text: text.slice(start, at) });
+        const raw = match[2] ?? match[3];
+        const url = raw.replace(/[.,;:!?]+$/, '');
+        let safe = false;
+        try {
+            const parsed = new URL(url);
+            safe = (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname)
+                && !parsed.username && !parsed.password && url.length <= 2048;
+        } catch { /* leave malformed URLs as text */ }
+        if (safe) {
+            segments.push({ text: match[1] ?? url, url });
+            if (url.length < raw.length) segments.push({ text: raw.slice(url.length) });
+        } else segments.push({ text: match[0] });
+        start = at + match[0].length;
+    }
+    if (start < text.length) segments.push({ text: text.slice(start) });
+    return segments;
+}
+
 /** Error text from a CommandResult-ish value, or '' when ok. */
 export function resultError(result) {
     if (result && result.ok === true) return '';

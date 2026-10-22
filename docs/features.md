@@ -23,6 +23,8 @@ Workers live together in a shared **Workers** workspace inside a collapsed Group
 
 Each worker writes a result with **Goal**, **Done**, and **Next**. Open the result view to read it, reload the file, or send a follow-up to the same worker conversation. If a worker exits without a result, Kelpi hook events can turn that into a stopped row with a reason. `swarm-wait` reports the failure to the coordinator.
 
+Web URLs and Markdown web links in a result are clickable and open in a Kelpi web pane. In a Codex terminal pane, Kelpi 0.2.22 supports a plain click on a web link to choose **Open in Kelpi**, **Open in Browser**, or **Copy Link**; ⌘-click opens it directly according to Settings → General → Links. Kelpi also recognises Codex's OSC 8 links, whose visible title may hide the URL. Local source-file references are not currently opened by Kelpi's terminal link handler; it opens existing Markdown and CSV/TSV paths. Copy a source path from the terminal if you need to open it elsewhere.
+
 Finished worker panes close after 10 minutes by default. The result stays on disk. A dirty worktree stays open so it can be inspected. Set `autoCleanMinutes` to `0` to turn off automatic pane cleanup.
 
 ## Hand the goal to the other CLI

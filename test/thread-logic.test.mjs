@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
     parseSummary, firstLines, findWorker, pendingRequest, formatElapsed, stateLabel,
-    availableActions, normalizeMessage, resultError, paneIDFromState, sectionStart,
+    availableActions, normalizeMessage, linkSegments, resultError, paneIDFromState, sectionStart,
 } from '../ui/thread/logic.js';
 
 const fixture = name => readFileSync(fileURLToPath(new URL(`../ui/thread/fixtures/${name}`, import.meta.url)), 'utf8');
@@ -144,6 +144,17 @@ test('normalizeMessage, resultError, paneIDFromState', () => {
     assert.equal(paneIDFromState({ paneID: 'p1' }), 'p1');
     assert.equal(paneIDFromState({}), null);
     assert.equal(paneIDFromState(null), null);
+});
+
+test('result links keep surrounding prose and reject unsafe or malformed targets', () => {
+    assert.deepEqual(linkSegments('See [the guide](https://example.com/docs), then https://example.org/a.'), [
+        { text: 'See ' }, { text: 'the guide', url: 'https://example.com/docs' }, { text: ', then ' },
+        { text: 'https://example.org/a', url: 'https://example.org/a' }, { text: '.' },
+    ]);
+    assert.deepEqual(linkSegments('[run](javascript:alert(1)) <script>x</script>'), [
+        { text: '[run](javascript:alert(1)) <script>x</script>' },
+    ]);
+    assert.deepEqual(linkSegments(''), []);
 });
 
 import { createChangeLock, requestOrigin, LOCK_MS } from '../ui/thread/logic.js';

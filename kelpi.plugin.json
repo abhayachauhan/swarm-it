@@ -39,6 +39,7 @@
       { "id": "local.swarm-view.handoff", "title": "Swarm: hand off a goal between Claude and Codex" },
       { "id": "local.swarm-view.request-handoff", "title": "Hand off to other CLI" },
       { "id": "local.swarm-view.open-result", "title": "Swarm: open worker result file" },
+      { "id": "local.swarm-view.open-web-link", "title": "Swarm: open a result web link" },
       { "id": "local.swarm-view.auto-approve", "title": "Swarm: auto-approve permission requests (on/off, hours)" },
       { "id": "local.swarm-view.auto-approve-log", "title": "Swarm: list or clear the auto-approve log" },
       { "id": "local.swarm-view.dismiss-worker", "title": "Swarm: dismiss a worker whose pane is closed" },

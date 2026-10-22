@@ -34,7 +34,7 @@ async function bootThread({ snapshot = fixture(), paneID = 'p-wait', execute } =
     };
     const byId = {};
     for (const [, tag, id] of HTML.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) { const node = new FakeNode(tag); node.attrs.id = id; node.hidden = false; node.value = ''; byId[id] = node; }
-    const document = { getElementById: id => byId[id] ?? null };
+    const document = { getElementById: id => byId[id] ?? null, createElement: tag => new FakeNode(tag) };
     const calls = [], listeners = [];
     const api = {
         ready: Promise.resolve(), state: { paneID },
@@ -49,7 +49,7 @@ async function bootThread({ snapshot = fixture(), paneID = 'p-wait', execute } =
                 return { ok: true };
             },
         },
-        ui: { reveal: async () => {} },
+        ui: { reveal: async id => { calls.push({ command: 'reveal', args: { paneID: id } }); } },
     };
     const window = { kelpi: api };
     // app.js is an ES module whose only import is ./logic.js: bind that import to the real module and run the rest as
@@ -97,6 +97,7 @@ test('the request card names its origin, locks Approve and Deny for 500 ms after
     assert.equal(view.$('requestCommand').textContent, 'npm test');
     assert.equal(view.$('approve').disabled, true, 'just appeared: locked');
     assert.equal(view.$('deny').disabled, true);
+    assert.equal(view.$('answerInPane').hidden, true);
     await view.advance(600);
     assert.equal(view.$('approve').disabled, false, 'the lock lifted and the view redrew by itself');
     assert.equal(view.$('deny').disabled, false);
@@ -110,8 +111,36 @@ test('the request card names its origin, locks Approve and Deny for 500 ms after
     await view.advance(600);
     assert.equal(view.$('approve').disabled, true);
     assert.equal(view.$('deny').disabled, true);
+    assert.equal(view.$('answerInPane').hidden, false);
     assert.match(view.$('requestCommand').textContent, /^Unrecognised prompt\. Answer it in the pane\.\n\nWeird thing/);
     // No worker for the pane: the origin is the pane id alone.
     const other = await bootThread({ paneID: 'p-orch' });
     assert.equal(other.$('request').hidden, true);
+});
+
+test('Codex requests lead to their pane and never offer Claude approval keys', async () => {
+    const snap = fixture();
+    snap.workers[0].agent = 'codex';
+    const view = await bootThread({ snapshot: snap });
+    assert.equal(view.$('approve').hidden, true);
+    assert.equal(view.$('deny').hidden, true);
+    assert.equal(view.$('answerInPane').hidden, false);
+    assert.equal(view.$('requestHelp').textContent, 'Answer this request in Codex.');
+    await view.click('answerInPane');
+    assert.deepEqual(view.sent('reveal').map(c => c.args), [{ paneID: 'p-wait' }]);
+    assert.equal(view.sent('approve').length, 0);
+});
+
+test('worker result links open in Kelpi and hostile markup remains plain text', async () => {
+    const view = await bootThread({ execute: command => command === 'read-result' ? {
+        ok: true, path: '/tmp/result.md', text: '**Goal**\nRead [docs](https://example.com/a).\n**Done**\n<script>x</script>\n**Next**\nVisit https://example.org/b.'
+    } : null });
+    const goalLink = view.$('goal').children.find(node => node.className === 'result-link');
+    assert.equal(goalLink.textContent, 'docs');
+    assert.equal(goalLink.title, 'https://example.com/a');
+    goalLink.click();
+    await view.flush();
+    assert.deepEqual(view.sent('open-web-link').map(c => c.args), [{ paneID: 'p-wait', url: 'https://example.com/a' }]);
+    assert.match(view.$('done').textContent, /<script>x<\/script>/);
+    assert.equal(view.$('done').children.some(node => node.tag === 'script'), false);
 });

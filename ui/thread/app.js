@@ -1,7 +1,7 @@
 // Thread view for one worker. All file- and pane-derived text is set with textContent only.
 import {
     parseSummary, findWorker, pendingRequest, formatElapsed, stateLabel,
-    availableActions, normalizeMessage, resultError, paneIDFromState, createChangeLock, requestOrigin, coordinatorPaneID,
+    availableActions, normalizeMessage, linkSegments, resultError, paneIDFromState, createChangeLock, requestOrigin, coordinatorPaneID,
 } from './logic.js';
 
 const api = window.kelpi;
@@ -64,11 +64,17 @@ function renderRequest() {
     clearTimeout(unlockTimer);
     requestLock.observe(snapshot, paneID, Date.now());
     if (!item) return;
-    const unrecognised = item.approvable === false;
-    $('requestOrigin').textContent = requestOrigin(findWorker(snapshot, paneID), item);
-    $('requestCommand').textContent = unrecognised
+    const worker = findWorker(snapshot, paneID);
+    const codex = worker?.agent === 'codex' || item.agent === 'codex';
+    const unrecognised = item.approvable === false || codex;
+    $('requestOrigin').textContent = requestOrigin(worker, item);
+    $('requestCommand').textContent = unrecognised && !codex
         ? `Unrecognised prompt. Answer it in the pane.\n\n${item.promptBlock || item.text}`
         : item.command || item.text || '(command not captured)';
+    $('requestHelp').textContent = codex ? 'Answer this request in Codex.' : unrecognised ? 'Answer this request in the terminal.' : '';
+    $('answerInPane').hidden = !unrecognised;
+    $('approve').hidden = unrecognised;
+    $('deny').hidden = unrecognised;
     // Disabled for 500 ms after the request, its prompt or its position changed.
     const locked = requestLock.locked(Date.now());
     $('approve').disabled = unrecognised || locked;
@@ -79,16 +85,36 @@ function renderRequest() {
     if (wait > 0) unlockTimer = setTimeout(renderRequest, wait + 20);
 }
 
+async function openWebLink(url) {
+    await run('open-web-link', { paneID, url });
+}
+
+function renderLinkedText(id, value) {
+    const node = $(id);
+    node.replaceChildren();
+    for (const segment of linkSegments(value)) {
+        const part = document.createElement(segment.url ? 'button' : 'span');
+        part.textContent = segment.text;
+        if (segment.url) {
+            part.type = 'button';
+            part.className = 'result-link';
+            part.title = segment.url;
+            part.addEventListener('click', () => { void openWebLink(segment.url).catch(fail); });
+        }
+        node.append(part);
+    }
+}
+
 function renderResult(result) {
     resultPath = result?.path ?? null;
     $('resultPath').textContent = resultPath ?? 'No result file yet';
     $('openResult').disabled = !resultPath;
     const summary = parseSummary(result?.text ?? '');
-    $('goal').textContent = summary.goal;
-    $('done').textContent = summary.done;
-    $('next').textContent = summary.next;
+    renderLinkedText('goal', summary.goal);
+    renderLinkedText('done', summary.done);
+    renderLinkedText('next', summary.next);
     $('fallbackCard').hidden = summary.found || !summary.fallback;
-    $('fallback').textContent = summary.fallback;
+    renderLinkedText('fallback', summary.fallback);
 }
 
 async function loadResult() {
@@ -155,6 +181,7 @@ $('deny').onclick = () => guarded($('deny'), async () => {
     await run('deny', { itemID: $('request').dataset.itemId, promptHash: $('request').dataset.promptHash });
     await refresh();
 });
+$('answerInPane').onclick = () => guarded($('answerInPane'), async () => { await api.ui.reveal(paneID); });
 $('accept').onclick = () => guarded($('accept'), async () => { await run('accept', { paneID }); await refresh(); });
 $('dismiss').onclick = () => guarded($('dismiss'), async () => { await run('archive', { paneID }); await refresh(); });
 $('requestChanges').onclick = () => guarded($('requestChanges'), async () => {
