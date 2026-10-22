@@ -303,6 +303,7 @@ export async function run(api, store, now = Date.now()) {
     for (const item of [...store.attention]) {
         if (!a.on || a.generation !== generation) break;
         if (item.type !== 'Request' || item.handledAt || item.snoozedUntil) continue;
+        if (store.panes.get(item.paneID)?.agent === 'codex') continue;
         if (item.approvable === false) {
             if (!a.seenUnrecognised.has(item.id)) { a.seenUnrecognised.add(item.id); a.skipped += 1; changed = true; }
             continue;
@@ -534,7 +535,10 @@ export async function decide(store, args, now = Date.now(), mono = performance.n
         text = judged.text;
         // Kelpi only asks the selected provider, but until checkProvider confirms it, the screen path is the one answering.
         if (!a.provider.active) { entry({ ok: false, reason: 'swarm-it is not confirmed as the active provider yet; the screen path answers', code: 'NOT_ACTIVE' }); return ABSTAIN; }
-        if (args.agent !== 'claude') return leave('not a Claude pane', 'AGENT');
+        if (args.agent !== 'claude' && args.agent !== 'codex') return leave('unknown agent', 'AGENT');
+        if (args.agent === 'codex' && (args.toolName !== 'Bash' || store.panes.get(paneID)?.agent !== 'codex')) {
+            return leave('Codex request is not a verified Bash pane', 'AGENT');
+        }
         if (!judged.allow) return leave(judged.reason, judged.code, judged.rule ? { rule: judged.rule } : {});
         const stamps = (a.recent.get(paneID) ?? []).filter(t => now - t < RATE_WINDOW_MS);
         if (!a.paused.has(paneID) && stamps.length >= RATE_MAX) {

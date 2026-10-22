@@ -1,19 +1,19 @@
 # swarm-it
 
-Run a swarm of Claude Code workers in [Kelpi](https://github.com/benfriebe/kelpi), and keep track of them
+Run a swarm of Claude Code or Codex workers in [Kelpi](https://github.com/benfriebe/kelpi), and keep track of them
 from one sidebar.
 
 ![swarm-it in under 30 seconds: start workers, answer their prompts, read their results](docs/demo.gif)
 
-You ask your coordinator Claude to "swarm it". It splits the work into tasks and starts one headless Claude
-per task. Each worker gets its own pane, out of your way. The **Swarm rail** shows what every worker is
+You ask your coordinator Claude or Codex to "swarm it". It splits the work into tasks and starts one
+Claude or Codex worker per task. Each worker gets its own pane, out of your way. The **Swarm rail** shows what every worker is
 doing, raises their permission prompts so you can answer them in one place, and shows each worker's
 result when it finishes.
 
 swarm-it is two parts that work together:
 
 - **The Kelpi plugin** (`local.swarm-view`): the rail, the result view and a few pane tools.
-- **The `swarm-it` Claude Code skill** (`skills/swarm-it`): how your coordinator Claude starts and waits for workers.
+- **The `swarm-it` skill** (`skills/swarm-it`): how a Claude or Codex coordinator plans, starts, and waits for workers.
 
 ## Features
 
@@ -50,13 +50,22 @@ Every worker writes a short result with three headings: **Goal**, **Done** and *
 shows them as cards, with buttons to open or reload the file. Send a follow-up from the same view: a
 finished worker picks up its own conversation again with your message.
 
+### Choose implementation and review agents
+
+The skill lets the coordinator plan the tasks and choose a CLI for each worker. Say “swarm it, all
+Codex” or “swarm it, all Claude” to keep the whole run on one CLI. For cross-review, say “have
+Codex implement and Claude review” (or the reverse). The coordinator starts the review after the
+implementation diff exists, passes the findings back to the implementer, and verifies the fixes.
+For a larger change, ask for separate Codex and Claude reviews with distinct focuses.
+
 ### Workers that stop without a result
 
-On Kelpi 0.2.18 or newer the plugin listens to Claude's hook events (`api.agents.onEvent`). A worker's last
+On Kelpi 0.2.18 or newer the plugin listens to agent hook events (`api.agents.onEvent`). A Claude worker's last
 line in the rail is then the last line of Claude's final reply, not a screen read. If a worker's Claude ends
 with no result file, the worker shows under **Needs you** as "`<label>` stopped: `<reason>`", for example
 "usage limit reached", "rate limit reached" or "stopped with an error: ...", with a **Go to pane** button.
-On older Kelpi nothing changes: the rail reads the screen and shows no stopped row.
+For Codex, the `Stop` hook marks a missing result as stopped; Codex does not provide `SessionEnd`.
+On older Kelpi the rail reads the screen and shows no stopped row.
 
 `swarm-wait` also ends for such a worker and prints `FAILED <pane>:<label> <reason>`. The plugin tells it through
 a small file, `~/.kelpi-swarm/exits/<pane-id>.json` (`{ paneID, label, reason, at }`; under the `manifestDir`
@@ -66,7 +75,7 @@ again in that pane. Workers with no result path are never marked stopped.
 ### Auto-approve
 
 For an unattended run, the rail's **Auto** button approves permission prompts for a set time: 10 minutes,
-4 hours, 12 hours, or until 9am. It covers every Claude pane, not only swarm workers.
+4 hours, 12 hours, or until 9am. It covers Claude panes and, with the Codex hook below, Codex Bash requests.
 
 - It's off after every install or reload, and never turns on by itself.
 - **Through Kelpi (Kelpi 0.2.18 or later).** swarm-it is a `kelpi.agent.permissions` provider: Claude's
@@ -78,6 +87,19 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
   kelpi plugin service-select kelpi.agent.permissions local.swarm-view.permissions
   kelpi install-hooks
   ```
+
+- **Codex hook.** Install Swarm-it's separate Codex `PermissionRequest` hook after linking the
+  skill (below):
+
+  ```sh
+  node skills/swarm-it/install-codex-hook.mjs
+  ```
+
+  It preserves Kelpi's existing Codex notification hook, asks the selected Swarm-it provider for
+  a decision on Bash requests, and leaves Codex's own approval prompt in place when Auto is off,
+  the provider abstains, or Kelpi cannot be reached. Run `/hooks` inside Codex to trust the changed
+  hook file. Codex `apply_patch` and MCP approvals remain in Codex's native prompt. No screen
+  keystrokes are used to approve Codex requests.
 
   While Auto is off, and for anything it does not approve, the plugin abstains: Claude shows its normal
   prompt and the rail's Approve and Deny work as before. `kelpi plugin service-select kelpi.agent.permissions default`
@@ -134,7 +156,7 @@ it again on the same conversation. Useful after changing settings, hooks or MCP 
 
 ## Install
 
-You need Kelpi, Claude Code, and Kelpi's Claude Code hooks (`kelpi install-hooks`).
+You need Kelpi and either Claude Code or Codex CLI. Run `kelpi install-hooks` for agent tracking.
 
 1. Install the plugin:
 
@@ -147,19 +169,23 @@ You need Kelpi, Claude Code, and Kelpi's Claude Code hooks (`kelpi install-hooks
    `--trust` lets the plugin's backend run with full access to your machine, so read the code first. To
    share a single file instead, run `kelpi plugin pack . --out swarm-view.kelpi-plugin` and install that.
 
-2. Link the skill into Claude Code:
+2. Link the skill into the CLI or CLIs you use:
 
    ```sh
    ln -s "$PWD/skills/swarm-it" ~/.claude/skills/swarm-it
+   ln -s "$PWD/skills/swarm-it" ~/.codex/skills/swarm-it
    ```
 
-3. In a Kelpi workspace that sits inside a Group, ask Claude to "swarm it". Open the rail from the
+   For Codex Auto approval of safe Bash requests, run `node skills/swarm-it/install-codex-hook.mjs`
+   and trust the new hook with `/hooks` in Codex.
+
+3. In a Kelpi workspace that sits inside a Group, ask Claude or Codex to "swarm it". Open the rail from the
    status bar's **Swarm** counter or with `ctrl+alt+j`.
 
 ## How it works
 
 - `skills/swarm-it/swarm-spawn` splits a pane, adds it to the swarm manifest (`~/.kelpi-swarm/<workspace>.json`),
-  and starts `claude -p` on a task file. `swarm-wait` waits until every result file exists, a pane closes, or a worker's Claude ends with no result.
+  and starts Claude or Codex on a task file (`--agent codex` selects Codex). `swarm-wait` waits until every result file exists, a pane closes, or a worker stops with no result.
 - Each worker's manifest entry also records `taskPath`, `model`, `mode`, `dir` and `startedAt`. `swarm-retry
   <pane-id>:<label>` uses them to start a dead worker again. `swarm-spawn` first prunes dead workers and dead
   swarms' manifests (`manifest-writer prune`), and moves the old result of a reused label to

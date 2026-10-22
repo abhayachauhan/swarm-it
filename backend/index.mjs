@@ -556,6 +556,11 @@ export function registerAll(api, deps = modules) {
         const scanned = new Set();
         const scanWorker = async (paneID, worker = null) => {
             if (worker) scanned.add(paneID);
+            // Claude's select-menu parser must never interpret a Codex TUI as an approvable prompt.
+            if (st.panes.get(paneID)?.agent === 'codex' || worker?.worker?.agent === 'codex') {
+                if (worker && await noteUnparsed(worker, true)) changed = true;
+                return;
+            }
             // An idle pane with no Claude session is a plain shell: nothing there can be a live prompt, so skip the capture
             // unless a card or waiting row for it still needs settling.
             const pane = st.panes.get(paneID);

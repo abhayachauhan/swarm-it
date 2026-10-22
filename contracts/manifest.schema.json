@@ -30,6 +30,7 @@
           "resultPath": { "type": ["string", "null"] },
           "worktreePath": { "type": ["string", "null"] },
           "parent": { "type": ["string", "null"] },
+          "agent": { "enum": ["claude", "codex"] },
           "taskPath": { "type": ["string", "null"], "maxLength": 1000 },
           "model": { "type": ["string", "null"], "maxLength": 40 },
           "mode": { "type": ["string", "null"], "maxLength": 40 },

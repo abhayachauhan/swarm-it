@@ -47,6 +47,19 @@ test('a stop event with no message changes nothing, and a long last line is capp
     dispose();
 });
 
+test('Codex Stop marks a missing result for swarm-wait, because Codex has no SessionEnd hook', async () => {
+    const { api, dir, exitFile } = setup();
+    const manifest = structuredClone(MANIFEST);
+    manifest.workers[0].agent = 'codex';
+    api.fileStore[`${dir}/ws1.json`] = JSON.stringify(manifest);
+    const dispose = registerAll(api);
+    await dispose.ready;
+    await api.agentEvent(ev('stop', 'w1', { agent: 'codex', lastAssistantMessage: 'Unable to finish.' }));
+    assert.deepEqual((await worker(api, 'w1')).stopped, { reason: 'Codex stopped without writing a result' });
+    assert.equal(JSON.parse(readFileSync(exitFile('w1'), 'utf8')).reason, 'Codex stopped without writing a result');
+    dispose();
+});
+
 test('an error event shows its message as the last line and becomes the reason when Claude then ends without a result', async () => {
     const { api, exitFile } = setup();
     const dispose = registerAll(api);

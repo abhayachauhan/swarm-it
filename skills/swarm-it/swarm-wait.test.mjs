@@ -73,7 +73,7 @@ test('an exit file with no readable reason still fails the worker, with a plain 
   s.exit('P1', 'not json')
   const { status, stdout } = s.run(['P1:w1'])
   assert.equal(status, 1)
-  assert.equal(stdout.trim(), 'FAILED P1:w1 Claude exited without a result')
+  assert.equal(stdout.trim(), 'FAILED P1:w1 agent stopped without a result')
 })
 
 test('SWARM_MANIFEST_DIR moves the exits directory, and a closed pane with no result is still FAILED', () => {

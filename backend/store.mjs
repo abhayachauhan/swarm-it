@@ -74,7 +74,7 @@ export function otherSwarmPane(store, paneID) {
 export function anyClaudePane(store, paneID) {
     if (!store.auto?.on || typeof paneID !== 'string') return false;
     const pane = store.panes.get(paneID);
-    return !!pane && (pane.type ?? 'shell') === 'shell' && typeof pane.workspaceID === 'string' && !!pane.workspaceID && !!(pane.agent || pane.agentSessionID);
+    return !!pane && pane.agent !== 'codex' && (pane.type ?? 'shell') === 'shell' && typeof pane.workspaceID === 'string' && !!pane.workspaceID && !!(pane.agent || pane.agentSessionID);
 }
 
 /** Does any ownership gate still accept a Request on this pane (a swarm's worker or orchestrator, or any Claude pane while auto-approve is on)? */
@@ -349,6 +349,7 @@ export function currentWorkers(store, now) {
         return {
             paneID: mw.paneID,
             label: mw.label,
+            agent: mw.agent === 'codex' ? 'codex' : 'claude',
             task: mw.task ?? '',
             state,
             ...(exit && state === 'waiting' ? { stopped: { reason: exit.reason } } : {}),

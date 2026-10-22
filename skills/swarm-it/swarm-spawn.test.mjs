@@ -80,3 +80,14 @@ test('before the Workers workspace exists a worker splits beside the coordinator
   assert.ok(calls.some(c => c.startsWith('pane split --name w1')), calls.join('\n'))
   assert.ok(!calls.some(c => c.startsWith('pane create')), calls.join('\n'))
 })
+
+test('a Codex worker uses its sandbox and records its agent without a Claude model default', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const { status, stderr, calls } = spawn(s, ['review', s.task, '--agent', 'codex', '--path', s.home])
+  assert.equal(status, 0, stderr)
+  const send = calls.find(c => c.startsWith('pane send'))
+  assert.ok(send.includes(`codex --sandbox workspace-write --add-dir ${s.home}/.kelpi-swarm/results --ask-for-approval on-request`), send)
+  assert.ok(!send.includes('claude -p') && !send.includes('--model sonnet'), send)
+  const worker = JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8')).workers[0]
+  assert.deepEqual([worker.agent, worker.model, worker.mode], ['codex', null, 'on-request'])
+})

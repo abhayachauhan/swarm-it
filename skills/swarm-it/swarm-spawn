@@ -1,27 +1,36 @@
 #!/usr/bin/env bash
-# swarm-spawn <label> <task-file> [--mode auto] [--model sonnet] [--path dir]
+# swarm-spawn <label> <task-file> [--agent claude|codex] [--mode auto|on-request] [--model model] [--path dir]
 # One call per worker: split a pane, register it in the swarm rail, start a headless
-# Claude on the task file. Prints <pane-id>:<label>, ready for swarm-wait. The result
+# agent on the task file. Prints <pane-id>:<label>, ready for swarm-wait. The result
 # lands in ~/.kelpi-swarm/results/<label>.md.
 set -euo pipefail
 
-usage() { echo "usage: swarm-spawn <label> <task-file> [--mode auto] [--model sonnet] [--path dir]" >&2; exit 1; }
+usage() { echo "usage: swarm-spawn <label> <task-file> [--agent claude|codex] [--mode mode] [--model model] [--path dir]" >&2; exit 1; }
 [ $# -ge 2 ] || usage
 label=$1 task=$2; shift 2
-mode=auto model=sonnet dir=$PWD
+agent=claude mode= model= dir=$PWD
 while [ $# -gt 0 ]; do
   case "$1" in
+    --agent) agent=$2; shift 2 ;;
     --mode) mode=$2; shift 2 ;;
     --model) model=$2; shift 2 ;;
     --path) dir=$2; shift 2 ;;
     *) usage ;;
   esac
 done
+case "$agent" in
+  claude) mode=${mode:-auto}; model=${model:-sonnet} ;;
+  codex) mode=${mode:-on-request} ;;
+  *) echo "agent must be claude or codex" >&2; exit 1 ;;
+esac
 
 # Every value is typed into a shell, so only plain characters are allowed: no quotes, spaces, `$`, `;` or `..`.
 bad() { echo "$1" >&2; exit 1; }
 [[ $label =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $label != *..* ]] || bad "label must be letters, digits, dot, dash or underscore"
-[[ $mode =~ ^[A-Za-z]+$ && $model =~ ^[A-Za-z0-9.-]+$ ]] || bad "mode and model must be plain words"
+[[ $mode =~ ^[A-Za-z-]+$ && ( -z $model || $model =~ ^[A-Za-z0-9.-]+$ ) ]] || bad "mode and model must be plain words"
+if [ "$agent" = codex ]; then
+  [[ $mode = on-request || $mode = never ]] || bad "Codex mode must be on-request or never"
+fi
 [[ $task =~ ^[A-Za-z0-9._/~-]+$ && $dir =~ ^[A-Za-z0-9._/~-]+$ ]] || bad "task path and dir must be letters, digits, dot, dash, underscore or slash"
 [ -f "$task" ] || { echo "no task file: $task" >&2; exit 1; }
 task=$(cd "$(dirname "$task")" && pwd)/$(basename "$task")
@@ -63,12 +72,18 @@ else
   pane=$(kelpi pane split --name "$label" --path "$dir" --json | jq -r '.pane_id // .id')
 fi
 node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" \
-  --task-path "$task" --model "$model" --mode "$mode" --dir "$dir" --started-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
+  --agent "$agent" --task-path "$task" --model "${model:--}" --mode "$mode" --dir "$dir" --started-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
 
 FORMAT="Write the result as markdown with three headings, ## Goal, ## Done and ## Next. Goal is one plain sentence saying what you were asked to do. Done is at most three short bullets saying what is now true or what you found, in plain words, with no code, file dumps or tool narration. Next is at most two bullets of what a human must decide or do, or the words Nothing pending. Keep the whole file under 80 words."
 
 # Give the new shell a moment to draw its prompt before typing into it.
 sleep 2
 # cd explicitly: the split's --path did not reach the new shell in a live test.
-kelpi pane send --target "$pane" "cd $dir && claude -p --permission-mode $mode --model $model \"Do the task in $task. $FORMAT Write the result to $RES/$label.md. Reply done.\"" >/dev/null
+if [ "$agent" = claude ]; then
+  kelpi pane send --target "$pane" "cd $dir && claude -p --permission-mode $mode --model $model \"Do the task in $task. $FORMAT Write the result to $RES/$label.md. Reply done.\"" >/dev/null
+else
+  modelArg=
+  [ -z "$model" ] || modelArg="--model $model "
+  kelpi pane send --target "$pane" "cd $dir && codex --sandbox workspace-write --add-dir $RES --ask-for-approval $mode ${modelArg}\"Do the task in $task. $FORMAT Write the result to $RES/$label.md. Reply done.\"" >/dev/null
+fi
 echo "$pane:$label"

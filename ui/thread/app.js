@@ -31,7 +31,7 @@ async function run(command, args) {
 }
 
 function renderHeader(worker) {
-    $('name').textContent = worker ? (worker.label || worker.paneID) : (paneID ?? 'No worker selected');
+    $('name').textContent = worker ? `${worker.label || worker.paneID}${worker.agent === 'codex' ? ' · Codex' : ''}` : (paneID ?? 'No worker selected');
     $('state').textContent = worker ? stateLabel(worker.state) : '';
     $('dot').className = `dot ${worker ? worker.state : ''}`;
     $('worktree').textContent = worker?.worktreePath ? `worktree: ${worker.worktreePath}` : '';

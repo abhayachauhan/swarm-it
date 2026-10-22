@@ -160,6 +160,7 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
     const n = event?.data ?? event ?? {};
     const paneID = n.paneID;
     if (typeof paneID !== 'string') return { ok: true, ignored: 'no-pane' };
+    if (store.panes.get(paneID)?.agent === 'codex' || store.manifestWorkers.some(w => w.paneID === paneID && w.agent === 'codex')) return { ok: true, ignored: 'codex-screen' };
     const inSwarm = !!actionableWorker(store, paneID) || actionableOrchestrator(store, paneID);
     // Another live swarm's pane: only its permission Requests are global; errors stay with the followed swarm.
     const other = inSwarm ? null : otherSwarmPane(store, paneID);

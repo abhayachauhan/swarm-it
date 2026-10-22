@@ -115,8 +115,7 @@ export function availableActions(worker) {
         dismiss: !worker.archived,
         terminal: true,
         send: true,
-        // A finished worker has only a shell left: the backend starts Claude again on its conversation.
-        sendLabel: finished ? 'Send and restart' : 'Send',
+        sendLabel: worker.agent === 'codex' ? 'Queue for Codex' : finished ? 'Send and restart' : 'Send',
     };
 }
 

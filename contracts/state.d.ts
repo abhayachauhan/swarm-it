@@ -7,6 +7,8 @@ export type AttentionType = 'Request' | 'Error' | 'Complete';
 export interface Worker {
     paneID: string;
     label: string;
+    /** Worker CLI; older manifests default to Claude. */
+    agent: 'claude' | 'codex';
     /** Task description from the manifest (may be empty). */
     task: string;
     state: WorkerState;
@@ -200,6 +202,7 @@ export interface SwarmManifest {
 export interface ManifestWorker {
     paneID: string;
     label: string;
+    agent?: 'claude' | 'codex';
     task: string;
     resultPath: string | null;
     worktreePath: string | null;

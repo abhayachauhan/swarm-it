@@ -5,6 +5,7 @@ import { parsePrompt, promptHash, PROMPT_CAPTURE_LINES } from './notify.mjs';
 import { isSafeLabel } from './manifest.mjs';
 import { persist, deriveState, actionableWorker, actionableOrchestrator, otherSwarmPane, anyClaudePane, resultContext, readResultText, capturePane, rememberSession, SESSION_ID, textHash } from './store.mjs';
 import { checkResultPath } from './safepath.mjs';
+import { execFile } from 'node:child_process';
 
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
 const worker = (store, paneID) => actionableWorker(store, paneID);
@@ -89,6 +90,26 @@ export async function sendToWorker(api, store, paneID, text) {
     if (typeof text !== 'string' || !text) return fail('paneID and text are required', 'BAD_ARGS');
     const problem = textProblem(text);
     if (problem) return fail(problem, 'BAD_TEXT');
+    if (w.agent === 'codex') {
+        const session = store.sessions.get(paneID);
+        if (!session || !SESSION_ID.test(session)) return fail('this Codex worker has no known conversation', 'NO_SESSION');
+        const ask = `${text.trim().replace(/[.\s]+$/, '')}.${w.resultPath ? ` Write the updated result to ${w.resultPath}.` : ''} Reply done.`;
+        const queued = await new Promise(resolve => execFile('codex', ['queue', '--thread', session, '--message', ask],
+            { timeout: 5000 }, (error) => resolve(error)));
+        if (queued) return fail(`Codex follow-up could not be queued: ${message(queued)}`, 'QUEUE_FAILED');
+        let baseline = '';
+        if (w.resultPath) {
+            const checked = await checkResultPath(w, store.settings, undefined, resultContext(store, paneID));
+            const read = checked.ok ? await readResultText(store, checked.path) : null;
+            if (read?.ok) baseline = textHash(read.text);
+        }
+        store.restarts.set(paneID, baseline);
+        store.resultExists.set(paneID, false);
+        store.errored.delete(paneID);
+        store.accepted.delete(paneID);
+        await persist(store);
+        return { ok: true, paneID, restarted: true };
+    }
     const alive = await kelpiSaysAlive(api, store, paneID);
     let screen = null;
     try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); } catch { /* treated as unknown */ }
@@ -200,6 +221,7 @@ async function answerRequest(api, store, itemID, key, sentHash) {
     if (!item) return fail(`no attention item ${itemID}`, 'NOT_FOUND');
     if (item.type !== 'Request') return fail('only a Request can be approved or denied', 'NOT_REQUEST');
     if (item.handledAt) return fail('item already handled', 'HANDLED');
+    if (store.panes.get(item.paneID)?.agent === 'codex' || worker(store, item.paneID)?.agent === 'codex') return fail('answer Codex approval requests in its pane', 'UNSUPPORTED_AGENT');
     if (item.approvable === false) return fail('this prompt is not in a recognised shape; answer it in the pane', 'NOT_APPROVABLE');
     // The followed swarm's worker or orchestrator, a pane of another live, correctly owned swarm (otherSwarmPane), or
     // any Claude pane while auto-approve is on (anyClaudePane).

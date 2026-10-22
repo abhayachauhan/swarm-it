@@ -132,6 +132,17 @@ test('swarm-retry --model overrides the recorded model', () => {
   assert.equal(manifest(s).workers[0].model, 'opus')
 })
 
+test('swarm-retry keeps a Codex worker on Codex with its configured model', () => {
+  const s = stub()
+  assert.equal(spawn(s, ['w1', s.task, '--agent', 'codex', '--path', s.home, '--model', 'gpt-6.1-sol']).status, 0)
+  setPanes(s, [ME])
+  fs.writeFileSync(path.join(s.home, 'next-pane'), 'P2')
+  const { status, stderr, calls } = retry(s, ['P1:w1'])
+  assert.equal(status, 0, stderr)
+  assert.ok(calls.find(c => c.startsWith('pane send')).includes('codex --sandbox workspace-write'), calls.join('\n'))
+  assert.deepEqual(manifest(s).workers.map(w => [w.paneID, w.agent, w.model]), [['P2', 'codex', 'gpt-6.1-sol']])
+})
+
 test('swarm-retry refuses a worker whose pane still runs Claude, and starts nothing', () => {
   for (const pane of [{ id: 'P1', workspace_id: 'WS', status: 'running' }, { id: 'P1', workspace_id: 'WS', status: 'waitingForInput' },
     { id: 'P1', workspace_id: 'WS', status: 'idle', agent_session_id: '0f0f0f0f-0000-4000-8000-00000000c0de' }]) {

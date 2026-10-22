@@ -4,7 +4,7 @@
 //
 //   manifest-writer.mjs init <workspace-id> <orchestrator-pane-id> <orchestrator-label>
 //   manifest-writer.mjs add-worker <workspace-id> <pane-id> <label> <task> <result-path> [worktree-path] [parent-pane-id]
-//      optional flags: --task-path <abs> --model <m> --mode <x> --dir <abs> --started-at <iso>
+//      optional flags: --agent claude|codex --task-path <abs> --model <m> --mode <x> --dir <abs> --started-at <iso>
 //   manifest-writer.mjs remove-worker <workspace-id> <pane-id>
 //   kelpi pane list --json | manifest-writer.mjs prune [--keep <workspace-id>] [--older-than-minutes 10]
 //   manifest-writer.mjs set-orchestrator <workspace-id> <orchestrator-pane-id>
@@ -55,7 +55,7 @@ function checkPath(name, v) {
   return v
 }
 
-const FLAGS = { '--task-path': 'taskPath', '--model': 'model', '--mode': 'mode', '--dir': 'dir', '--started-at': 'startedAt' }
+const FLAGS = { '--agent': 'agent', '--task-path': 'taskPath', '--model': 'model', '--mode': 'mode', '--dir': 'dir', '--started-at': 'startedAt' }
 
 // Separates `--flag value` pairs from positional arguments.
 function splitFlags(args) {
@@ -81,6 +81,8 @@ function retryFields(flags) {
     if (key === 'taskPath' || key === 'dir') {
       if (!v.startsWith('/')) fail(`${flag} must be an absolute path`)
       checkPath(flag, v)
+    } else if (key === 'agent') {
+      if (!['claude', 'codex'].includes(v)) fail('--agent must be claude or codex')
     } else if (key === 'startedAt') {
       if (Number.isNaN(Date.parse(v))) fail('--started-at must be an ISO time')
     } else if (!/^[A-Za-z0-9.-]+$/.test(v)) fail(`${flag} must be a plain word`)

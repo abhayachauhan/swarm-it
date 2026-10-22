@@ -169,7 +169,8 @@ export function commandProblem(text) {
 
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
 const message = error => String(error?.message ?? error);
-const isAgent = pane => !!(pane?.agent || pane?.agentSessionID);
+const isAgent = pane => !!(pane?.agent || pane?.agentKind || pane?.agentSessionID);
+const isCodex = pane => pane?.agent === 'codex' || pane?.agentKind === 'codex';
 
 /** The pane a command was invoked on: `args.paneID`, else the invocation context's pane, else the focused pane. */
 export async function sourcePane(api, args, context) {
@@ -210,7 +211,7 @@ export function defaultTarget(found, source) {
     const oneLine = typeof found?.command === 'string' && !found.command.trim().includes('\n');
     const idleTitle = /^✳\s/.test(source?.title ?? '');
     const midReply = source?.status === 'running' && !(source.backgroundTasks > 0) && !idleTitle;
-    return oneLine && !found.promptOpen && isAgent(source) && !midReply ? source.id : 'new';
+    return oneLine && !found.promptOpen && isAgent(source) && !isCodex(source) && !midReply ? source.id : 'new';
 }
 
 /** Text typed into an agent pane runs as Claude Code's `!` shell command, so its output lands in the session. */
@@ -245,6 +246,7 @@ export async function runConfirmed(api, args) {
         // Same set the view offers (runTargets): a pane in the source pane's workspace, never one elsewhere.
         if (!source || target.workspaceID !== source.workspaceID) return fail(`pane ${target.id} is not in the source pane's workspace`, 'NOT_TARGET');
         if (isAgent(target) && args.allowAgent !== true) return fail(`pane ${target.id} is running an agent; pick it explicitly to type into it`, 'AGENT_PANE');
+        if (isAgent(target) && isCodex(target)) return fail('run Codex suggestions in a shell pane', 'CODEX_PANE');
         if (isAgent(target) && args.text.trim().includes('\n')) return fail('Claude runs one ! line at a time; run a multi-line command in a new shell pane', 'MULTI_LINE');
         paneID = target.id;
         if (isAgent(target)) text = asBang(args.text);

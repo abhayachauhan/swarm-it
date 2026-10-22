@@ -3,7 +3,7 @@
 ## Current baseline (22 October 2026)
 
 - This checkout is `local.swarm-view` 0.1.0. Worker creation and retry launch `claude -p`; the manifest has no agent kind. Follow-up, restart, prompt recognition, auto-approve fallback, and “run suggested command” contain Claude-specific behavior.
-- The installed terminal is Kelpi 0.2.19; the latest published release is 0.2.20. The installed Codex CLI is 0.163.0. `kelpi install-hooks --dry-run --json` reports both Claude and Codex hooks unchanged, and `kelpi doctor --json` passes both hook checks. Doctor cannot reach this user's remote TCP Kelpi daemon from this sandbox, so live plugin status is unverified.
+- The installed terminal is Kelpi 0.2.19; the latest published release is 0.2.20. The installed Codex CLI is 0.163.0. `kelpi install-hooks --dry-run --json` reports both Claude and Codex hooks unchanged, and `kelpi doctor --json` passes both hook checks. A live daemon check through `tcp:127.0.0.1:54680` also succeeded once access was granted.
 - Kelpi's current lifecycle API reports Codex agent status and session IDs. Its installed Codex `PermissionRequest` hook currently calls `kelpi event notification --agent codex`, and its documented `permission-request --agent codex` path exits without asking a provider. Codex itself supports typed `PermissionRequest` hook decisions, so this is a missing bridge in Kelpi's integration, not a missing Codex capability.
 
 ## Target behavior
@@ -30,3 +30,9 @@ The coordinator can be Claude or Codex, and each worker can be Claude or Codex. 
 
 - Choose the default worker agent: preserve Claude for existing users; let a Codex coordinator explicitly request Codex workers until a user-facing default setting is added.
 - Choose the approval bridge after measuring the existing `plugin service-call` path against Codex's hook timeout. Prefer the upstream Kelpi path if the wrapper would require a separate configuration lifecycle or weaken provider selection.
+
+## Implementation notes
+
+The initial implementation uses interactive Codex workers with `--sandbox workspace-write` and `--ask-for-approval on-request`. This keeps the native approval UI and Kelpi's existing Codex lifecycle hooks available. A separate Swarm-it `PermissionRequest` hook calls the selected Kelpi permission provider for Bash requests; abstentions leave Codex's native prompt. Other Codex tool types are left to Codex. Follow-up uses `codex queue --thread <session-id>`; the existing Claude restart action remains Claude-only.
+
+The shared skill and Codex hook are installed locally. Codex still requires the user to trust the new hook with `/hooks` in a Codex session. The app update to Kelpi 0.2.20 and an end-to-end worker trial remain deployment checks.

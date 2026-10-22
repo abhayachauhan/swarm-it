@@ -84,6 +84,15 @@ test('allow inside the window, abstain outside it; decisions made while on are l
     dispose();
 });
 
+test('a verified Codex Bash pane shares the Auto policy; other Codex requests abstain', async () => {
+    const store = activeStore();
+    store.panes.set('codex-pane', { id: 'codex-pane', agent: 'codex', workspaceID: 'ws1', status: 'waitingForInput' });
+    const allowed = await AA.decide(store, { paneID: 'codex-pane', agent: 'codex', toolName: 'Bash', toolInput: { command: 'npm test' } });
+    assert.deepEqual(allowed, ALLOW);
+    assert.deepEqual(await AA.decide(store, { paneID: 'codex-pane', agent: 'codex', toolName: 'Bash', toolInput: { command: 'sudo rm -rf /tmp/x' } }), ABSTAIN);
+    assert.deepEqual(await AA.decide(store, { paneID: 'codex-pane', agent: 'codex', toolName: 'apply_patch', toolInput: { command: '*** Begin Patch' } }), ABSTAIN);
+});
+
 test('a never-list command abstains: swarm-it rules first, then the Kelpi example rules, then multi-line and length', async () => {
     const { api, dispose } = await start({ permissions: SELECTED });
     await api.command('auto-approve', { on: true });

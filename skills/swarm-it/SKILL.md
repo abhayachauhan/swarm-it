@@ -1,13 +1,19 @@
 ---
 name: swarm-it
-description: Create a swarm of headless Claude workers in Kelpi that show up in the swarm rail (local.swarm-view plugin). Use when the user asks for a swarm, workers, panes, "fan out", "swarm it", or "create swarm pane". Experimental; does not replace kelpi-agentic.
+description: Plan and coordinate a swarm of Claude or Codex workers in Kelpi using the Swarm-it rail. Use when the user asks to "swarm it", distribute work, fan out tasks, or assign implementation and review to agents.
 ---
 
-# Swarm it (experimental)
+# Swarm it
 
-One command per worker. `swarm-spawn` splits a pane, registers it in the swarm rail, and starts
-`claude -p` on a task file. Defaults: `--permission-mode auto`, `--model sonnet`. Do not ask the user
-for a permission mode unless the work changes shared or production state.
+Turn the request into a short task plan, identify independent pieces, then start one worker per piece.
+`swarm-spawn` opens a pane, registers it in the rail, and starts Claude or Codex on a task file.
+The coordinator can be either CLI and may choose either CLI for each worker. Preserve the user's
+choice when they ask for all Claude, all Codex, or a mix. Otherwise use the coordinator's CLI as the
+default worker CLI. Claude workers default to `--mode auto --model sonnet`; Codex workers default to
+`--mode on-request` and Codex's configured model. Never use either CLI's permission bypass mode as
+a convenience for unattended workers.
+The script itself defaults to Claude for compatibility, so a Codex coordinator must pass
+`--agent codex` when choosing Codex workers.
 
 Run the swarm from a workspace inside its own Group. Every swarm's workers live in one shared
 `Workers` workspace (in a collapsed `Workers` Group), and the rail shows the swarm from any workspace
@@ -19,26 +25,31 @@ the user before spawning more.
 
 ## Steps
 
-1. Write one task file per worker (under `~/repos/plans/` or the scratchpad). The task must be
-   self-contained: the worker sees nothing of this conversation.
+1. Decide which tasks can run independently and which need another worker's result. Give each
+   worker a clear deliverable and path or worktree. When the user wants review, reserve a worker
+   for a separate review after implementation; it should inspect the actual diff and report findings.
+   Write one self-contained task file per worker (under `~/repos/plans/` or the scratchpad): workers
+   do not see this conversation. State the exact repository, scope, and expected result.
 2. Spawn each worker, one Bash call each:
 
    ```bash
-   ~/.claude/skills/swarm-it/swarm-spawn <label> <task-file> [--model haiku|sonnet|opus] [--path <repo-or-worktree>]
+   <skill-dir>/swarm-spawn <label> <task-file> [--agent claude|codex] [--model <model>] [--path <repo-or-worktree>]
    ```
 
-   It prints `<pane-id>:<label>`. The result lands in `~/.kelpi-swarm/results/<label>.md`, in the short
+   Use the directory containing this `SKILL.md` for `<skill-dir>` (normally
+   `~/.claude/skills/swarm-it` or `~/.codex/skills/swarm-it`). It prints `<pane-id>:<label>`.
+   The result lands in `~/.kelpi-swarm/results/<label>.md`, in the short
    Goal/Done/Next format the rail shows (the script adds the format instruction to every prompt).
 3. Wait for all of them in one background call (no polling, no `sleep` in your own commands):
 
    ```bash
-   ~/.claude/skills/swarm-it/swarm-wait <pane-id>:<label> [<pane-id>:<label> ...]
+   <skill-dir>/swarm-wait <pane-id>:<label> [<pane-id>:<label> ...]
    ```
 
-   Run it with `run_in_background`. It exits when every result exists, a pane closes, or a worker's Claude
+   Run it in the background. It exits when every result exists, a pane closes, or a worker's agent
    ends with no result, and prints each result's first lines. A worker that stopped prints
-   `FAILED <pane>:<label> <reason>` (for example "usage limit reached"); the Swarm View plugin on Kelpi
-   0.2.18+ supplies the reason. It gives up after an hour (`--timeout <seconds>` to change) and prints `TIMEOUT`
+   `FAILED <pane>:<label> <reason>` (for example "usage limit reached") when a reason is known.
+   It gives up after an hour (`--timeout <seconds>` to change) and prints `TIMEOUT`
    with the pane's last lines; a TIMEOUT worker may still be working, so check before retrying. Read the result
    files for the detail.
 4. Clean up: the rail only counts finished workers, so nothing needs clearing there. To close their panes:
@@ -46,12 +57,12 @@ the user before spawning more.
 
    ```bash
    kelpi pane close --target <pane-id>
-   node ~/.claude/skills/swarm-it/manifest-writer.mjs remove-worker <workspace-id> <pane-id>
+   node <skill-dir>/manifest-writer.mjs remove-worker <workspace-id> <pane-id>
    ```
 
 ## Retry and cleanup
 
-- A worker died or wrote no result: `~/.claude/skills/swarm-it/swarm-retry <pane-id>:<label> [--model m]`. It reads the
+- A worker died or wrote no result: `<skill-dir>/swarm-retry <pane-id>:<label> [--model m]`. It reads the
   worker's task file, mode, model and directory from the manifest, starts it again through `swarm-spawn`, and prints
   the new `<pane-id>:<label>`. It refuses while the old pane still runs Claude, and for a worker started before the
   manifest recorded these (no task path).
@@ -68,5 +79,21 @@ the user before spawning more.
 - Address workers by pane id, never by label: workers live in another workspace.
 - Do NOT run `kelpi layout select`, `kelpi pane resize`, or pass `--focus`. The plugin places panes.
 - Results must stay under `~/.kelpi-swarm/results/`; the rail refuses any other path (BAD_RESULT_PATH).
-- Ask the user before `--mode bypassPermissions`, and say what the workers will touch.
+- `--agent codex` uses Codex's workspace-write sandbox and requests approval when needed. The
+  current Kelpi release notifies on Codex approval requests. Swarm-it Auto can handle Codex Bash
+  approvals after its separate Codex hook is installed and trusted; other Codex approvals remain
+  in the native pane.
+- Ask the user before `--mode bypassPermissions` for Claude, and say what the workers will touch.
 - Never `kelpi pane close` without `--target`: it closes your own pane.
+
+## Allocation patterns
+
+- **All Codex:** choose `--agent codex` for implementation and review workers, including when a
+  Codex coordinator plans the swarm.
+- **All Claude:** omit `--agent` or choose `--agent claude` for every worker.
+- **Cross-review:** give implementation to one CLI, then give a different CLI a task file that names
+  the branch or diff and asks for defects, risks, and missing tests. Pass its findings back to the
+  implementer, then verify the fixes. Review runs after the relevant changes exist.
+- **Parallel reviews:** for a large change, give separate review tasks to both CLIs with distinct
+  lenses (for example correctness and usability); the coordinator reconciles duplicate or
+  conflicting findings and checks the code before reporting completion.

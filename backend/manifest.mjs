@@ -6,7 +6,7 @@ const ROOT_KEYS = ['version', 'orchestrator', 'workers'];
 const ORCH_KEYS = ['paneID', 'label'];
 const WORKER_KEYS = ['paneID', 'label', 'task', 'resultPath', 'worktreePath', 'parent'];
 /** Written by swarm-spawn so a dead worker can be retried; absent in older manifests, which still load. */
-const OPTIONAL_WORKER_KEYS = ['taskPath', 'model', 'mode', 'dir', 'startedAt'];
+const OPTIONAL_WORKER_KEYS = ['agent', 'taskPath', 'model', 'mode', 'dir', 'startedAt'];
 export const MAX_SETTING_CHARS = 40;
 
 /**
@@ -85,6 +85,7 @@ export function validateManifest(obj) {
                 for (const key of OPTIONAL_WORKER_KEYS) {
                     if (key in worker && !isStringOrNull(worker[key])) errors.push(`${where}.${key}: must be a string or null`);
                 }
+                if ('agent' in worker && !['claude', 'codex'].includes(worker.agent)) errors.push(`${where}.agent: must be claude or codex`);
                 for (const key of ['model', 'mode', 'startedAt']) {
                     if (typeof worker[key] === 'string' && worker[key].length > MAX_SETTING_CHARS) errors.push(`${where}.${key}: must be at most ${MAX_SETTING_CHARS} characters`);
                 }

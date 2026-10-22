@@ -78,6 +78,7 @@ export async function restartClaude(api, store, paneID, deps = {}) {
     const pane = await freshPane(api, paneID);
     if (!pane) return done(fail(`no pane ${paneID}`, 'NO_PANE'));
     if ((pane.type ?? 'shell') !== 'shell') return done(fail(`pane ${paneID} is not a terminal`, 'NOT_SHELL'));
+    if (pane.agent === 'codex' || pane.agentKind === 'codex') return done(fail('this pane runs Codex; use its native resume command', 'UNSUPPORTED_AGENT'));
     rememberSession(store, paneID, pane.agentSessionID);
     const session = pane.agentSessionID ?? store.sessions.get(paneID);
     if (typeof session !== 'string' || !SESSION_ID.test(session)) return done(fail('no Claude session is known for this pane', 'NO_SESSION'));

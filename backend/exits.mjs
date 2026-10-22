@@ -17,12 +17,12 @@ const cap = text => (text.length > LINE_CAP ? `${text.slice(0, LINE_CAP - 1)}…
 export const lastMessageLine = text => cap(lastLineOf(text));
 
 /** Plain-words reason a Claude stopped without a result, from its error message and last reply. */
-export function exitReason(error, lastLine) {
+export function exitReason(error, lastLine, agent = 'Claude') {
     const said = `${error ?? ''}\n${lastLine ?? ''}`;
     if (USAGE_LIMIT.test(said)) return 'usage limit reached';
     if (RATE_LIMIT.test(said)) return 'rate limit reached';
     if (error) return cap(`stopped with an error: ${error}`);
-    return 'Claude exited without writing a result';
+    return agent === 'Claude' ? 'Claude exited without writing a result' : `${agent} stopped without writing a result`;
 }
 
 /** Where swarm-wait looks for a stopped worker (same default directory as manifests). */
@@ -67,10 +67,18 @@ export async function onAgentEvent(store, event, now = Date.now()) {
         }
         case 'stop': {
             const line = lastMessageLine(event.lastAssistantMessage);
-            if (!line) return false;
-            store.agentLines.set(paneID, line);
-            store.lastLines.set(paneID, line);
-            return true;
+            if (line) {
+                store.agentLines.set(paneID, line);
+                store.lastLines.set(paneID, line);
+            }
+            // Codex has no SessionEnd hook. Its Stop is the end of the worker's turn.
+            if (worker.agent === 'codex' && worker.resultPath) {
+                await refreshResult(store, worker);
+                if (store.resultExists.get(paneID) === true) return forget(store, paneID);
+                await remember(store, worker, { reason: exitReason(store.agentErrors.get(paneID), line, 'Codex'), at: new Date(now).toISOString() });
+                return true;
+            }
+            return !!line;
         }
         case 'error': {
             const line = lastMessageLine(event.message);

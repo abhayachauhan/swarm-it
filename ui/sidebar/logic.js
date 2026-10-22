@@ -639,7 +639,7 @@
         node.dataset.state = row.state;
         const top = h(doc, 'span', 'row-top');
         top.append(h(doc, 'span', `dot dot-${row.state}`));
-        top.append(h(doc, 'span', 'name', row.label || row.paneID));
+        top.append(h(doc, 'span', 'name', `${row.label || row.paneID}${row.agent === 'codex' ? ' · Codex' : ''}`));
         const time = h(doc, 'span', 'time', formatElapsed(elapsedNow(row, view.receivedAtMs, view.nowMs)));
         time.dataset.elapsedPane = row.paneID;
         top.append(time);
