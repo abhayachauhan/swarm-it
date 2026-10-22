@@ -80,7 +80,7 @@ export function anyClaudePane(store, paneID) {
 /** Codex approvals are shown as navigation cards even with Auto off; they are answered in Codex. */
 export function anyCodexPane(store, paneID) {
     const pane = store.panes.get(paneID);
-    return !!pane && (pane.agent === 'codex' || pane.agentKind === 'codex')
+    return !!pane && (pane.agent === 'codex' || store.attention.some(item => item.paneID === paneID && !item.handledAt && item.agent === 'codex'))
         && (pane.type ?? 'shell') === 'shell' && typeof pane.workspaceID === 'string' && !!pane.workspaceID;
 }
 
@@ -207,6 +207,8 @@ export function applyStateChange(store, change, now) {
         label: pane.label ?? prev?.label ?? null,
         title: pane.title ?? prev?.title ?? null,
         status: pane.status ?? prev?.status ?? 'idle',
+        isFocused: pane.isFocused ?? prev?.isFocused ?? false,
+        isActiveWorkspace: pane.isActiveWorkspace ?? prev?.isActiveWorkspace ?? false,
         workspaceID: change.workspaceID ?? pane.workspaceID ?? prev?.workspaceID ?? null,
         workspaceName: pane.workspaceName ?? prev?.workspaceName ?? null,
         agent: pane.agent ?? pane.agentKind ?? prev?.agent ?? null,
@@ -420,6 +422,7 @@ export function buildSnapshot(store, now) {
         if (mine?.has(item.paneID)) return orphan(item);
         const other = item.type === 'Request' ? otherSwarmPane(store, item.paneID) : null;
         if (other) return { ...item, swarmName: other.swarm.name, swarmWorkspaceID: other.swarm.workspaceID, paneLabel: other.label };
+        if (item.type === 'Request' && item.agent === 'codex' && ownedRequestPane(store, item.paneID)) return orphan(item);
         return mine ? null : orphan(item);
     };
     const inSwarm = items => items.map(tag).filter(Boolean);

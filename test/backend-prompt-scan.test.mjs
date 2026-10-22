@@ -38,6 +38,18 @@ test('a Codex pane outside every swarm gets a request card while Auto is off', a
     dispose();
 });
 
+test('Codex screen scan finds a prompt when Kelpi has not identified the agent', async () => {
+    const api = makeFakeApi({ panes: [{ id: 'unknown', agent: null, type: 'shell', status: 'waitingForInput', workspaceID: 'ws1' }], captures: { unknown: codexPrompt } });
+    const dispose = registerAll(api);
+    await dispose.ready;
+    await sleep(80);
+    const requests = lastSnapshot(api).attention.filter(i => i.type === 'Request' && i.paneID === 'unknown');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].agent, 'codex');
+    assert.equal(requests[0].approvable, false);
+    dispose();
+});
+
 test('a prompt on a worker the user is watching (no notification, status still running) becomes a Request, and settles when it goes', async () => {
     const api = makeSwarmApi();
     const dispose = registerAll(api);

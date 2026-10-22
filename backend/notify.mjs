@@ -179,7 +179,9 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
     const n = event?.data ?? event ?? {};
     const paneID = n.paneID;
     if (typeof paneID !== 'string') return { ok: true, ignored: 'no-pane' };
-    const codex = anyCodexPane(store, paneID) || store.manifestWorkers.some(w => w.paneID === paneID && w.agent === 'codex');
+    const codex = anyCodexPane(store, paneID) || store.manifestWorkers.some(w => w.paneID === paneID && w.agent === 'codex')
+        || (n.kind === 'agent-notification' && n.title === 'Codex')
+        || (typeof screen === 'string' && !!parseCodexPrompt(screen));
     const inSwarm = !!actionableWorker(store, paneID) || actionableOrchestrator(store, paneID);
     // Another live swarm's pane: only its permission Requests are global; errors stay with the followed swarm.
     const other = inSwarm ? null : otherSwarmPane(store, paneID);
@@ -203,7 +205,7 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
         const prompt = parseCodexPrompt(screenText);
         const block = prompt?.block ?? 'Codex approval requested';
         const { item } = await addItem(att, {
-            type: 'Request', paneID, promptHash: promptHash(block), promptBlock: prompt?.block,
+            type: 'Request', paneID, agent: 'codex', promptHash: promptHash(block), promptBlock: prompt?.block,
             approvable: false, text: `${label} needs approval in Codex; open its pane to respond`,
             ...(other ? { swarmName: other.swarm.name, swarmWorkspaceID: other.swarm.workspaceID } : {})
         });

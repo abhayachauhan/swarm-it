@@ -42,6 +42,7 @@ export async function addItem(att, item) {
         ...(item.promptHash ? { promptHash: item.promptHash } : {}),
         ...(typeof item.promptBlock === 'string' && item.promptBlock ? { promptBlock: item.promptBlock } : {}),
         ...(item.approvable === false ? { approvable: false } : {}),
+        ...(item.agent === 'codex' ? { agent: 'codex' } : {}),
         ...(typeof item.swarmName === 'string' && item.swarmName ? { swarmName: item.swarmName } : {}),
         ...(typeof item.swarmWorkspaceID === 'string' && item.swarmWorkspaceID ? { swarmWorkspaceID: item.swarmWorkspaceID } : {})
     };

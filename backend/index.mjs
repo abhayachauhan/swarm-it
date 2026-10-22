@@ -557,20 +557,22 @@ export function registerAll(api, deps = modules) {
         const scanned = new Set();
         const scanWorker = async (paneID, worker = null) => {
             if (worker) scanned.add(paneID);
-            const codex = st.panes.get(paneID)?.agent === 'codex' || worker?.worker?.agent === 'codex';
+            const knownCodex = S.anyCodexPane(st, paneID) || worker?.worker?.agent === 'codex';
             // An idle pane with no Claude session is a plain shell: nothing there can be a live prompt, so skip the capture
             // unless a card or waiting row for it still needs settling.
             const pane = st.panes.get(paneID);
             const pending = st.unparsed.has(paneID) || st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt);
-            if (pane?.status === 'idle' && !pane.agentSessionID && !pending) return;
+            if (pane?.status === 'idle' && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace)) return;
             let screen;
             try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
-            const prompt = codex ? N.parseCodexPrompt(screen) : N.parsePrompt(screen);
+            const codexPrompt = st.panes.get(paneID)?.agent === 'claude' ? null : N.parseCodexPrompt(screen);
+            const codex = knownCodex || !!codexPrompt;
+            const prompt = codex ? codexPrompt : N.parsePrompt(screen);
             const hash = prompt ? N.promptHash(prompt.block) : null;
             for (const item of st.attention) {
                 if (item.paneID !== paneID || item.type !== 'Request' || item.handledAt || item.promptHash === hash) continue;
                 // The Codex hook may fire before its menu is drawn. Keep its navigation card through that brief gap.
-                if (codex && !prompt && Date.now() - Date.parse(item.createdAt) < 10000) continue;
+                if (codex && !prompt && !item.promptBlock && Date.now() - Date.parse(item.createdAt) < 10000) continue;
                 await A.handleItem(att, item.id); changed = true;
             }
             const open = st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt && i.promptHash === hash);
@@ -635,6 +637,13 @@ export function registerAll(api, deps = modules) {
         // Codex cards are navigation only and should appear regardless of the Auto setting.
         const scannedCodex = new Set([...scanned, ...st.manifestWorkers.map(w => w.paneID)]);
         for (const pane of [...st.panes.values()]) if (!scannedCodex.has(pane.id) && S.anyCodexPane(st, pane.id)) await scanWorker(pane.id);
+        // Hooks can be unavailable in an older Codex session. Scan an unknown shell when Kelpi says it is
+        // waiting, or when it is the focused pane, and recognise only Codex's navigation-only menu.
+        for (const pane of [...st.panes.values()]) {
+            if (scannedCodex.has(pane.id) || pane.agent || (pane.type ?? 'shell') !== 'shell') continue;
+            if (pane.status !== 'waitingForInput' && !(pane.isFocused && pane.isActiveWorkspace)) continue;
+            await scanWorker(pane.id);
+        }
         for (const orch of orchestrators) {
             const orchOpen = orch && st.panes.has(orch) ? st.attention.filter(i => i.paneID === orch && i.type === 'Request' && !i.handledAt) : [];
             if (!orchOpen.length) continue;

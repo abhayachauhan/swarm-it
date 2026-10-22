@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStore, applyStateChange } from '../backend/store.mjs';
+import { createStore, applyStateChange, buildSnapshot } from '../backend/store.mjs';
 import { createAttention } from '../backend/attention.mjs';
 import { onNotification, parsePrompt, parseCodexPrompt, promptHash } from '../backend/notify.mjs';
 import { makeFakeApi, MANIFEST, PROMPT_TEXT } from './backend-fake-api.mjs';
@@ -42,6 +42,15 @@ test('Codex parser requires a current menu; notification still raises a generic 
     const { item } = await onNotification(api, store, att, note('codex', { title: 'Codex' }));
     assert.equal(item.approvable, false);
     assert.match(item.text, /open its pane/);
+});
+
+test('Codex hook title identifies a pane whose Kelpi agent field is empty', async () => {
+    const { api, store, att } = setup({ codex: 'Codex working' });
+    applyStateChange(store, { kind: 'pane-upserted', workspaceID: 'ws2', paneID: 'codex', pane: { id: 'codex', type: 'shell', agent: null, status: 'idle', workspaceID: 'ws2' } });
+    const { item } = await onNotification(api, store, att, note('codex', { title: 'Codex', body: 'Waiting for approval' }));
+    assert.equal(item.agent, 'codex');
+    store.followWorkspaceID = 'ws1';
+    assert.ok(buildSnapshot(store).attention.some(card => card.paneID === 'codex'), 'shown while following a different workspace');
 });
 
 test('parsePrompt reads the command from a Claude permission menu', () => {
