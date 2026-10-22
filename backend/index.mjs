@@ -557,11 +557,7 @@ export function registerAll(api, deps = modules) {
         const scanned = new Set();
         const scanWorker = async (paneID, worker = null) => {
             if (worker) scanned.add(paneID);
-            // Claude's select-menu parser must never interpret a Codex TUI as an approvable prompt.
-            if (st.panes.get(paneID)?.agent === 'codex' || worker?.worker?.agent === 'codex') {
-                if (worker && await noteUnparsed(worker, true)) changed = true;
-                return;
-            }
+            const codex = st.panes.get(paneID)?.agent === 'codex' || worker?.worker?.agent === 'codex';
             // An idle pane with no Claude session is a plain shell: nothing there can be a live prompt, so skip the capture
             // unless a card or waiting row for it still needs settling.
             const pane = st.panes.get(paneID);
@@ -569,10 +565,13 @@ export function registerAll(api, deps = modules) {
             if (pane?.status === 'idle' && !pane.agentSessionID && !pending) return;
             let screen;
             try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
-            const prompt = N.parsePrompt(screen);
+            const prompt = codex ? N.parseCodexPrompt(screen) : N.parsePrompt(screen);
             const hash = prompt ? N.promptHash(prompt.block) : null;
             for (const item of st.attention) {
-                if (item.paneID === paneID && item.type === 'Request' && !item.handledAt && item.promptHash !== hash) { await A.handleItem(att, item.id); changed = true; }
+                if (item.paneID !== paneID || item.type !== 'Request' || item.handledAt || item.promptHash === hash) continue;
+                // The Codex hook may fire before its menu is drawn. Keep its navigation card through that brief gap.
+                if (codex && !prompt && Date.now() - Date.parse(item.createdAt) < 10000) continue;
+                await A.handleItem(att, item.id); changed = true;
             }
             const open = st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt && i.promptHash === hash);
             if (prompt && !open) { await N.onNotification(api, st, att, { data: { paneID, kind: 'prompt-scan' } }, { screen }); changed = true; }
@@ -633,6 +632,9 @@ export function registerAll(api, deps = modules) {
             for (const pane of [...st.panes.values()]) if (!swarmPanes.has(pane.id) && S.anyClaudePane(st, pane.id)) await scanWorker(pane.id);
             orchestrators.clear();
         }
+        // Codex cards are navigation only and should appear regardless of the Auto setting.
+        const scannedCodex = new Set([...scanned, ...st.manifestWorkers.map(w => w.paneID)]);
+        for (const pane of [...st.panes.values()]) if (!scannedCodex.has(pane.id) && S.anyCodexPane(st, pane.id)) await scanWorker(pane.id);
         for (const orch of orchestrators) {
             const orchOpen = orch && st.panes.has(orch) ? st.attention.filter(i => i.paneID === orch && i.type === 'Request' && !i.handledAt) : [];
             if (!orchOpen.length) continue;

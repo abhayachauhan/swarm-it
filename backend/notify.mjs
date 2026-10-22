@@ -2,7 +2,7 @@
 // The notification body holds no command text, so the command is read by capturing the pane.
 import { createHash } from 'node:crypto';
 import { addItem } from './attention.mjs';
-import { actionableWorker, actionableOrchestrator, otherSwarmPane, anyClaudePane, capturePane } from './store.mjs';
+import { actionableWorker, actionableOrchestrator, otherSwarmPane, anyClaudePane, anyCodexPane, capturePane } from './store.mjs';
 
 // CSI sequences and OSC sequences (terminated by BEL or ESC \\). An unterminated escape is left in, which makes the prompt non-approvable.
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
@@ -116,6 +116,25 @@ export function parsePrompt(captureText) {
     return { command: approvable ? commandLines.join('\n') : '', question, block, approvable };
 }
 
+// Codex renders a different approval menu. Recognise it only for a navigation card: never use this
+// parser to send an approval key. Require a current title and a numbered Yes option near the screen end.
+const CODEX_QUESTION = /^(?:Would you like to (?:run the following command|send input to (?:the existing )?terminal|grant these permissions|make the following edits)\?|Do you want to approve network access to .+\?|.+ needs your approval\.)$/i;
+const CODEX_YES = /^[❯›>]?\s*1[.)]\s*Yes(?:,|\b)/i;
+export function parseCodexPrompt(captureText) {
+    if (typeof captureText !== 'string') return null;
+    const lines = captureText.replace(ANSI, '').split('\n').map(line => line.trim());
+    const filled = lines.map((line, index) => line ? index : -1).filter(index => index >= 0);
+    const start = filled[Math.max(0, filled.length - 25)] ?? 0;
+    for (let q = lines.length - 1; q >= start; q -= 1) {
+        if (!CODEX_QUESTION.test(lines[q])) continue;
+        const optionAt = lines.findIndex((line, index) => index > q && index <= q + 20 && CODEX_YES.test(line));
+        if (optionAt < 0) continue;
+        const last = Math.min(lines.length - 1, optionAt + 4);
+        return { question: lines[q], block: lines.slice(q, last + 1).filter(Boolean).join('\n'), command: '', approvable: false };
+    }
+    return null;
+}
+
 /**
  * The newer layout, contiguous: HEADER, up to MAX_DESC description lines (a narrow pane wraps the description), a
  * dashed RULE, ONE run of command lines, a RULE, up to MAX_NOTES note lines (e.g. "Permission rule Bash(mv *)
@@ -160,19 +179,34 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
     const n = event?.data ?? event ?? {};
     const paneID = n.paneID;
     if (typeof paneID !== 'string') return { ok: true, ignored: 'no-pane' };
-    if (store.panes.get(paneID)?.agent === 'codex' || store.manifestWorkers.some(w => w.paneID === paneID && w.agent === 'codex')) return { ok: true, ignored: 'codex-screen' };
+    const codex = anyCodexPane(store, paneID) || store.manifestWorkers.some(w => w.paneID === paneID && w.agent === 'codex');
     const inSwarm = !!actionableWorker(store, paneID) || actionableOrchestrator(store, paneID);
     // Another live swarm's pane: only its permission Requests are global; errors stay with the followed swarm.
     const other = inSwarm ? null : otherSwarmPane(store, paneID);
     // Any other Claude pane, while auto-approve is on: Requests only, like another swarm's pane.
     const claude = !inSwarm && !other && anyClaudePane(store, paneID);
-    if (!inSwarm && !other && !claude) return { ok: true, ignored: 'not-swarm' };
+    if (!inSwarm && !other && !claude && !codex) return { ok: true, ignored: 'not-swarm' };
     const label = other ? other.label : labelFor(store, paneID);
     const isError = typeof n.kind === 'string' && n.kind.includes('error');
     if ((other || claude) && isError) return { ok: true, ignored: 'other-swarm-error' };
     if (isError) {
         store.errored.add(paneID);
         const { item } = await addItem(att, { type: 'Error', paneID, text: `${label}: ${n.body || n.title || 'agent reported an error'}` });
+        return { ok: true, item };
+    }
+    if (codex) {
+        let screenText = screen;
+        if (typeof screenText !== 'string') {
+            try { screenText = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); }
+            catch { screenText = ''; }
+        }
+        const prompt = parseCodexPrompt(screenText);
+        const block = prompt?.block ?? 'Codex approval requested';
+        const { item } = await addItem(att, {
+            type: 'Request', paneID, promptHash: promptHash(block), promptBlock: prompt?.block,
+            approvable: false, text: `${label} needs approval in Codex; open its pane to respond`,
+            ...(other ? { swarmName: other.swarm.name, swarmWorkspaceID: other.swarm.workspaceID } : {})
+        });
         return { ok: true, item };
     }
     let text = screen;

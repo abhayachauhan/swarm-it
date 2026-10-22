@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, applyStateChange } from '../backend/store.mjs';
 import { createAttention } from '../backend/attention.mjs';
-import { onNotification, parsePrompt, promptHash } from '../backend/notify.mjs';
+import { onNotification, parsePrompt, parseCodexPrompt, promptHash } from '../backend/notify.mjs';
 import { makeFakeApi, MANIFEST, PROMPT_TEXT } from './backend-fake-api.mjs';
 
 function setup(captures) {
@@ -15,6 +15,34 @@ function setup(captures) {
     return { api, store, att };
 }
 const note = (paneID, extra = {}) => ({ name: 'daemon.notification', data: { type: 'notification', kind: 'agent-notification', paneID, workspaceID: 'ws1', title: 'Claude', body: 'Claude needs your permission', ...extra } });
+export const CODEX_PROMPT_TEXT = ['Would you like to run the following command?', '', 'git status --short', '', '› 1. Yes, proceed', '  2. No, continue without running it', '  3. No, and tell Codex what to do differently'].join('\n');
+
+test('Codex approval notification becomes a navigation-only Request even outside a swarm', async () => {
+    const { api, store, att } = setup({ codex: CODEX_PROMPT_TEXT });
+    applyStateChange(store, { kind: 'pane-upserted', workspaceID: 'ws1', paneID: 'codex', pane: { id: 'codex', type: 'shell', agent: 'codex', status: 'waitingForInput', workspaceID: 'ws1' } });
+    const prompt = parseCodexPrompt(CODEX_PROMPT_TEXT);
+    assert.equal(prompt.approvable, false);
+    assert.match(prompt.question, /following command/);
+    const { item } = await onNotification(api, store, att, note('codex', { title: 'Codex', body: 'Codex needs your permission' }));
+    assert.equal(item.type, 'Request');
+    assert.equal(item.approvable, false);
+    assert.match(item.text, /approval in Codex/);
+    assert.equal(item.promptHash, promptHash(prompt.block));
+    const { approve, deny } = await import('../backend/actions.mjs');
+    assert.equal((await approve(api, store, item.id, item.promptHash)).code, 'UNSUPPORTED_AGENT');
+    assert.equal((await deny(api, store, item.id)).code, 'UNSUPPORTED_AGENT');
+    assert.equal(api.callsTo('terminal.sendKey').length, 0);
+});
+
+test('Codex parser requires a current menu; notification still raises a generic card before the menu is drawn', async () => {
+    assert.equal(parseCodexPrompt('Would you like to run the following command?\nno options'), null);
+    assert.equal(parseCodexPrompt(`${CODEX_PROMPT_TEXT}\n${Array.from({ length: 30 }, (_, i) => `output ${i}`).join('\n')}`), null);
+    const { api, store, att } = setup({ codex: 'Working...' });
+    applyStateChange(store, { kind: 'pane-upserted', workspaceID: 'ws1', paneID: 'codex', pane: { id: 'codex', type: 'shell', agent: 'codex', status: 'running', workspaceID: 'ws1' } });
+    const { item } = await onNotification(api, store, att, note('codex', { title: 'Codex' }));
+    assert.equal(item.approvable, false);
+    assert.match(item.text, /open its pane/);
+});
 
 test('parsePrompt reads the command from a Claude permission menu', () => {
     const parsed = parsePrompt(PROMPT_TEXT);

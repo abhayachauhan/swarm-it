@@ -117,7 +117,9 @@ For an unattended run, the rail's **Auto** button approves permission prompts fo
   a decision on Bash requests, and leaves Codex's own approval prompt in place when Auto is off,
   the provider abstains, or Kelpi cannot be reached. Run `/hooks` inside Codex to trust the changed
   hook file. Codex `apply_patch` and MCP approvals remain in Codex's native prompt. No screen
-  keystrokes are used to approve Codex requests.
+  keystrokes are used to approve Codex requests. A pending Codex approval now appears in the
+  rail as a **Go to pane** card, whether Auto is on or off. The card is raised by Kelpi's Codex
+  notification hook or by a recognised Codex approval menu on the pane screen; answer it in Codex.
 
   While Auto is off, and for anything it does not approve, the plugin abstains: Claude shows its normal
   prompt and the rail's Approve and Deny work as before. `kelpi plugin service-select kelpi.agent.permissions default`

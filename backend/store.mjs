@@ -77,8 +77,15 @@ export function anyClaudePane(store, paneID) {
     return !!pane && pane.agent !== 'codex' && (pane.type ?? 'shell') === 'shell' && typeof pane.workspaceID === 'string' && !!pane.workspaceID && !!(pane.agent || pane.agentSessionID);
 }
 
+/** Codex approvals are shown as navigation cards even with Auto off; they are answered in Codex. */
+export function anyCodexPane(store, paneID) {
+    const pane = store.panes.get(paneID);
+    return !!pane && (pane.agent === 'codex' || pane.agentKind === 'codex')
+        && (pane.type ?? 'shell') === 'shell' && typeof pane.workspaceID === 'string' && !!pane.workspaceID;
+}
+
 /** Does any ownership gate still accept a Request on this pane (a swarm's worker or orchestrator, or any Claude pane while auto-approve is on)? */
-export const ownedRequestPane = (store, paneID) => !!actionableWorker(store, paneID) || actionableOrchestrator(store, paneID) || !!otherSwarmPane(store, paneID) || anyClaudePane(store, paneID);
+export const ownedRequestPane = (store, paneID) => !!actionableWorker(store, paneID) || actionableOrchestrator(store, paneID) || !!otherSwarmPane(store, paneID) || anyClaudePane(store, paneID) || anyCodexPane(store, paneID);
 
 export function createStore(api) {
     return {
