@@ -1,9 +1,32 @@
 ---
 name: swarm-it
-description: Plan and coordinate a swarm of Claude or Codex workers in Kelpi using the Swarm-it rail. Use when the user asks to "swarm it", distribute work, fan out tasks, or assign implementation and review to agents.
+description: Plan and coordinate a swarm of Claude or Codex workers in Kelpi, or hand a goal from one CLI to the other. Use when the user asks to "swarm it", distribute work, assign implementation and review, or hand off to Claude or Codex.
 ---
 
 # Swarm it
+
+## Hand off to the other CLI
+
+When the user asks to move the current goal from Claude to Codex, or Codex to Claude, summarize the
+conversation you actually have. Include the goal, 1–8 key points (decisions, constraints, relevant
+files or branch, and verified progress), and the next concrete step. Each field must be one line and
+at most 500 characters. Do not invent missing context. Run the plugin handoff helper from the
+source agent's Kelpi pane, replacing `--from` and `--to` with the actual CLIs:
+
+```bash
+node <skill-dir>/swarm-handoff.mjs --from codex --to claude <<'JSON'
+{"goal":"...","keyPoints":["..."],"next":"..."}
+JSON
+```
+
+For Claude to Codex use `--from claude --to codex`. The helper uses `KELPI_PANE_ID` to identify the
+source, and the plugin saves the summary under `~/.kelpi-swarm/handoffs/`, opens a new pane in the
+same workspace, and starts the other CLI with that file as context. The original pane stays open.
+Report the new pane ID and handoff path. If there is no Kelpi pane ID, explain that the handoff
+must be run from a Kelpi pane. A handoff carries a summary, not the full conversation or hidden
+tool state; the target agent should check current files before making changes.
+
+## Swarm workers
 
 Turn the request into a short task plan, identify independent pieces, then start one worker per piece.
 `swarm-spawn` opens a pane, registers it in the rail, and starts Claude or Codex on a task file.

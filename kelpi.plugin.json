@@ -34,6 +34,7 @@
       { "id": "local.swarm-view.pin-orchestrator", "title": "Swarm: pin this pane as orchestrator" },
       { "id": "local.swarm-view.clear-attention", "title": "Swarm: clear attention item" },
       { "id": "local.swarm-view.send-to-worker", "title": "Swarm: send a message to a worker" },
+      { "id": "local.swarm-view.handoff", "title": "Swarm: hand off a goal between Claude and Codex" },
       { "id": "local.swarm-view.open-result", "title": "Swarm: open worker result file" },
       { "id": "local.swarm-view.auto-approve", "title": "Swarm: auto-approve permission requests (on/off, hours)" },
       { "id": "local.swarm-view.auto-approve-log", "title": "Swarm: list or clear the auto-approve log" },

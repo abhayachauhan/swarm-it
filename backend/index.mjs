@@ -15,6 +15,7 @@ import * as suggested from './suggested.mjs';
 import * as restart from './restart.mjs';
 import * as workers from './workers.mjs';
 import * as exits from './exits.mjs';
+import * as handoff from './handoff.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 
 export const PLUGIN_ID = 'local.swarm-view';
@@ -22,7 +23,7 @@ export const COMMANDS = [
     'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
     'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
-    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude'
+    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff'
 ].map(name => `${PLUGIN_ID}.${name}`);
 export const COUNTS_ITEM = `${PLUGIN_ID}.counts`;
 export const SNAPSHOT_EVENT = 'snapshot';
@@ -32,7 +33,7 @@ export const RUN_VIEW = `${PLUGIN_ID}.run`;
 /** Backend to sidebar: the one signal that gives the rail the keyboard (emitted as 'focus-rail', host-prefixed). */
 export const FOCUS_EVENT = 'focus-rail';
 
-export const modules = { store, manifest, attention, actions, collapse, notify, autoapprove, suggested, restart, workers, exits };
+export const modules = { store, manifest, attention, actions, collapse, notify, autoapprove, suggested, restart, workers, exits, handoff };
 
 const MANIFEST_RELOAD_MS = 1000;
 /** Every other swarm's manifest is re-read at most this often (one directory listing, then one read per manifest). */
@@ -63,7 +64,7 @@ export function countsPatch(counts, hasError, note = null) {
  * @returns {(() => void) & { ready: Promise<void>, store: object }}
  */
 export function registerAll(api, deps = modules) {
-    const { store: S, manifest: M, attention: A, actions: X, collapse: C, notify: N, autoapprove: AA = autoapprove, suggested: R = suggested, restart: RS = restart, workers: W = workers, exits: E = exits } = deps;
+    const { store: S, manifest: M, attention: A, actions: X, collapse: C, notify: N, autoapprove: AA = autoapprove, suggested: R = suggested, restart: RS = restart, workers: W = workers, exits: E = exits, handoff: H = handoff } = deps;
     /** Writes text to the system clipboard; resolves true when it worked. Tests inject one. */
     const clipboard = deps.clipboard ?? R.pbcopy;
     const st = S.createStore(api);
@@ -786,6 +787,7 @@ export function registerAll(api, deps = modules) {
     command('read-result', async args => opensResult(args, () => X.readResult(api, st, args.paneID)));
     command('capture-worker', async args => needPane(args) ?? X.captureWorker(api, st, args.paneID, args.lines));
     command('send-to-worker', async args => needPane(args) ?? X.sendToWorker(api, st, args.paneID, args.text));
+    command('handoff', async args => H.handoff(api, st, args));
     command('open-result', async args => opensResult(args, () => X.openResult(api, st, args.paneID)));
     command('dismiss-worker', async args => needPane(args) ?? after(await X.dismissWorker(api, st, args.paneID)));
     command('approve', async args => needItem(args) ?? after(await X.approve(api, st, args.itemID, args.promptHash)));

@@ -58,6 +58,19 @@ Codex implement and Claude review” (or the reverse). The coordinator starts th
 implementation diff exists, passes the findings back to the implementer, and verifies the fixes.
 For a larger change, ask for separate Codex and Claude reviews with distinct focuses.
 
+### Hand off between Claude and Codex
+
+In a Kelpi pane, tell the current agent **“hand this goal off to Codex”** or **“hand this goal off
+to Claude.”** The shared skill asks that agent to write a short Goal / Key points / Next summary.
+The plugin saves it privately under `~/.kelpi-swarm/handoffs/`, opens a new pane in the same
+workspace, and starts the other CLI with the summary as context. The original conversation stays
+open. The receiving agent checks the current files before continuing; the handoff does not copy the
+full chat or its hidden tool state.
+
+The plugin command is `local.swarm-view.handoff`. The skill calls it through
+`node skills/swarm-it/swarm-handoff.mjs --from codex --to claude` (or the reverse) with a JSON
+summary on standard input. It requires `KELPI_PANE_ID`, which Kelpi sets in its panes.
+
 ### Workers that stop without a result
 
 On Kelpi 0.2.18 or newer the plugin listens to agent hook events (`api.agents.onEvent`). A Claude worker's last
