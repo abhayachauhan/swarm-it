@@ -926,13 +926,13 @@ export function registerAll(api, deps = modules) {
     });
     command('close-run-view', async () => ({ ok: true, closedViewPaneID: await closeRunView() }));
 
-    // Restart Claude on the same conversation. The reply waits for the resume line (the host refuses calls made after
+    // Restart the detected CLI on the same conversation. The reply waits for the resume line (the host refuses calls made after
     // a command replied; commands get 30 s, the exit wait 15 s), outside the serial queue so the rail keeps updating.
     // A refusal is thrown: the pane menu shows a thrown error as a toast and drops an { ok: false } reply.
     disposers.push(api.commands.register(`${PLUGIN_ID}.restart-claude`, async (args, context) => {
         await ready;
         const { pane, error } = await R.sourcePane(api, args && typeof args === 'object' ? args : {}, context);
-        const result = error ?? await RS.restartClaude(api, st, pane.id).then(r => (r.result.ok && r.result.restarting ? r.finished : r.result));
+        const result = error ?? await RS.restartAgent(api, st, pane.id).then(r => (r.result.ok && r.result.restarting ? r.finished : r.result));
         if (!result.ok) throw Object.assign(new Error(result.error), { code: result.code });
         return result;
     }));

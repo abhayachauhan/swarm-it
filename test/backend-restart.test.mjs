@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerAll, modules } from '../backend/index.mjs';
-import { restartClaude, claudeInputEmpty } from '../backend/restart.mjs';
+import { restartAgent, claudeInputEmpty, codexInputEmpty } from '../backend/restart.mjs';
 import { createStore } from '../backend/store.mjs';
 import { makeFakeApi } from './backend-fake-api.mjs';
 
@@ -9,6 +9,8 @@ const SID = '53097a1b-9915-4464-a820-f6cd7c855962';
 const RULE = '─'.repeat(60);
 const claudeScreen = (input = '') => ['⏺ Done.', '', RULE, `❯ ${input}`, RULE, '  [Opus 5.5] | ~/repos', '  ⏵⏵ auto mode on'].join('\n');
 const SHELL = `Resume this session with:\nclaude --resume ${SID}\n$ `;
+const codexScreen = (input = 'Ask Codex to do anything') => ['OpenAI Codex (v0.163.0)', '', `› ${input}`, '', '  GPT-6.1-Sol low · ~/repos/swarm-it'].join('\n');
+const CODEX_SHELL = `Session ID: ${SID}\n$ `;
 const PROMPT = [RULE, ' Bash command', '', '   ls', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n');
 
 function setup({ screen = claudeScreen(), pane = {} } = {}) {
@@ -21,7 +23,10 @@ function setup({ screen = claudeScreen(), pane = {} } = {}) {
     const send = api.terminal.send;
     api.terminal.send = async (paneID, text, options) => {
         const r = await send(paneID, text);
-        if (text === '/exit') { api.captureStore.c1 = SHELL; api.paneList[0].agentSessionID = null; }
+        if (text === '/exit') {
+            api.captureStore.c1 = api.paneList[0].agent === 'codex' || api.paneList[0].agentKind === 'codex' ? CODEX_SHELL : SHELL;
+            api.paneList[0].agentSessionID = null;
+        }
         // A bare send is typed at the shell prompt; `echo` mimics a shell that keeps the paste end's `~`.
         if (options?.bare) api.captureStore.c1 += (api.mangle ?? (t => t))(text) + (api.echo ?? '');
         return r;
@@ -41,7 +46,7 @@ test('a stray ~ left by a broken shell paste is erased before Enter', async () =
     api.echo = '~';
     const store = createStore(api);
     store.sessions.set('c1', SID);
-    const { result } = await restartClaude(api, store, 'c1', noSleep);
+    const { result } = await restartAgent(api, store, 'c1', noSleep);
     assert.equal(result.resumed, true);
     assert.deepEqual(keys(api), ['backspace', 'enter']);
 });
@@ -51,7 +56,7 @@ test('the resume line is not run when the shell shows something else', async () 
     api.mangle = text => text.replace('--resume', '-resume');
     const store = createStore(api);
     store.sessions.set('c1', SID);
-    const { result } = await restartClaude(api, store, 'c1', noSleep);
+    const { result } = await restartAgent(api, store, 'c1', noSleep);
     assert.equal(result.code, 'TYPED_WRONG');
     assert.deepEqual(keys(api), []);
 });
@@ -65,9 +70,57 @@ test('claudeInputEmpty: only an empty input box between the rules', () => {
     assert.equal(claudeInputEmpty(PROMPT), false);
 });
 
+test('Codex empty composer recognises its placeholder and rejects drafts, continuations and menus', () => {
+    assert.equal(codexInputEmpty(codexScreen()), true);
+    assert.equal(codexInputEmpty(codexScreen('')), true);
+    assert.equal(codexInputEmpty('›\n? for shortcuts  100% context left'), true);
+    assert.equal(codexInputEmpty(codexScreen('half a prompt')), false);
+    assert.equal(codexInputEmpty(codexScreen('\ncontinued draft')), false);
+    assert.equal(codexInputEmpty('Would you like to run the following command?\n› 1. Yes, proceed\n2. No'), false);
+    assert.equal(codexInputEmpty(CODEX_SHELL), false);
+});
+
+test('an idle Codex is quit and resumed on its exact session, using either live agent field', async () => {
+    for (const pane of [{ agent: 'codex' }, { agent: null, agentKind: 'codex' }]) {
+        const api = setup({ screen: codexScreen(), pane });
+        const { result, finished } = await restartAgent(api, createStore(api), 'c1', noSleep);
+        assert.equal(result.restarting, true);
+        assert.equal((await finished).resumed, true);
+        assert.deepEqual(sent(api), ['/exit', `codex resume ${SID}`]);
+    }
+});
+
+test('Codex at a shell resumes from remembered agent and session metadata', async () => {
+    const api = setup({ screen: CODEX_SHELL, pane: { agent: null, agentSessionID: null } });
+    const store = createStore(api);
+    store.sessions.set('c1', SID);
+    store.panes.set('c1', { agent: 'codex' });
+    const { result } = await restartAgent(api, store, 'c1', noSleep);
+    assert.equal(result.resumed, true);
+    assert.deepEqual(sent(api), [`codex resume ${SID}`]);
+});
+
+test('Codex refuses drafts, busy turns and permission menus without typing', async () => {
+    const permission = 'Would you like to run the following command?\n\nls\n\n› 1. Yes, proceed\n2. No, continue without running it';
+    for (const [screen, status, code] of [[codexScreen('draft'), 'idle', 'INPUT_NOT_EMPTY'], [codexScreen(), 'running', 'BUSY'], [permission, 'idle', 'PROMPT_OPEN']]) {
+        const api = setup({ screen, pane: { agent: 'codex', status } });
+        const { result } = await restartAgent(api, createStore(api), 'c1', noSleep);
+        assert.equal(result.code, code);
+        assert.deepEqual(sent(api), []);
+    }
+});
+
+test('Codex never receives a resume command while it is still open', async () => {
+    const api = setup({ screen: codexScreen(), pane: { agent: 'codex' } });
+    api.terminal.send = async (paneID, text) => { api.calls.push({ name: 'terminal.send', args: [paneID, text] }); };
+    const { finished } = await restartAgent(api, createStore(api), 'c1', { ...noSleep, timeoutMs: 1000 });
+    assert.equal((await finished).code, 'EXIT_TIMEOUT');
+    assert.deepEqual(sent(api), ['/exit']);
+});
+
 test('an idle Claude is quit with /exit and resumed on the same session', async () => {
     const api = setup();
-    const { result, finished } = await restartClaude(api, createStore(api), 'c1', noSleep);
+    const { result, finished } = await restartAgent(api, createStore(api), 'c1', noSleep);
     assert.deepEqual([result.ok, result.restarting, result.session], [true, true, SID]);
     assert.equal((await finished).resumed, true);
     assert.deepEqual(sent(api), ['/exit', `claude --resume ${SID}`]);
@@ -77,7 +130,7 @@ test('a pane already back at its shell is resumed from the plugin\'s saved sessi
     const api = setup({ screen: SHELL, pane: { agentSessionID: null } });
     const store = createStore(api);
     store.sessions.set('c1', SID);
-    const { result } = await restartClaude(api, store, 'c1', noSleep);
+    const { result } = await restartAgent(api, store, 'c1', noSleep);
     assert.equal(result.resumed, true);
     assert.deepEqual(sent(api), [`claude --resume ${SID}`]);
 });
@@ -93,7 +146,7 @@ test('refuses, typing nothing, when restarting would lose work or answer a promp
     ];
     for (const [opts, code] of cases) {
         const api = setup(opts);
-        const { result } = await restartClaude(api, createStore(api), 'c1', noSleep);
+        const { result } = await restartAgent(api, createStore(api), 'c1', noSleep);
         assert.equal(result.code, code, JSON.stringify(opts));
         assert.deepEqual(sent(api), [], `${code}: nothing typed`);
     }
@@ -102,14 +155,14 @@ test('refuses, typing nothing, when restarting would lose work or answer a promp
 test('gives up without typing the resume line when Claude never exits', async () => {
     const api = setup();
     api.terminal.send = async (paneID, text) => { api.calls.push({ name: 'terminal.send', args: [paneID, text] }); return {}; };
-    const { finished } = await restartClaude(api, createStore(api), 'c1', { ...noSleep, timeoutMs: 1000 });
+    const { finished } = await restartAgent(api, createStore(api), 'c1', { ...noSleep, timeoutMs: 1000 });
     assert.equal((await finished).code, 'EXIT_TIMEOUT');
     assert.deepEqual(sent(api), ['/exit']);
 });
 
 test('restart-claude command uses the invocation pane and replies once the resume line is typed', async () => {
     const api = setup();
-    const dispose = registerAll(api, { ...modules, restart: { restartClaude: (a, s, id) => restartClaude(a, s, id, noSleep) } });
+    const dispose = registerAll(api, { ...modules, restart: { restartAgent: (a, s, id) => restartAgent(a, s, id, noSleep) } });
     await dispose.ready;
     const result = await api.command('restart-claude', {}, { paneID: 'c1' });
     assert.equal(result.resumed, true);
@@ -119,4 +172,13 @@ test('restart-claude command uses the invocation pane and replies once the resum
     api.captureStore.c1 = claudeScreen('half a prompt');
     api.paneList[0].agentSessionID = SID;
     await assert.rejects(api.command('restart-claude', {}, { paneID: 'c1' }), /input box has text/);
+});
+
+test('the same restart command detects Codex from its invocation pane', async () => {
+    const api = setup({ screen: codexScreen(), pane: { agent: 'codex' } });
+    const dispose = registerAll(api, { ...modules, restart: { restartAgent: (a, s, id) => restartAgent(a, s, id, noSleep) } });
+    await dispose.ready;
+    assert.equal((await api.command('restart-claude', {}, { paneID: 'c1' })).resumed, true);
+    assert.deepEqual(sent(api), ['/exit', `codex resume ${SID}`]);
+    dispose();
 });

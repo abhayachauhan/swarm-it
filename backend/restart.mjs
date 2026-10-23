@@ -1,14 +1,14 @@
-// Restart Claude in a pane on the same conversation: quit it with /exit, wait for the shell, type `claude --resume <id>`.
-// The id is the live one Kelpi reports, else the plugin's own copy (store.sessions), which outlives Claude exiting.
-import { parsePrompt, PROMPT_CAPTURE_LINES } from './notify.mjs';
+// Quit the pane's CLI, wait for the shell, and resume its exact conversation.
+import { parsePrompt, parseCodexPrompt, PROMPT_CAPTURE_LINES } from './notify.mjs';
 import { capturePane, rememberSession, SESSION_ID } from './store.mjs';
 import { sendText, showsClaudeInput, textProblem } from './actions.mjs';
+import { findTranscript } from './handoff.mjs';
 
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
 const message = error => String(error?.message ?? error);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-/** How long to wait for Claude to exit after /exit, and how often to look. */
+/** How long to wait for the CLI to exit after /exit, and how often to look. */
 export const EXIT_TIMEOUT_MS = Number(process.env.SWARM_RESTART_EXIT_TIMEOUT_MS) || 15000;
 export const EXIT_POLL_MS = 250;
 /** Time for the shell to draw its prompt after Claude has gone. */
@@ -30,6 +30,19 @@ export function claudeInputEmpty(text) {
     }
     return false;
 }
+
+/** The current Codex composer, excluding its footer; null when a menu or another screen is showing. */
+function codexInput(text) {
+    const lines = String(text ?? '').replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').split('\n').filter(line => line.trim());
+    const at = lines.findLastIndex(line => /^\s*›(?:\s|$)/.test(line));
+    if (at < 0 || lines.length - at > 3) return null;
+    const footer = /^(?:\? for shortcuts.*|\d+% context left.*|[\w.-]+(?:\s+(?:minimal|low|medium|high|xhigh|default))?\s+·\s+[~/].*)$/i;
+    if (!lines.slice(at + 1).every(line => footer.test(line.trim()))) return null;
+    const input = lines[at].replace(/^\s*›\s?/, '').trim();
+    return input === 'Ask Codex to do anything' ? '' : input;
+}
+
+export const codexInputEmpty = text => codexInput(text) === '';
 
 /**
  * Type the resume line without Enter, check what reached the shell, then press Enter. Kelpi types text as a bracketed
@@ -65,12 +78,12 @@ async function freshPane(api, paneID) {
 }
 
 /**
- * Restart Claude in `paneID`. Returns `{ result, finished }`: `result` once /exit is typed (or at once when Claude has
+ * Restart the pane's CLI. Returns `{ result, finished }`: `result` once /exit is typed (or at once when the CLI has
  * already exited), `finished` when the resume line is typed or the wait gives up. Refused, with nothing typed, when
  * the pane is not a terminal, has no known session, shows a permission prompt, is mid-reply, has background agents,
- * or has text in Claude's input box.
+ * or has text in the CLI's input box.
  */
-export async function restartClaude(api, store, paneID, deps = {}) {
+export async function restartAgent(api, store, paneID, deps = {}) {
     const sleep = deps.sleep ?? pause;
     const timeoutMs = deps.timeoutMs ?? EXIT_TIMEOUT_MS;
     const done = result => ({ result, finished: Promise.resolve(result) });
@@ -78,26 +91,30 @@ export async function restartClaude(api, store, paneID, deps = {}) {
     const pane = await freshPane(api, paneID);
     if (!pane) return done(fail(`no pane ${paneID}`, 'NO_PANE'));
     if ((pane.type ?? 'shell') !== 'shell') return done(fail(`pane ${paneID} is not a terminal`, 'NOT_SHELL'));
-    if (pane.agent === 'codex' || pane.agentKind === 'codex') return done(fail('this pane runs Codex; use its native resume command', 'UNSUPPORTED_AGENT'));
     rememberSession(store, paneID, pane.agentSessionID);
     const session = pane.agentSessionID ?? store.sessions.get(paneID);
-    if (typeof session !== 'string' || !SESSION_ID.test(session)) return done(fail('no Claude session is known for this pane', 'NO_SESSION'));
-    const resumeLine = `claude --resume ${session}`;
+    if (typeof session !== 'string' || !SESSION_ID.test(session)) return done(fail('no Claude or Codex session is known for this pane', 'NO_SESSION'));
+    const agent = pane.agent ?? pane.agentKind ?? store.panes.get(paneID)?.agent
+        ?? store.manifestWorkers.find(worker => worker.paneID === paneID)?.agent
+        ?? (await findTranscript(session))?.agent;
+    if (!['claude', 'codex'].includes(agent)) return done(fail('cannot identify Claude or Codex in this pane', 'UNSUPPORTED_AGENT'));
+    const codex = agent === 'codex';
+    const name = codex ? 'Codex' : 'Claude';
+    const resumeLine = codex ? `codex resume ${session}` : `claude --resume ${session}`;
+    const showsInput = text => codex ? codexInput(text) !== null : showsClaudeInput(text);
 
     let screen;
     try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); } catch (error) { return done(fail(`capture failed: ${message(error)}`, 'CAPTURE_FAILED')); }
-    if (parsePrompt(screen)) return done(fail('Claude is showing a permission prompt; answer it first', 'PROMPT_OPEN'));
+    if (parsePrompt(screen) || parseCodexPrompt(screen)) return done(fail(`${name} is showing a permission prompt; answer it first`, 'PROMPT_OPEN'));
 
-    const atClaude = showsClaudeInput(screen);
-    if (!atClaude) {
-        // Claude has already exited: the pane is back at its shell.
-        if (pane.agentSessionID || pane.status === 'running') return done(fail('Claude is busy in this pane; wait for it to finish', 'BUSY'));
+    if (!showsInput(screen)) {
+        if (pane.agentSessionID || pane.status === 'running') return done(fail(`${name} is busy in this pane; wait for it to finish`, 'BUSY'));
         const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
         return done(sent.ok ? { ok: true, paneID, session, resumed: true } : sent);
     }
-    if (pane.status === 'running') return done(fail('Claude is mid-reply; wait for it to finish', 'BUSY'));
-    if (BACKGROUND.test(screen.split('\n').slice(-20).join('\n'))) return done(fail('Claude has background agents running; quitting would stop them', 'BACKGROUND'));
-    if (!claudeInputEmpty(screen)) return done(fail('Claude\'s input box has text in it; clear it first', 'INPUT_NOT_EMPTY'));
+    if (pane.status === 'running') return done(fail(`${name} is mid-reply; wait for it to finish`, 'BUSY'));
+    if (BACKGROUND.test(screen.split('\n').slice(-20).join('\n'))) return done(fail(`${name} has background agents running; quitting would stop them`, 'BACKGROUND'));
+    if (!(codex ? codexInputEmpty(screen) : claudeInputEmpty(screen))) return done(fail(`${name}'s input box has text in it; clear it first`, 'INPUT_NOT_EMPTY'));
 
     const quit = await sendText(api, paneID, '/exit');
     if (!quit.ok) return done(quit);
@@ -109,13 +126,13 @@ export async function restartClaude(api, store, paneID, deps = {}) {
             if (!now) return fail('the pane closed', 'NO_PANE');
             let text = null;
             try { text = await capturePane(api, paneID, 40); } catch { continue; }
-            // Gone once its input box is and either Kelpi cleared the session or Claude printed its goodbye line.
-            if (showsClaudeInput(text) || (now.agentSessionID && !/Resume this session with/.test(text))) continue;
+            const goodbye = codex ? text.includes(`Session ID: ${session}`) : /Resume this session with/.test(text);
+            if (showsInput(text) || (now.agentSessionID && !goodbye)) continue;
             await sleep(SHELL_SETTLE_MS);
             const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
             return sent.ok ? { ok: true, paneID, session, resumed: true } : sent;
         }
-        return fail(`Claude did not exit within ${Math.round(timeoutMs / 1000)}s; nothing more was typed`, 'EXIT_TIMEOUT');
+        return fail(`${name} did not exit within ${Math.round(timeoutMs / 1000)}s; nothing more was typed`, 'EXIT_TIMEOUT');
     })();
     return { result: { ok: true, paneID, session, restarting: true }, finished };
 }

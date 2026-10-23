@@ -16,8 +16,8 @@
       { "id": "local.swarm-view.run-suggested.header", "command": "local.swarm-view.run-suggested", "placement": "pane.header", "group": "Suggested command", "order": 10, "when": { "pane.type": "shell" } },
       { "id": "local.swarm-view.run-suggested.pane", "command": "local.swarm-view.run-suggested", "placement": "pane", "group": "Suggested command", "order": 10, "when": { "pane.type": "shell" } },
       { "id": "local.swarm-view.copy-suggested.pane", "command": "local.swarm-view.copy-suggested", "placement": "pane", "group": "Suggested command", "order": 20, "when": { "pane.type": "shell" } },
-      { "id": "local.swarm-view.restart-claude.header", "command": "local.swarm-view.restart-claude", "placement": "pane.header", "group": "Claude", "order": 10, "when": { "pane.type": "shell" } },
-      { "id": "local.swarm-view.restart-claude.pane", "command": "local.swarm-view.restart-claude", "placement": "pane", "group": "Claude", "order": 10, "when": { "pane.type": "shell" } },
+      { "id": "local.swarm-view.restart-claude.header", "command": "local.swarm-view.restart-claude", "placement": "pane.header", "group": "Swarm", "order": 10, "when": { "pane.type": "shell" } },
+      { "id": "local.swarm-view.restart-claude.pane", "command": "local.swarm-view.restart-claude", "placement": "pane", "group": "Swarm", "order": 10, "when": { "pane.type": "shell" } },
       { "id": "local.swarm-view.handoff.header", "command": "local.swarm-view.request-handoff", "placement": "pane.header", "group": "Swarm", "order": 20, "when": { "pane.type": "shell" } },
       { "id": "local.swarm-view.handoff.pane", "command": "local.swarm-view.request-handoff", "placement": "pane", "group": "Swarm", "order": 20, "when": { "pane.type": "shell" } }
     ],
@@ -49,7 +49,7 @@
       { "id": "local.swarm-view.copy-suggested", "title": "Copy fixed command" },
       { "id": "local.swarm-view.run-suggested-confirm", "title": "Swarm: run a confirmed suggested command" },
       { "id": "local.swarm-view.close-run-view", "title": "Swarm: close the run suggested command view" },
-      { "id": "local.swarm-view.restart-claude", "title": "Restart Claude (quit and resume)", "icon": "restart" }
+      { "id": "local.swarm-view.restart-claude", "title": "Restart Claude/Codex (quit and resume)", "icon": "restart" }
     ],
     "providers": [
       { "id": "local.swarm-view.permissions", "title": "Swarm auto-approve: allow safe Claude and Codex permission requests while Auto is on", "service": "kelpi.agent.permissions", "version": 1, "methods": ["decide"] }
