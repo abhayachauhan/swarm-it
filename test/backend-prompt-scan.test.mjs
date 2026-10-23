@@ -9,6 +9,48 @@ const lastSnapshot = api => api.emitted.filter(e => e.name === SNAPSHOT_EVENT).a
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const codexPrompt = ['Would you like to run the following command?', '', 'git status --short', '', '› 1. Yes, proceed', '  2. No, continue without running it'].join('\n');
 
+test('a focused Codex pane with missing hooks exposes queued questions even during Auto, without answering them', async () => {
+    const screen = 'Queued follow-up inputs\n? 1 question\n⇧← to answer\n\n› Ask Codex to do anything\nGPT-6.1-Sol low · ~/repos\n← for agents · ? for shortcuts';
+    const api = makeFakeApi({ panes: [{ id: 'unknown', agent: null, type: 'shell', status: 'running', workspaceID: 'ws1', isFocused: true, isActiveWorkspace: true }], captures: { unknown: screen } });
+    const dispose = registerAll(api);
+    try {
+        await dispose.ready;
+        await api.command('auto-approve', { on: true, hours: 1 });
+        await sleep(80);
+        const requests = lastSnapshot(api).attention.filter(i => i.paneID === 'unknown');
+        assert.equal(requests.length, 1);
+        assert.equal(requests[0].approvable, false);
+        assert.match(requests[0].text, /Shift\+Left Arrow/);
+        assert.equal(api.callsTo('terminal.sendKey').length, 0);
+        api.captureStore.unknown = 'Codex is working';
+        await sleep(80);
+        assert.equal(lastSnapshot(api).attention.some(i => i.paneID === 'unknown'), false);
+    } finally { dispose(); }
+});
+
+test('an idle offscreen pane marked Action Required exposes queued Codex questions without hooks', async () => {
+    const api = makeFakeApi({ panes: [{ id: 'unknown', type: 'shell', status: 'idle', workspaceID: 'ws1', title: '[ ! ] Action Required | task' }], captures: { unknown: 'Queued follow-up inputs\n? 1 question\n⇧← to answer\n› Ask Codex to do anything' } });
+    const dispose = registerAll(api);
+    try {
+        await dispose.ready;
+        await sleep(80);
+        assert.equal(lastSnapshot(api).attention.filter(i => i.paneID === 'unknown').length, 1);
+        assert.equal(api.callsTo('terminal.sendKey').length, 0);
+    } finally { dispose(); }
+});
+
+test('a Codex coordinator question stays visible while Auto is off', async () => {
+    const screen = 'Queued follow-up inputs\n? 1 question\n⇧← to answer\n› Ask Codex to do anything';
+    const api = makeSwarmApi({ captures: { orch: screen } });
+    const dispose = registerAll(api);
+    try {
+        await dispose.ready;
+        await api.fire('daemon.notification', { data: { kind: 'agent-notification', paneID: 'orch', title: 'Codex' } });
+        await sleep(80);
+        assert.equal(lastSnapshot(api).attention.filter(i => i.paneID === 'orch').length, 1);
+    } finally { dispose(); }
+});
+
 test('Codex approval is detected by the screen scan and removed when its menu goes away', async () => {
     const api = makeSwarmApi();
     const dispose = registerAll(api);

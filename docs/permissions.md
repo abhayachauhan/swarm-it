@@ -6,6 +6,7 @@ Swarm-it keeps Claude and Codex requests visible in the Kelpi rail. The two CLIs
 | --- | --- | --- |
 | Claude Code | Command card with **Approve** and **Deny** when the menu is recognised | The plugin captures the live prompt twice and sends a single key only if the prompt still matches the card. |
 | Codex CLI | Navigation card with **Go to pane** | Answer the native Codex prompt in its pane. The plugin never presses Claude-style approval keys in Codex. |
+| Codex queued question | **Needs you** card with the shortcut Codex displays | Open the pane and press the shown shortcut (currently **Shift+Left Arrow**) to see and answer the question. Questions are never automatically answered. |
 
 When Kelpi's Codex hook announces a request, the card can appear even if Kelpi has not populated the pane's agent field. The plugin also recognises Codex's current approval menu while scanning a waiting or focused pane. An unrecognised Claude prompt is shown with **Answer in the pane** instead of unsafe approval buttons.
 

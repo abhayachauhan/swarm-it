@@ -116,8 +116,7 @@ export function parsePrompt(captureText) {
     return { command: approvable ? commandLines.join('\n') : '', question, block, approvable };
 }
 
-// Codex renders a different approval menu. Recognise it only for a navigation card: never use this
-// parser to send an approval key. Require a current title and a numbered Yes option near the screen end.
+// Codex approvals and queued questions produce navigation cards, never automatic answers.
 const CODEX_QUESTION = /^(?:Would you like to (?:run the following command|send input to (?:the existing )?terminal|grant these permissions|make the following edits)\?|Do you want to approve network access to .+\?|.+ needs your approval\.)$/i;
 const CODEX_YES = /^[❯›>]?\s*1[.)]\s*Yes(?:,|\b)/i;
 export function parseCodexPrompt(captureText) {
@@ -126,6 +125,18 @@ export function parseCodexPrompt(captureText) {
     const filled = lines.map((line, index) => line ? index : -1).filter(index => index >= 0);
     const start = filled[Math.max(0, filled.length - 25)] ?? 0;
     for (let q = lines.length - 1; q >= start; q -= 1) {
+        const queued = /^\?\s+([1-9]\d*)\s+questions?$/i.exec(lines[q]);
+        if (queued && lines.slice(Math.max(start, q - 2), q).some(line => /^(?:[•·]\s+)?Queued follow-up inputs$/i.test(line))) {
+            const hint = /^(\S.*?)\s+to answer$/.exec(lines[q + 1] ?? '');
+            if (hint) {
+                const shortcut = hint[1] === '⇧←' ? 'Shift+Left Arrow' : hint[1];
+                return {
+                    question: `${queued[1]} question${queued[1] === '1' ? '' : 's'} waiting; press ${shortcut} in Codex to answer`,
+                    block: `Queued follow-up inputs\n${lines[q]}\n${lines[q + 1]}`,
+                    command: '', approvable: false, inputQuestion: true
+                };
+            }
+        }
         if (!CODEX_QUESTION.test(lines[q])) continue;
         const optionAt = lines.findIndex((line, index) => index > q && index <= q + 20 && CODEX_YES.test(line));
         if (optionAt < 0) continue;
@@ -206,7 +217,9 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
         const block = prompt?.block ?? 'Codex approval requested';
         const { item } = await addItem(att, {
             type: 'Request', paneID, agent: 'codex', promptHash: promptHash(block), promptBlock: prompt?.block,
-            approvable: false, text: `${label} needs approval in Codex; open its pane to respond`,
+            approvable: false, text: prompt?.inputQuestion
+                ? `${label}: ${prompt.question}`
+                : `${label} needs approval in Codex; open its pane to respond`,
             ...(other ? { swarmName: other.swarm.name, swarmWorkspaceID: other.swarm.workspaceID } : {})
         });
         return { ok: true, item };

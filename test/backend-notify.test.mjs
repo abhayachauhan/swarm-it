@@ -16,6 +16,32 @@ function setup(captures) {
 }
 const note = (paneID, extra = {}) => ({ name: 'daemon.notification', data: { type: 'notification', kind: 'agent-notification', paneID, workspaceID: 'ws1', title: 'Claude', body: 'Claude needs your permission', ...extra } });
 export const CODEX_PROMPT_TEXT = ['Would you like to run the following command?', '', 'git status --short', '', '› 1. Yes, proceed', '  2. No, continue without running it', '  3. No, and tell Codex what to do differently'].join('\n');
+const CODEX_QUEUED_QUESTION = '• Working (23m 32s • esc to interrupt)\n• Queued follow-up inputs\n  ? 1 question\n    ⇧← to answer\n\n› Ask Codex to do anything\nGPT-6.1-Sol low · ~/repos\n← for agents · ? for shortcuts';
+
+test('Codex queued question produces a navigation card with its answer shortcut', async () => {
+    const screen = CODEX_QUEUED_QUESTION;
+    const parsed = parseCodexPrompt(screen);
+    assert.equal(parsed.inputQuestion, true);
+    assert.equal(parsed.approvable, false);
+    assert.match(parsed.question, /1 question waiting; press Shift\+Left Arrow/);
+    const { api, store, att } = setup({ codex: screen });
+    const { item } = await onNotification(api, store, att, note('codex', { title: 'Codex' }));
+    assert.equal(item.agent, 'codex');
+    assert.equal(item.approvable, false);
+    assert.match(item.text, /question waiting/);
+    assert.match(item.text, /Shift\+Left Arrow/);
+    assert.doesNotMatch(item.text, /needs approval/);
+    assert.equal(api.callsTo('terminal.sendKey').length, 0);
+});
+
+test('Codex queued question detector requires a recent heading, nonzero count and answer hint', () => {
+    const screen = CODEX_QUEUED_QUESTION.replace('• Queued', 'Queued');
+    assert.equal(parseCodexPrompt(screen.replace('⇧← to answer', '')), null);
+    assert.equal(parseCodexPrompt(screen.replace('1 question', '0 questions')), null);
+    assert.equal(parseCodexPrompt(screen.replace('Queued follow-up inputs', 'example output')), null);
+    assert.equal(parseCodexPrompt(`${screen}\n${Array.from({ length: 30 }, () => 'later output').join('\n')}`), null);
+    assert.match(parseCodexPrompt(screen.replace('1 question', '2 questions').replace('⇧←', 'alt+q')).question, /2 questions waiting; press alt\+q/);
+});
 
 test('Codex approval notification becomes a navigation-only Request even outside a swarm', async () => {
     const { api, store, att } = setup({ codex: CODEX_PROMPT_TEXT });

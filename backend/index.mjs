@@ -553,6 +553,13 @@ export function registerAll(api, deps = modules) {
     // Workers of every live swarm are scanned, not only the followed one: a request blocks its worker until answered.
     async function scanPrompts() {
         let changed = false;
+        // Focus belongs to the pane list, not the state-change DTO; hooks may never identify this Codex pane.
+        try {
+            for (const pane of await api.panes.list()) {
+                const known = st.panes.get(pane.id);
+                if (known) Object.assign(known, { isFocused: !!pane.isFocused, isActiveWorkspace: !!pane.isActiveWorkspace, title: pane.title ?? known.title });
+            }
+        } catch { /* keep the last known focus */ }
         /** Workers scanned this round; a waiting row for any other pane is dropped. */
         const scanned = new Set();
         const scanWorker = async (paneID, worker = null) => {
@@ -562,7 +569,7 @@ export function registerAll(api, deps = modules) {
             // unless a card or waiting row for it still needs settling.
             const pane = st.panes.get(paneID);
             const pending = st.unparsed.has(paneID) || st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt);
-            if (pane?.status === 'idle' && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace)) return;
+            if (pane?.status === 'idle' && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) return;
             let screen;
             try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
             const codexPrompt = st.panes.get(paneID)?.agent === 'claude' ? null : N.parseCodexPrompt(screen);
@@ -641,7 +648,7 @@ export function registerAll(api, deps = modules) {
         // waiting, or when it is the focused pane, and recognise only Codex's navigation-only menu.
         for (const pane of [...st.panes.values()]) {
             if (scannedCodex.has(pane.id) || pane.agent || (pane.type ?? 'shell') !== 'shell') continue;
-            if (pane.status !== 'waitingForInput' && !(pane.isFocused && pane.isActiveWorkspace)) continue;
+            if (pane.status !== 'waitingForInput' && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) continue;
             await scanWorker(pane.id);
         }
         for (const orch of orchestrators) {
@@ -650,7 +657,7 @@ export function registerAll(api, deps = modules) {
             let screen = null;
             try { screen = await S.capturePane(api, orch, N.PROMPT_CAPTURE_LINES); } catch { /* keep the cards */ }
             if (screen === null) continue;
-            const prompt = N.parsePrompt(screen);
+            const prompt = N.parseCodexPrompt(screen) ?? N.parsePrompt(screen);
             const hash = prompt ? N.promptHash(prompt.block) : null;
             for (const item of orchOpen) if (item.promptHash !== hash) { await A.handleItem(att, item.id); changed = true; }
         }

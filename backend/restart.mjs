@@ -103,7 +103,7 @@ export async function restartAgent(api, store, paneID, deps = {}) {
     const codex = agent === 'codex';
     const name = codex ? 'Codex' : 'Claude';
     const showsInput = text => codex ? codexInput(text) !== null : showsClaudeInput(text);
-    if (parsePrompt(screen) || parseCodexPrompt(screen)) return done(fail(`${name} is showing a permission prompt; answer it first`, 'PROMPT_OPEN'));
+    if (parsePrompt(screen) || parseCodexPrompt(screen)) return done(fail(`${name} is asking for input; answer it first`, 'PROMPT_OPEN'));
     const atInput = showsInput(screen);
     if (pane.status === 'running') return done(fail(`${name} is mid-reply; wait for it to finish`, 'BUSY'));
     if (atInput) {

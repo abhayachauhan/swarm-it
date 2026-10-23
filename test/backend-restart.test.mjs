@@ -107,7 +107,8 @@ test('Codex at a shell resumes from remembered agent and session metadata', asyn
 
 test('Codex refuses drafts, busy turns and permission menus without typing', async () => {
     const permission = 'Would you like to run the following command?\n\nls\n\n› 1. Yes, proceed\n2. No, continue without running it';
-    for (const [screen, status, code] of [[codexScreen('draft'), 'idle', 'INPUT_NOT_EMPTY'], [codexScreen(), 'running', 'BUSY'], [permission, 'idle', 'PROMPT_OPEN']]) {
+    const question = `Queued follow-up inputs\n? 1 question\n⇧← to answer\n${codexScreen()}`;
+    for (const [screen, status, code] of [[codexScreen('draft'), 'idle', 'INPUT_NOT_EMPTY'], [codexScreen(), 'running', 'BUSY'], [permission, 'idle', 'PROMPT_OPEN'], [question, 'idle', 'PROMPT_OPEN']]) {
         const api = setup({ screen, pane: { agent: 'codex', status } });
         const { result } = await restartAgent(api, createStore(api), 'c1', noSleep);
         assert.equal(result.code, code);
