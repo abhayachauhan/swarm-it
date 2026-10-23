@@ -36,7 +36,7 @@ For a conversational handoff, ask the current agent to “hand this goal to Code
 ## Small pane conveniences
 
 - **Run last suggested command:** when Claude suggests a shell command, `cmd+shift+u` opens an editable preview. Terminal line wraps are rejoined; you choose **Run** or **Copy**. Nothing executes until you choose Run.
-- **Restart Claude/Codex:** detect the CLI in the pane, quit it, and resume the same conversation after changing hooks, settings, or MCP servers. Wait for it to finish and clear any draft before restarting.
+- **Restart Claude/Codex:** detect the CLI in the pane, quit it, and resume the same conversation after changing hooks, settings, or MCP servers. Codex reports its current session through `/status`, so restart works even when its session hook was missed. Wait for it to finish and clear any draft before restarting.
 - **Review and retry:** keep implementation and review in separate workers; `swarm-retry` restarts a dead worker from its saved task and settings when possible.
 
 ## Files and scope

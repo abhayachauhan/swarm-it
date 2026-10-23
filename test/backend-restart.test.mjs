@@ -23,8 +23,11 @@ function setup({ screen = claudeScreen(), pane = {} } = {}) {
     const send = api.terminal.send;
     api.terminal.send = async (paneID, text, options) => {
         const r = await send(paneID, text);
+        if (text === '/status' && api.statusResponse !== false) {
+            api.captureStore.c1 = `/status\nOpenAI Codex (v0.163.0)\nSession: ${api.statusSession ?? SID}\n${codexScreen()}`;
+        }
         if (text === '/exit') {
-            api.captureStore.c1 = api.paneList[0].agent === 'codex' || api.paneList[0].agentKind === 'codex' ? CODEX_SHELL : SHELL;
+            api.captureStore.c1 = api.captureStore.c1.includes('OpenAI Codex') ? CODEX_SHELL : SHELL;
             api.paneList[0].agentSessionID = null;
         }
         // A bare send is typed at the shell prompt; `echo` mimics a shell that keeps the paste end's `~`.
@@ -78,6 +81,8 @@ test('Codex empty composer recognises its placeholder and rejects drafts, contin
     assert.equal(codexInputEmpty(codexScreen('\ncontinued draft')), false);
     assert.equal(codexInputEmpty('Would you like to run the following command?\n› 1. Yes, proceed\n2. No'), false);
     assert.equal(codexInputEmpty(CODEX_SHELL), false);
+    assert.equal(codexInputEmpty(`${codexScreen()} · Find Claude sessions 91db5b4e\n↳ for agents · ? for shortcuts    ⚠ 2 warnings · f2 to view`), true);
+    assert.equal(codexInputEmpty(`${codexScreen('draft')}\n↳ for agents · ? for shortcuts`), false);
 });
 
 test('an idle Codex is quit and resumed on its exact session, using either live agent field', async () => {
@@ -86,7 +91,7 @@ test('an idle Codex is quit and resumed on its exact session, using either live 
         const { result, finished } = await restartAgent(api, createStore(api), 'c1', noSleep);
         assert.equal(result.restarting, true);
         assert.equal((await finished).resumed, true);
-        assert.deepEqual(sent(api), ['/exit', `codex resume ${SID}`]);
+        assert.deepEqual(sent(api), ['/status', '/exit', `codex resume ${SID}`]);
     }
 });
 
@@ -112,10 +117,41 @@ test('Codex refuses drafts, busy turns and permission menus without typing', asy
 
 test('Codex never receives a resume command while it is still open', async () => {
     const api = setup({ screen: codexScreen(), pane: { agent: 'codex' } });
-    api.terminal.send = async (paneID, text) => { api.calls.push({ name: 'terminal.send', args: [paneID, text] }); };
+    const send = api.terminal.send;
+    api.terminal.send = async (paneID, text, options) => {
+        if (text === '/exit') api.calls.push({ name: 'terminal.send', args: [paneID, text] });
+        else return send(paneID, text, options);
+    };
     const { finished } = await restartAgent(api, createStore(api), 'c1', { ...noSleep, timeoutMs: 1000 });
     assert.equal((await finished).code, 'EXIT_TIMEOUT');
-    assert.deepEqual(sent(api), ['/exit']);
+    assert.deepEqual(sent(api), ['/status', '/exit']);
+});
+
+test('a Codex screen without any hook metadata recovers its own session before restarting', async () => {
+    const screen = `${codexScreen()} · Find Claude sessions 91db5b4e\n↳ for agents · ? for shortcuts    ⚠ 2 warnings · f2 to view`;
+    const api = setup({ screen, pane: { agent: null, agentSessionID: null } });
+    const store = createStore(api);
+    const { result, finished } = await restartAgent(api, store, 'c1', noSleep);
+    assert.equal(result.session, SID);
+    assert.equal((await finished).resumed, true);
+    assert.equal(store.sessions.get('c1'), SID);
+    assert.deepEqual(sent(api), ['/status', '/exit', `codex resume ${SID}`]);
+});
+
+test('Codex status replaces stale Claude session metadata instead of resuming the wrong conversation', async () => {
+    const api = setup({ screen: codexScreen() });
+    api.statusSession = '11111111-2222-3333-4444-555555555555';
+    const { finished } = await restartAgent(api, createStore(api), 'c1', noSleep);
+    assert.equal((await finished).session, api.statusSession);
+    assert.deepEqual(sent(api), ['/status', '/exit', `codex resume ${api.statusSession}`]);
+});
+
+test('a missing status response leaves Codex open, even when an old session ID is cached', async () => {
+    const api = setup({ screen: codexScreen(), pane: { agent: 'codex' } });
+    api.statusResponse = false;
+    const { result } = await restartAgent(api, createStore(api), 'c1', noSleep);
+    assert.equal(result.code, 'NO_SESSION');
+    assert.deepEqual(sent(api), ['/status']);
 });
 
 test('an idle Claude is quit with /exit and resumed on the same session', async () => {
@@ -179,6 +215,6 @@ test('the same restart command detects Codex from its invocation pane', async ()
     const dispose = registerAll(api, { ...modules, restart: { restartAgent: (a, s, id) => restartAgent(a, s, id, noSleep) } });
     await dispose.ready;
     assert.equal((await api.command('restart-claude', {}, { paneID: 'c1' })).resumed, true);
-    assert.deepEqual(sent(api), ['/exit', `codex resume ${SID}`]);
+    assert.deepEqual(sent(api), ['/status', '/exit', `codex resume ${SID}`]);
     dispose();
 });

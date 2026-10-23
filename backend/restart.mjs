@@ -35,8 +35,8 @@ export function claudeInputEmpty(text) {
 function codexInput(text) {
     const lines = String(text ?? '').replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').split('\n').filter(line => line.trim());
     const at = lines.findLastIndex(line => /^\s*›(?:\s|$)/.test(line));
-    if (at < 0 || lines.length - at > 3) return null;
-    const footer = /^(?:\? for shortcuts.*|\d+% context left.*|[\w.-]+(?:\s+(?:minimal|low|medium|high|xhigh|default))?\s+·\s+[~/].*)$/i;
+    if (at < 0 || lines.length - at > 4) return null;
+    const footer = /^(?:(?:[^\w]*for agents\s*·\s*)?\? for shortcuts.*|\d+% context left.*|[\w.-]+(?:\s+(?:minimal|low|medium|high|xhigh|default))?\s+·\s+[~/].*|⚠\s*\d+ warnings?\b.*)$/i;
     if (!lines.slice(at + 1).every(line => footer.test(line.trim()))) return null;
     const input = lines[at].replace(/^\s*›\s?/, '').trim();
     return input === 'Ask Codex to do anything' ? '' : input;
@@ -92,29 +92,48 @@ export async function restartAgent(api, store, paneID, deps = {}) {
     if (!pane) return done(fail(`no pane ${paneID}`, 'NO_PANE'));
     if ((pane.type ?? 'shell') !== 'shell') return done(fail(`pane ${paneID} is not a terminal`, 'NOT_SHELL'));
     rememberSession(store, paneID, pane.agentSessionID);
-    const session = pane.agentSessionID ?? store.sessions.get(paneID);
-    if (typeof session !== 'string' || !SESSION_ID.test(session)) return done(fail('no Claude or Codex session is known for this pane', 'NO_SESSION'));
-    const agent = pane.agent ?? pane.agentKind ?? store.panes.get(paneID)?.agent
+    let session = pane.agentSessionID ?? store.sessions.get(paneID);
+    let screen;
+    try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); } catch (error) { return done(fail(`capture failed: ${message(error)}`, 'CAPTURE_FAILED')); }
+    const screenAgent = codexInput(screen) !== null || parseCodexPrompt(screen) ? 'codex' : showsClaudeInput(screen) ? 'claude' : null;
+    const agent = screenAgent ?? pane.agent ?? pane.agentKind ?? store.panes.get(paneID)?.agent
         ?? store.manifestWorkers.find(worker => worker.paneID === paneID)?.agent
-        ?? (await findTranscript(session))?.agent;
+        ?? (typeof session === 'string' && SESSION_ID.test(session) ? (await findTranscript(session))?.agent : null);
     if (!['claude', 'codex'].includes(agent)) return done(fail('cannot identify Claude or Codex in this pane', 'UNSUPPORTED_AGENT'));
     const codex = agent === 'codex';
     const name = codex ? 'Codex' : 'Claude';
-    const resumeLine = codex ? `codex resume ${session}` : `claude --resume ${session}`;
     const showsInput = text => codex ? codexInput(text) !== null : showsClaudeInput(text);
-
-    let screen;
-    try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); } catch (error) { return done(fail(`capture failed: ${message(error)}`, 'CAPTURE_FAILED')); }
     if (parsePrompt(screen) || parseCodexPrompt(screen)) return done(fail(`${name} is showing a permission prompt; answer it first`, 'PROMPT_OPEN'));
-
-    if (!showsInput(screen)) {
-        if (pane.agentSessionID || pane.status === 'running') return done(fail(`${name} is busy in this pane; wait for it to finish`, 'BUSY'));
+    const atInput = showsInput(screen);
+    if (pane.status === 'running') return done(fail(`${name} is mid-reply; wait for it to finish`, 'BUSY'));
+    if (atInput) {
+        if (BACKGROUND.test(screen.split('\n').slice(-20).join('\n'))) return done(fail(`${name} has background agents running; quitting would stop them`, 'BACKGROUND'));
+        if (!(codex ? codexInputEmpty(screen) : claudeInputEmpty(screen))) return done(fail(`${name}'s input box has text in it; clear it first`, 'INPUT_NOT_EMPTY'));
+        if (codex) {
+            // Read the session from this TUI: hooks can be missing or still point at a previous conversation.
+            const status = await sendText(api, paneID, '/status');
+            if (!status.ok) return done(status);
+            session = null;
+            for (let waited = 0; waited < 2000; waited += EXIT_POLL_MS) {
+                await sleep(EXIT_POLL_MS);
+                let current;
+                try { current = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); } catch { continue; }
+                if (current === screen || !codexInputEmpty(current)) continue;
+                const matches = [...current.matchAll(/^\s*(?:[│┃║]\s*)?Session:\s*([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\b/gmi)];
+                session = matches.at(-1)?.[1] ?? null;
+                if (session) break;
+            }
+            if (!session) return done(fail('Codex did not report its session ID through /status; it was left open', 'NO_SESSION'));
+            rememberSession(store, paneID, session);
+        }
+    }
+    if (typeof session !== 'string' || !SESSION_ID.test(session)) return done(fail('no Claude or Codex session is known for this pane', 'NO_SESSION'));
+    const resumeLine = codex ? `codex resume ${session}` : `claude --resume ${session}`;
+    if (!atInput) {
+        if (pane.agentSessionID) return done(fail(`${name} is busy in this pane; wait for it to finish`, 'BUSY'));
         const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
         return done(sent.ok ? { ok: true, paneID, session, resumed: true } : sent);
     }
-    if (pane.status === 'running') return done(fail(`${name} is mid-reply; wait for it to finish`, 'BUSY'));
-    if (BACKGROUND.test(screen.split('\n').slice(-20).join('\n'))) return done(fail(`${name} has background agents running; quitting would stop them`, 'BACKGROUND'));
-    if (!(codex ? codexInputEmpty(screen) : claudeInputEmpty(screen))) return done(fail(`${name}'s input box has text in it; clear it first`, 'INPUT_NOT_EMPTY'));
 
     const quit = await sendText(api, paneID, '/exit');
     if (!quit.ok) return done(quit);
