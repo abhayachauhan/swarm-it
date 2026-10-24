@@ -33,6 +33,8 @@ In a Kelpi workspace inside a Group, ask your coordinator:
 
 Use “all Claude” instead if that is the CLI you installed. Open the **Swarm** status item or press `ctrl+alt+j` to see the rail. Workers appear in the shared Workers workspace; finished workers write Goal / Done / Next files in `~/.kelpi-swarm/results/`.
 
+If Codex reports `Operation not permitted` connecting to Kelpi, its tool sandbox may be blocking the local control socket. Ask Codex to retry the failed spawn through its normal sandbox approval mechanism. Swarm-it's Auto setting does not itself grant that socket access. A failed connection starts no workers; it does not mean the workspace is missing. The helpers validate the coordinator and workspace before registering workers or archiving an earlier result.
+
 ## Set up timed Auto approval
 
 Swarm-it's provider must be selected for Claude's structured permission requests:

@@ -28,9 +28,8 @@ MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
 SPAWN="$(dirname "$(realpath "$0")")/swarm-spawn"
 
 orch=$(kelpi pane id)
-panes=$(kelpi pane list --json)
-ws=$(jq -r --arg p "$orch" '.[] | select(.id == $p) | .workspace_id' <<<"$panes")
-[ -n "$ws" ] || bad "cannot find this pane's workspace"
+panes=$(kelpi pane list --json) || bad "cannot read Kelpi panes; if Codex denied local IPC, retry this command with sandbox escalation"
+ws=$(jq -er --arg p "$orch" '.[] | select(.id == $p) | .workspace_id | select(type == "string" and length > 0)' <<<"$panes") || bad "Kelpi returned no workspace ID; check KELPI_PANE_ID and retry with sandbox escalation if local IPC was denied"
 manifest=$(node "$MW" show "$ws") || bad "no swarm manifest for this workspace"
 rec=$(jq -c --arg p "$pane" --arg l "$label" '.workers[] | select(.paneID == $p and .label == $l)' <<<"$manifest")
 [ -n "$rec" ] || bad "no worker $pane:$label in this swarm's manifest"

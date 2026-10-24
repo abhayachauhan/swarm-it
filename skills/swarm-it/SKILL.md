@@ -50,6 +50,13 @@ a convenience for unattended workers.
 The script itself defaults to Claude for compatibility, so a Codex coordinator must pass
 `--agent codex` when choosing Codex workers.
 
+Codex's tool sandbox can block Kelpi's local socket, even when Kelpi is running. If a spawn fails with
+`Operation not permitted` connecting to Kelpi, retry that same tool call through the normal approval
+mechanism (`sandbox_permissions: "require_escalated"`, with a justification for local Kelpi access).
+Keep the worker's sandbox and permission mode. If approval is unavailable or denied, stop and report
+that local Kelpi access is blocked; no swarm has started. Do not treat an empty CLI response as a
+missing workspace or change `KELPI_SOCKET` to work around the sandbox.
+
 Run the swarm from a workspace inside its own Group. Every swarm's workers live in one shared
 `Workers` workspace (in a collapsed `Workers` Group), and the rail shows the swarm from any workspace
 in the coordinator's Group. `swarm-spawn` opens each worker straight in `Workers`, so the user's view

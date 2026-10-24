@@ -41,35 +41,40 @@ dir=$(cd "${dir/#\~/$HOME}" 2>/dev/null && pwd) || bad "no such directory: $dir"
 
 MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
 RES="$HOME/.kelpi-swarm/results"
-mkdir -p "$RES/archive"
-# Reusing a label keeps the old result under results/archive/ (the rail only reads results/<label>.md).
-if [ -e "$RES/$label.md" ]; then
-  mv -n "$RES/$label.md" "$RES/archive/$label.$(date -u +%Y%m%dT%H%M%SZ).md"
-  [ ! -e "$RES/$label.md" ] || { echo "cannot archive the old result for $label" >&2; exit 1; }
-fi
 
-orch=$(kelpi pane id)
-me=$(kelpi pane list --json | jq -c --arg p "$orch" '.[] | select(.id == $p)')
-ws=$(jq -r '.workspace_id' <<<"$me")
+# A failed local socket call must not look like an empty workspace or archive an existing result.
+orch=$(kelpi pane id) || bad "cannot identify the coordinator pane; run swarm-spawn from a Kelpi pane"
+panes=$(kelpi pane list --json) || bad "cannot read Kelpi panes; if Codex denied local IPC, retry this command with sandbox escalation"
+me=$(jq -ce --arg p "$orch" '.[] | select(.id == $p)' <<<"$panes") || bad "Kelpi returned no coordinator pane; check KELPI_PANE_ID and retry with sandbox escalation if local IPC was denied"
+ws=$(jq -er '.workspace_id | select(type == "string" and length > 0)' <<<"$me") || bad "Kelpi returned no workspace ID for the coordinator; no worker was started"
+[[ $ws =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $ws != *..* ]] || bad "Kelpi returned an invalid workspace ID; no worker was started"
+workspaces=$(kelpi workspace list --json) || bad "cannot read Kelpi workspaces; if Codex denied local IPC, retry this command with sandbox escalation"
+[ -n "$workspaces" ] || bad "Kelpi returned no workspace list; no worker was started"
+workers=$(jq -r --arg ws "$ws" \
+  'if type != "array" then error("expected a workspace list") else ([.[] | select(.name == "Workers" and .id != $ws and .group_name == "Workers")] + [.[] | select(.name == "Workers" and .id != $ws)])[0].id // empty end' <<<"$workspaces") || bad "Kelpi returned an invalid workspace list; no worker was started"
 # A swarm owns its Group: the rail and the hidden workers workspace both key off it.
 [ "$(jq -r '.group_id // empty' <<<"$me")" ] || echo "warning: this workspace is not in a Group; the rail shows the swarm only here" >&2
 node "$MW" show "$ws" >/dev/null 2>&1 || node "$MW" init "$ws" "$orch" coordinator >/dev/null
 # A restarted coordinator gets a new pane id; the rail ignores a swarm whose coordinator pane is gone.
 [ "$(node "$MW" show "$ws" | jq -r '.orchestrator.paneID')" = "$orch" ] || node "$MW" set-orchestrator "$ws" "$orch" >/dev/null
 # Drop dead workers and dead swarms' manifests. After set-orchestrator, so a restarted coordinator keeps its own manifest.
-kelpi pane list --json | node "$MW" prune --keep "$ws" >/dev/null 2>&1 || echo "warning: could not prune old swarm manifests" >&2
+printf '%s\n' "$panes" | node "$MW" prune --keep "$ws" >/dev/null 2>&1 || echo "warning: could not prune old swarm manifests" >&2
 # Label the coordinator pane so it is easy to spot; never rename a pane the user already labelled.
 [ "$(jq -r '.label // empty' <<<"$me")" ] || kelpi pane name --target "$orch" coordinator >/dev/null
 
 # Open the worker straight in the shared `Workers` workspace when it exists: Kelpi switches the user's view
 # on every move between workspaces, but never on a background create. Before it exists the worker splits
 # here, and the plugin creates the Workers workspace and moves it there once.
-workers=$(kelpi workspace list --json | jq -r --arg ws "$ws" \
-  '([.[] | select(.name == "Workers" and .id != $ws and .group_name == "Workers")] + [.[] | select(.name == "Workers" and .id != $ws)])[0].id // empty')
 if [ -n "$workers" ]; then
-  pane=$(kelpi pane create --workspace "$workers" --name "$label" --path "$dir" --json | jq -r '.pane_id // .id')
+  pane=$(kelpi pane create --workspace "$workers" --name "$label" --path "$dir" --json | jq -er '.pane_id // .id | select(type == "string" and length > 0)') || bad "Kelpi did not create the worker pane; no worker was registered"
 else
-  pane=$(kelpi pane split --name "$label" --path "$dir" --json | jq -r '.pane_id // .id')
+  pane=$(kelpi pane split --name "$label" --path "$dir" --json | jq -er '.pane_id // .id | select(type == "string" and length > 0)') || bad "Kelpi did not create the worker pane; no worker was registered"
+fi
+mkdir -p "$RES/archive"
+# Reusing a label keeps the old result under results/archive/ (the rail only reads results/<label>.md).
+if [ -e "$RES/$label.md" ]; then
+  mv -n "$RES/$label.md" "$RES/archive/$label.$(date -u +%Y%m%dT%H%M%SZ).md"
+  [ ! -e "$RES/$label.md" ] || { echo "cannot archive the old result for $label" >&2; exit 1; }
 fi
 node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" \
   --agent "$agent" --task-path "$task" --model "${model:--}" --mode "$mode" --dir "$dir" --started-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null

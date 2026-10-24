@@ -91,3 +91,52 @@ test('a Codex worker uses its sandbox and records its agent without a Claude mod
   const worker = JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8')).workers[0]
   assert.deepEqual([worker.agent, worker.model, worker.mode], ['codex', null, 'on-request'])
 })
+
+test('failed, empty and invalid pane lists stop before changing manifests or archiving results', () => {
+  for (const panes of [null, '', '{', '[]', JSON.stringify([{ ...ME, workspace_id: '' }]), JSON.stringify([{ ...ME, workspace_id: null }])]) {
+    const s = stub([{ id: 'WS', name: 'Warm pool' }])
+    const results = path.join(s.home, '.kelpi-swarm', 'results')
+    fs.mkdirSync(results, { recursive: true })
+    fs.writeFileSync(path.join(results, 'w1.md'), 'previous result')
+    if (panes === null) fs.rmSync(path.join(s.home, 'panes.json'))
+    else fs.writeFileSync(path.join(s.home, 'panes.json'), panes)
+    try {
+      const out = spawn(s)
+      assert.notEqual(out.status, 0)
+      assert.match(out.stderr, /cannot read Kelpi panes|no coordinator pane|no workspace ID/)
+      assert.doesNotMatch(out.stderr, /not in a Group|malformed workspace id/)
+      assert.equal(out.calls.some(c => /^pane (?:create|split|send|name)/.test(c)), false)
+      assert.equal(fs.existsSync(path.join(s.home, '.kelpi-swarm', 'WS.json')), false)
+      assert.equal(fs.readFileSync(path.join(results, 'w1.md'), 'utf8'), 'previous result')
+      assert.equal(fs.existsSync(path.join(results, 'archive')), false)
+    } finally { fs.rmSync(s.home, { recursive: true, force: true }) }
+  }
+})
+
+test('an empty workspace list fails before creating a manifest or a worker', () => {
+  const s = stub([])
+  fs.writeFileSync(path.join(s.home, 'workspaces.json'), '')
+  try {
+    const out = spawn(s)
+    assert.notEqual(out.status, 0)
+    assert.match(out.stderr, /no workspace list/)
+    assert.equal(out.calls.some(c => /^pane (?:create|split|send)/.test(c)), false)
+    assert.equal(fs.existsSync(path.join(s.home, '.kelpi-swarm')), false)
+  } finally { fs.rmSync(s.home, { recursive: true, force: true }) }
+})
+
+test('a failed pane creation does not register a worker or archive the previous result', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  fs.writeFileSync(path.join(s.bin, 'kelpi'), fs.readFileSync(path.join(s.bin, 'kelpi'), 'utf8').replace('"pane_id":"SPLIT"', '"error":"socket failed"'))
+  const results = path.join(s.home, '.kelpi-swarm', 'results')
+  fs.mkdirSync(results, { recursive: true })
+  fs.writeFileSync(path.join(results, 'w1.md'), 'previous result')
+  try {
+    const out = spawn(s)
+    assert.notEqual(out.status, 0)
+    assert.match(out.stderr, /did not create the worker pane/)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'))).workers.length, 0)
+    assert.equal(fs.readFileSync(path.join(results, 'w1.md'), 'utf8'), 'previous result')
+    assert.equal(out.calls.some(c => c.startsWith('pane send')), false)
+  } finally { fs.rmSync(s.home, { recursive: true, force: true }) }
+})

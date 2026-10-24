@@ -50,6 +50,22 @@ const setPanes = (s, panes) => fs.writeFileSync(path.join(s.home, 'panes.json'),
 const manifest = (s, ws = 'WS') => JSON.parse(fs.readFileSync(path.join(s.manifestDir, `${ws}.json`), 'utf8'))
 const noWork = (calls) => !calls.some((c) => c.startsWith('pane create') || c.startsWith('pane split') || c.startsWith('pane send'))
 
+test('swarm-retry stops with a local-access diagnostic for failed or empty pane metadata', () => {
+  for (const data of [null, '', JSON.stringify([{ ...ME, workspace_id: null }])]) {
+    const s = stub()
+    if (data === null) fs.rmSync(path.join(s.home, 'panes.json'))
+    else fs.writeFileSync(path.join(s.home, 'panes.json'), data)
+    try {
+      const out = retry(s, ['P1:w1'])
+      assert.notEqual(out.status, 0)
+      assert.match(out.stderr, /cannot read Kelpi panes|no workspace ID/)
+      assert.match(out.stderr, /sandbox escalation/)
+      assert.ok(noWork(out.calls))
+      assert.equal(fs.existsSync(s.manifestDir), false)
+    } finally { fs.rmSync(s.home, { recursive: true, force: true }) }
+  }
+})
+
 test('swarm-spawn records the task path, model, mode, directory and start time', () => {
   const s = stub()
   const { status, stdout, stderr } = spawn(s, ['w1', s.task, '--path', s.home, '--model', 'haiku'])
