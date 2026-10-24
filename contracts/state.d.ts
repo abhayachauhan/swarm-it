@@ -140,7 +140,21 @@ export interface AutoApproveEntry {
 }
 
 /** What the backend pushes to views: command `get-state` result and event `local.swarm-view.snapshot` data. */
+export interface CodexQuestionRequest {
+    requestID: string | number;
+    threadID: string;
+    name?: string;
+    cwd?: string;
+    paneID?: string;
+    paneLabel?: string;
+    questions: { id: string; header?: string; question: string; isSecret?: boolean;
+        options?: { label: string; description?: string }[] | null }[];
+}
+
 export interface SwarmSnapshot {
+    /** Volatile questions from the shared local Codex daemon, after Answer here is selected. */
+    codexQuestions?: CodexQuestionRequest[];
+    codexQuestionsConnected?: boolean;
     version: 1;
     /** Monotonic; views drop snapshots with a lower or equal sequence. */
     sequence: number;

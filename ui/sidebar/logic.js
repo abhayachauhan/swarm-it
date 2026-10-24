@@ -593,7 +593,7 @@
                 root.append(more);
             }
         }
-        if (unrecognised) root.append(h(doc, 'div', 'att-text dim', 'Answer in the pane'));
+        if (unrecognised) root.append(h(doc, 'div', 'att-text dim', inputQuestion ? 'Answer here or open the pane' : 'Answer in the pane'));
         if (opts.armed) {
             const armed = h(doc, 'div', 'att-text att-armed', opts.armed === 'approve' ? 'Press Y again to approve' : 'Press N again to deny');
             armed.setAttribute('role', 'status');
@@ -601,6 +601,7 @@
         }
         const actions = h(doc, 'div', 'att-actions');
         if (unrecognised) {
+            if (inputQuestion) actions.append(button(doc, 'Answer here', 'btn btn-primary', () => handlers.onLoadQuestions(), 'Read and answer Codex questions in Swarm'));
             actions.append(button(doc, 'Go to pane', 'btn btn-primary', () => handlers.onAnswer(item), 'Show the pane so you can answer the prompt there'));
         } else {
             const yes = button(doc, 'Approve', 'btn btn-primary', () => handlers.onAttention('approve', item), 'Approve (Y)');
@@ -819,6 +820,46 @@
      * view = { snapshot, ui, notice, receivedAtMs, nowMs, autoLog? }; view.autoLog = { entries, count } is the fetched
      * auto-approve log (app.js loads it while the log is open).
      */
+    function buildCodexQuestions(doc, snapshot, drafts, handlers) {
+        const cards = [];
+        if (snapshot?.codexQuestions === undefined) return cards;
+        const head = h(doc, 'div', 'att-actions');
+        head.append(h(doc, 'span', 'dim', 'Codex questions'), button(doc, 'Refresh', 'btn', () => handlers.onLoadQuestions()));
+        cards.push(head);
+        if (!snapshot.codexQuestions.length) cards.push(h(doc, 'p', 'dim', snapshot.codexQuestionsConnected === false
+            ? 'Not connected. Refresh or use Go to pane.' : 'No pending questions on the local Codex server.'));
+        for (const request of snapshot.codexQuestions) {
+            const card = h(doc, 'div', 'att');
+            card.append(h(doc, 'div', 'att-text', request.paneLabel || request.name || request.threadID));
+            card.append(h(doc, 'div', 'dim', `Session ${request.threadID.slice(0, 8)}`));
+            for (const q of request.questions) {
+                const key = `${request.threadID}:${request.requestID}:${q.id}`;
+                const label = h(doc, 'label', 'question-field');
+                label.append(h(doc, 'span', 'att-text', q.question));
+                const input = h(doc, 'input', 'question-answer');
+                input.type = q.isSecret ? 'password' : 'text';
+                input.setAttribute('aria-label', q.question);
+                input.setAttribute('data-question-key', key);
+                input.setAttribute('autocomplete', 'off');
+                input.maxLength = 20000;
+                input.value = drafts[key] || '';
+                input.addEventListener('input', () => handlers.onQuestionDraft(key, input.value));
+                if (!q.isSecret) for (const option of q.options || []) {
+                    const choose = button(doc, option.label, 'btn', () => { input.value = option.label; handlers.onQuestionDraft(key, option.label); });
+                    choose.setAttribute('title', option.description || option.label);
+                    label.append(choose);
+                    if (option.description) label.append(h(doc, 'div', 'dim', option.description));
+                }
+                label.append(input); card.append(label);
+            }
+            const actions = h(doc, 'div', 'att-actions');
+            actions.append(button(doc, 'Send answer', 'btn btn-primary', () => handlers.onQuestionAnswer(request)));
+            if (request.paneID) actions.append(button(doc, 'Go to pane', 'btn', () => handlers.onReveal(request.paneID, 'Go to pane')));
+            card.append(actions); cards.push(card);
+        }
+        return cards;
+    }
+
     function render(doc, refs, view, handlers) {
         const { snapshot, ui } = view;
         if (refs.head) { refs.head.replaceChildren(...buildHead(doc, view, handlers)); refs.head.setAttribute('title', KEY_HINT); }
@@ -829,7 +870,7 @@
         const nowMs = Number.isFinite(view.nowMs) ? view.nowMs : Date.now();
         (view.guard || defaultGuard).observe(requests, requests.length ? nowMs : 0);
 
-        const list = [];
+        const list = buildCodexQuestions(doc, snapshot, view.questionDrafts || {}, handlers);
         if (!snapshot) {
             list.push(h(doc, 'p', 'empty', 'Connecting...'));
         } else {
@@ -869,6 +910,6 @@
         reduceKey, attentionEffect, describeResult, displayCommand, statusLine, reviewEffect, buildSectionHead,
         AUTO_DEFAULT_HOURS, formatClock, autoLabel, autoEndedText, autoNotes, autoAlerts, autoOnEffect, autoOffEffect, autoLogEffect, autoLogClearEffect, buildAutoControls, buildAutoLog,
         nextNineAm, autoChoices, autoChoiceEffect, groupColor, fromTag, swarmSummary, buildOtherSwarms, buildWaitingRow, buildStoppedRow, buildSwarmTag,
-        KEY_HINT, warningsOf, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,
+        KEY_HINT, warningsOf, buildCodexQuestions, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,
     };
 })();

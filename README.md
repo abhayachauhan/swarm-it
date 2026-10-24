@@ -24,7 +24,7 @@ Each worker gets its own Kelpi pane in a shared **Workers** workspace. Your coor
 
 ![Illustration of Claude and Codex requests in the Swarm rail](docs/approvals.svg)
 
-The rail shows **Needs you**, **Running**, and **Done**. Claude permission cards include **Approve** and **Deny**; before sending a key, the plugin checks that the live prompt still matches the card. Codex permission cards offer **Go to pane**, where you answer Codex's native prompt. The plugin never sends Claude-style approval keystrokes to Codex.
+The rail shows **Needs you**, **Running**, and **Done**. Claude permission cards include **Approve** and **Deny**; before sending a key, the plugin checks that the live prompt still matches the card. Codex permission cards offer **Go to pane**, where you answer Codex's native prompt. The plugin never sends Claude-style approval keystrokes to Codex. For Codex clarification questions, choose **Answer here** to read the question, select an option or type a reply, and **Send answer** directly from Swarm. **Go to pane** remains available.
 
 The timed **Auto** control can approve eligible requests while you are away. It works through Kelpi's permission provider for Claude and through a separate Codex `PermissionRequest` hook for safe Bash requests. Other requests stay with you. Auto has a time limit, an activity log, and [documented safeguards](docs/permissions.md).
 

@@ -9,6 +9,7 @@
     // The ONLY focus signal: the backend emits it when the focus-rail command runs (contracts/commands.md).
     const FOCUS_EVENT = 'local.swarm-view.focus-rail';
 
+    const questionDrafts = Object.create(null);
     let snapshot = null, receivedAtMs = Date.now();
     let ui = L.initialUI(false);
     let notice = '', noticeTimer = null, pointerActive = false, renderPending = false, busy = false, disposed = false;
@@ -23,9 +24,17 @@
         renderPending = false;
         const nowMs = Date.now();
         const app = $('app');
+        const focusedQuestion = document.activeElement?.getAttribute?.('data-question-key');
+        const selection = focusedQuestion ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
         const hadFocus = !!app && app.contains(document.activeElement);
-        L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog }, handlers);
+        L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog, questionDrafts }, handlers);
         markOverflow();
+        if (focusedQuestion) {
+            for (const input of document.querySelectorAll('[data-question-key]')) if (input.getAttribute('data-question-key') === focusedQuestion) {
+                input.focus();
+                try { input.setSelectionRange(...selection); } catch { /* unsupported input */ }
+            }
+        }
         // render() replaces the rail's children: if the focused node went with them, keep the keyboard on #app.
         if (app && hadFocus && !app.contains(document.activeElement)) { try { app.focus({ preventScroll: true }); } catch { /* best effort */ } }
         // Approve and Deny unlock 500 ms after their item or position changed, and Approve, Deny and "Really stop?"
@@ -81,6 +90,8 @@
         ui = L.reconcile(ui, snapshot);
         // The duration menu belongs to the off state.
         if (ui.autoMenuOpen && snapshot.autoApprove && snapshot.autoApprove.on) ui = { ...ui, autoMenuOpen: false };
+        const pendingDrafts = new Set((snapshot.codexQuestions || []).flatMap(r => r.questions.map(q => `${r.threadID}:${r.requestID}:${q.id}`)));
+        for (const key of Object.keys(questionDrafts)) if (!pendingDrafts.has(key)) delete questionDrafts[key];
         logWarnings();
         const count = snapshot.autoApprove ? snapshot.autoApprove.logCount : 0;
         if (ui.autoLogOpen && (!autoLog || autoLog.count !== count)) void loadAutoLog();
@@ -136,6 +147,12 @@
     }
 
     const handlers = {
+        onLoadQuestions: () => { void run('Codex questions', { command: `${L.CMD}load-codex-questions`, args: {} }); },
+        onQuestionDraft: (key, value) => { questionDrafts[key] = value; },
+        onQuestionAnswer: request => {
+            const answers = Object.fromEntries(request.questions.map(q => [q.id, { answers: [questionDrafts[`${request.threadID}:${request.requestID}:${q.id}`] || ''] }]));
+            void run('Answer', { command: `${L.CMD}answer-codex-question`, args: { requestID: request.requestID, threadID: request.threadID, answers } });
+        },
         onSelect: paneID => {
             // Changing the selection cancels a pending Y/N.
             ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now());

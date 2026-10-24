@@ -126,3 +126,5 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 .foot p { margin: 0; }
 .notice { color: var(--warn); overflow-wrap: anywhere; }
 .warn { color: var(--warn); overflow-wrap: anywhere; }
+.question-field { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; }
+.question-answer { box-sizing: border-box; width: 100%; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 7px; font: inherit; }

@@ -1,3 +1,4 @@
+import { createCodexQuestions } from './codex-questions.mjs';
 // Plugin backend entry. Wires modules and registers every command and event declared in kelpi.plugin.json.
 // `registerAll` takes the API object so tests can drive it with a fake (no Kelpi runtime needed).
 import { homedir } from 'node:os';
@@ -21,7 +22,7 @@ import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 export const PLUGIN_ID = 'local.swarm-view';
 export const COMMANDS = [
     'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
-    'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
+    'load-codex-questions', 'answer-codex-question', 'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
     'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff'
 ].map(name => `${PLUGIN_ID}.${name}`);
@@ -94,8 +95,15 @@ export function registerAll(api, deps = modules) {
 
     const emit = (name, data) => (typeof api.emit === 'function' ? api.emit(name, data) : api.events.emit(name, data));
 
+    let codexQuestions = null;
     function snapshotNow() {
-        return S.buildSnapshot(st, Date.now());
+        const snapshot = S.buildSnapshot(st, Date.now());
+        if (codexQuestions) snapshot.codexQuestionsConnected = codexQuestions.connected?.() ?? true;
+        if (codexQuestions) snapshot.codexQuestions = codexQuestions.list().map(question => {
+            const pane = [...st.panes.values()].find(p => p.agentSessionID === question.threadID || st.sessions.get(p.id) === question.threadID);
+            return { ...question, ...(pane ? { paneID: pane.id, paneLabel: pane.label } : {}) };
+        });
+        return snapshot;
     }
 
     async function publish() {
@@ -758,6 +766,18 @@ export function registerAll(api, deps = modules) {
         if (moved) await publish();
         return { ok: true, snapshot: snapshotNow() };
     });
+    command('load-codex-questions', async () => {
+        codexQuestions ??= (deps.createCodexQuestions ?? createCodexQuestions)({ onChange: () => {
+            if (!disposed) serial(publish).catch(() => {});
+        } });
+        try { await codexQuestions.refresh(); await publish(); return { ok: true }; }
+        catch (error) { return fail(`${text(error)}. Go to pane is still available; local shared-daemon Codex sessions are required.`, 'CODEX_UNAVAILABLE'); }
+    });
+    command('answer-codex-question', async args => {
+        if (!codexQuestions) return fail('Load questions first.', 'CODEX_UNAVAILABLE');
+        try { const result = await codexQuestions.answer(args); await publish(); return result; }
+        catch (error) { return fail(text(error), 'QUESTION_CHANGED'); }
+    });
     command('focus-rail', async () => {
         try { await api.openView(RAIL_VIEW, st.workspaceID ? { workspaceID: st.workspaceID } : {}); } catch (error) { return fail(text(error), 'OPEN_FAILED'); }
         try { await emit(FOCUS_EVENT, {}); } catch { /* the view is opened; keys stay inert until it hears the signal */ }
@@ -946,6 +966,7 @@ export function registerAll(api, deps = modules) {
 
     const dispose = () => {
         disposed = true;
+        codexQuestions?.dispose();
         for (const off of disposers.splice(0)) { try { off(); } catch { /* already gone */ } }
         A.stop(att);
     };

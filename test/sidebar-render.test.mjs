@@ -364,7 +364,7 @@ test('a queued Codex question is plain text with its answer shortcut, never a cl
     assert.ok(find(card, n => n.text === 'Question waiting in Codex').length);
     assert.ok(find(card, n => n.text === '1 question waiting; press Shift+Left Arrow in Codex to answer').length);
     assert.equal(find(card, n => n.tag === 'code' || n.className.includes('att-more')).length, 0);
-    assert.deepEqual(find(card, n => n.tag === 'button').map(n => n.text), ['Go to pane']);
+    assert.deepEqual(find(card, n => n.tag === 'button').map(n => n.text), ['Answer here', 'Go to pane']);
 });
 
 test('an unrecognised newer-layout prompt shows just the command between the rules', () => {
@@ -621,4 +621,25 @@ test('a rail without the head and panel containers (older refs) still renders th
     const refs = { list: new FakeNode('div'), footer: new FakeNode('div') };
     L.render(fakeDoc, refs, view({ ...fixture(), autoApprove: AUTO_ON }), autoHandlers());
     assert.ok(find(refs.list, n => n.className === 'row').length);
+});
+
+
+test('Codex questions show options and a draft in Swarm, with an optional pane switch', () => {
+    const calls = [];
+    const request = { requestID: 17, threadID: 'thread-a', paneID: 'pane-a', name: '<A>', questions: [
+        { id: 'choice', question: 'Which environment?', options: [{ label: 'Staging', description: 'Test first' }] },
+        { id: 'secret', question: 'Access code?', isSecret: true, options: [{ label: 'Do not display secret options' }] }
+    ] };
+    const nodes = L.buildCodexQuestions(fakeDoc, { codexQuestions: [request] }, { 'thread-a:17:choice': 'My draft' }, {
+        onLoadQuestions() {}, onQuestionDraft: (...args) => calls.push(args),
+        onQuestionAnswer: r => calls.push(['send', r]), onReveal: (...args) => calls.push(args)
+    });
+    const root = new FakeNode('div'); root.append(...nodes);
+    const inputs = find(root, n => n.tag === 'input');
+    assert.equal(inputs[0].value, 'My draft'); assert.equal(inputs[1].type, 'password');
+    const buttons = find(root, n => n.tag === 'button');
+    assert.deepEqual(buttons.map(n => n.text), ['Refresh', 'Staging', 'Send answer', 'Go to pane']);
+    buttons[1].click(); assert.deepEqual(calls[0], ['thread-a:17:choice', 'Staging']);
+    buttons[2].click(); assert.equal(calls[1][0], 'send');
+    buttons[3].click(); assert.equal(calls[2][0], 'pane-a');
 });

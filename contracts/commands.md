@@ -237,3 +237,9 @@ Headless workers: Kelpi asks the provider for `claude -p` panes too. Claude Code
 sessions that can't show a prompt, such as background subagents in non-interactive mode, Claude Code still runs these
 hooks, and if no hook returns a decision, it denies the tool call." Kelpi `docs/plugin-services.md` says the same, and
 `kelpi event permission-request` needs only `KELPI_PANE_ID`. So an abstain in a headless worker is a deny, not a card.
+
+
+### Central Codex clarification commands
+
+- `local.swarm-view.load-codex-questions {}` joins sessions already loaded in the local shared daemon and publishes volatile `snapshot.codexQuestions`. It does not start turns or override session settings. Re-run to discover new sessions or reconnect. Unresumable ephemeral sessions are skipped.
+- `local.swarm-view.answer-codex-question { requestID, threadID, answers }` answers only the exact outstanding native request. `answers` maps each question ID to `{ answers: [text] }`; every question requires one nonblank answer, at most 20,000 characters. Success waits for Codex's `serverRequest/resolved` event. Stale, duplicate, incomplete or disconnected responses fail. Answers are neither stored nor included in Auto's log. Neither command sends terminal keys.

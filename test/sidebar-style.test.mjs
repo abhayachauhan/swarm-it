@@ -72,6 +72,7 @@ function drawnClasses() {
         otherSwarms: [{ workspaceID: 'ws2', name: 'Kelpi UI', orchestratorPaneID: 'o2', color: 'purple', running: 1, needYou: 2, done: 0 }] },
     { selectedPaneID: null, railFocused: true, autoMenuOpen: true });
     draw({ ...snap, workers: [], attention: [], orchestrator: null });
+    draw({ ...snap, codexQuestions: [{ requestID: 1, threadID: 'test', questions: [{ id: 'q', question: 'Choose?' }] }] });
     draw(null);
     return classes;
 }

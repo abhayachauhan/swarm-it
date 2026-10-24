@@ -31,3 +31,11 @@ node skills/swarm-it/install-codex-hook.mjs
 Trust the new Codex hook with `/hooks` inside Codex. Restart Claude sessions started before a hook change. Kelpi's hook diagnostic checks installation, not trust.
 
 Claude headless workers cannot display a prompt. If Kelpi asks the provider and Swarm-it abstains, the request may be denied by Claude rather than shown as a card. This case has not been verified live. Use a mode that asks in an interactive pane for work likely to need manual approval.
+
+## Answer Codex questions centrally
+
+A queued Codex question card offers **Answer here** and **Go to pane**. **Answer here** connects to the existing local Codex shared daemon and lists its pending structured questions, labelled with their session names and IDs. Select an option or type your own clarification, then press **Send answer**. Codex confirms resolution and the terminal clears its matching question too. Auto mode never supplies clarification answers.
+
+The connection continues receiving questions from those sessions. Press **Refresh** to discover newly started sessions or reconnect. The list covers sessions on that local daemon, including sessions outside the current Kelpi workspace. **Go to pane** is also offered on a structured question when Kelpi knows its exact session ID; the original notification always retains its pane link. Swarm never guesses a session from a shared working directory.
+
+Requires a recent shared-daemon Codex CLI and Node with native WebSocket support (validated with Codex 0.164.0 and Node 24). Remote Codex servers and `--no-daemon` sessions retain **Go to pane**. This feature handles structured clarification questions; native Codex permission approvals still use their existing path. Answers stay in memory and are sent to Codex, without being saved in plugin storage or its approval log. Secret fields use password inputs.

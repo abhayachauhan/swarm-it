@@ -198,3 +198,21 @@ test('the rail says in the DOM whether it holds the keyboard: focus-rail takes i
     assert.equal(app.refs.list.dataset.railFocused, 'false');
     assert.equal((await app.press('j')).prevented, undefined, 'keys are inert again');
 });
+
+
+test('central Codex answer keeps a typed draft across snapshots and sends the matching request', async () => {
+    const snap = fixture();
+    snap.codexQuestions = [{ requestID: 17, threadID: 'thread-a', paneID: 'p-wait', questions: [{ id: 'q', question: 'Which environment?', options: [{ label: 'Staging' }] }] }];
+    const app = await bootApp({ snapshot: snap });
+    await app.pointerClick(app.button(app.refs.list, 'Staging'));
+    let input = app.refs.list.querySelector('input');
+    input.value = 'Staging, then ask me';
+    for (const fn of input.listeners.input || []) fn();
+    app.emit('snapshot', { ...snap, sequence: snap.sequence + 1 });
+    input = app.refs.list.querySelector('input');
+    assert.equal(input.value, 'Staging, then ask me');
+    await app.pointerClick(app.button(app.refs.list, 'Send answer'));
+    assert.deepEqual(sent(app, 'answer-codex-question').at(-1).args, { requestID: 17, threadID: 'thread-a', answers: { q: { answers: ['Staging, then ask me'] } } });
+    await app.pointerClick(app.button(app.refs.list, 'Go to pane'));
+    assert.equal(app.reveals.at(-1), 'p-wait');
+});
