@@ -350,6 +350,23 @@ test('an unrecognised prompt (approvable=false): label, the guessed command, "An
     assert.equal(find(item, n => n.tag === 'pre' || n.tag === 'details').length, 0, 'no full-prompt fold');
 });
 
+test('a queued Codex question is plain text with its answer shortcut, never a clamped command', () => {
+    const snap = fixture();
+    const item = snap.attention[0];
+    Object.assign(item, {
+        agent: 'codex', approvable: false, command: '',
+        promptBlock: 'Queued follow-up inputs\n? 1 question\n⇧← to answer',
+        text: `${item.paneID}: 1 question waiting; press Shift+Left Arrow in Codex to answer`
+    });
+    const refs = makeRefs();
+    L.render(fakeDoc, refs, view(snap), handlers([]));
+    const card = cards(refs)[0];
+    assert.ok(find(card, n => n.text === 'Question waiting in Codex').length);
+    assert.ok(find(card, n => n.text === '1 question waiting; press Shift+Left Arrow in Codex to answer').length);
+    assert.equal(find(card, n => n.tag === 'code' || n.className.includes('att-more')).length, 0);
+    assert.deepEqual(find(card, n => n.tag === 'button').map(n => n.text), ['Go to pane']);
+});
+
 test('an unrecognised newer-layout prompt shows just the command between the rules', () => {
     const snap = fixture();
     snap.attention[0].approvable = false;

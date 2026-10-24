@@ -567,8 +567,14 @@
         pane.setAttribute('title', String(item.paneID ?? ''));
         root.append(pane);
         const unrecognised = item.approvable === false;
+        const inputQuestion = item.agent === 'codex' && /^Queued follow-up inputs\b/m.test(item.promptBlock ?? '');
         const shown = cardCommand(item);
-        if (shown) {
+        if (inputQuestion) {
+            root.append(h(doc, 'div', 'att-text', 'Question waiting in Codex'));
+            const prefix = `${item.paneID}: `;
+            const text = String(item.text ?? '');
+            root.append(h(doc, 'div', 'att-text', text.startsWith(prefix) ? text.slice(prefix.length) : text));
+        } else if (shown) {
             const code = h(doc, 'code', opts.expanded ? 'att-command' : 'att-command att-clamp', shown);
             code.setAttribute('title', opts.expanded
                 ? (shown !== item.command && !unrecognised ? `Wrapped lines rejoined for display, ${JOIN_MARK} marks each join. Click to shorten.` : 'Click to shorten')
