@@ -16,7 +16,7 @@ Say **“swarm it”** to a Claude Code or Codex coordinator. The skill breaks y
 | **“Swarm it, all Claude.”** | Claude plans the work and starts Claude workers. |
 | **“Codex implements; Claude reviews.”** | The coordinator starts review after the implementation diff exists, returns findings to the implementer, and checks the fixes. Reverse the roles whenever you want. |
 | **“Use both to review.”** | Separate Claude and Codex reviews can inspect the same change with different focuses. |
-| **“Hand this goal to the other CLI.”** | A short goal summary opens beside the source. Or use the pane's **Hand off to other CLI** action to transfer the exact local session transcript. |
+| **“Hand this goal to the other CLI.”** | The other CLI opens beside the source with its session ID as context. The pane's **Hand off to other CLI** action works without the skill. |
 
 Each worker gets its own Kelpi pane in a shared **Workers** workspace. Your coordinator stays in place. Completed workers write a short **Goal / Done / Next** result; the rail keeps the result after the worker pane closes.
 
@@ -32,9 +32,9 @@ The timed **Auto** control can approve eligible requests while you are away. It 
 
 ![Illustration of a handoff from Claude to Codex through the exact local transcript](docs/handoff.svg)
 
-Choose **Hand off to other CLI** in a pane's header or pane menu. Swarm-it finds that pane's exact local session transcript, opens the other CLI in the same working directory, and asks it to summarize the goal and continue. The source pane closes after Kelpi sends the target command. If the session ID or transcript is missing, the source stays open and you get an error. The action works in either direction.
+Choose **Hand off to other CLI** in a pane's header or pane menu. It opens the other CLI in the same working directory with a plain request: **“Read the Claude session &lt;id&gt; and continue the conversation from where it left off.”** The source transcript path is included when available. The action works in either direction and does not require a skill. The source pane closes after Kelpi sends the target command; a missing session ID leaves it open.
 
-You can also ask the current agent to hand off conversationally. It writes a short **Goal / Key points / Next** summary for the new pane. Session IDs identify the source transcript; they are not passed to the other CLI's resume command.
+Conversational transfers also pass the source session ID when known. If no ID is available, a short **Goal / Key points / Next** context file can be used instead.
 
 ## More than a worker list
 

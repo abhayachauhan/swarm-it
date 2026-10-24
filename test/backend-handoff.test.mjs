@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { findTranscript, handoff, requestHandoff, validateHandoff } from '../backend/handoff.mjs';
 import { makeFakeApi } from './backend-fake-api.mjs';
 
@@ -68,9 +70,11 @@ test('pane header transfers the exact source transcript and closes the source af
         assert.equal(result.ok, true);
         assert.equal(result.toAgent, 'claude');
         assert.equal(result.sourceSessionID, sessionID);
-        assert.match(readFileSync(result.handoffPath, 'utf8'), /Source transcript: /);
-        assert.match(readFileSync(result.handoffPath, 'utf8'), new RegExp(sessionID));
-        assert.match(api.callsTo('terminal.send')[0].args[1], /&& claude /);
+        assert.equal(result.handoffPath, null);
+        const command = api.callsTo('terminal.send')[0].args[1];
+        assert.match(command, /&& claude /);
+        assert.ok(command.includes(`Read the Codex session ${sessionID} from ${transcript}`));
+        assert.doesNotMatch(command, /Swarm-it handoff|summarize|Next section|use the swarm-it skill/i);
         assert.equal(api.callsTo('panes.close').length, 0);
         closeLater();
         await new Promise(resolve => setImmediate(resolve));
@@ -78,7 +82,7 @@ test('pane header transfers the exact source transcript and closes the source af
     } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test('pane header leaves the source open when its session ID or transcript is missing', async () => {
+test('pane header needs a session ID, and lets the target locate the transcript when no local file is found', async () => {
     const api = makeFakeApi({ panes: [{ id: 'source-1', agent: 'codex', workspaceID: 'ws1', type: 'shell', workingDirectory: '/tmp/repo' }] });
     const noID = await requestHandoff(api, { sessions: new Map() }, {}, { paneID: 'source-1' });
     assert.equal(noID.code, 'NO_SESSION');
@@ -86,9 +90,10 @@ test('pane header leaves the source open when its session ID or transcript is mi
     api.paneList[0].agentSessionID = '11111111-2222-4333-8444-555555555555';
     const home = mkdtempSync(join(tmpdir(), 'swarm-handoff-empty-'));
     try {
-        const noTranscript = await requestHandoff(api, { sessions: new Map() }, {}, { paneID: 'source-1' }, { home });
-        assert.equal(noTranscript.code, 'NO_TRANSCRIPT');
-        assert.equal(api.callsTo('panes.split').length, 0);
+        const result = await requestHandoff(api, { sessions: new Map() }, {}, { paneID: 'source-1' }, { home, scheduleClose: () => {} });
+        assert.equal(result.ok, true);
+        assert.equal(result.handoffPath, null);
+        assert.ok(api.callsTo('terminal.send')[0].args[1].includes(`Read the Codex session ${api.paneList[0].agentSessionID} and continue`));
         assert.equal(api.callsTo('panes.close').length, 0);
     } finally { rmSync(home, { recursive: true, force: true }); }
 });
@@ -105,7 +110,10 @@ test('pane header finds a Claude transcript and starts Codex', async () => {
         const result = await requestHandoff(api, { settings: {}, sessions: new Map() }, {}, { paneID: 'source-1' },
             { home, root: join(home, 'handoffs'), uuid: () => 'claude', scheduleClose: () => {} });
         assert.equal(result.toAgent, 'codex');
-        assert.match(api.callsTo('terminal.send')[0].args[1], /&& codex /);
+        const command = api.callsTo('terminal.send')[0].args[1];
+        assert.match(command, /&& codex /);
+        assert.ok(command.includes(`Read the Claude session ${sessionID} from ${transcript}`));
+        assert.doesNotMatch(command, /Swarm-it handoff|summarize|Next section|use the swarm-it skill/i);
     } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -121,10 +129,50 @@ test('handoff records the source session and closes it only after target send su
         assert.equal(result.sourceSessionID, sessionID);
         assert.equal(result.sourceCloseScheduled, true);
         assert.equal(api.callsTo('panes.close').length, 0);
-        assert.match(readFileSync(result.handoffPath, 'utf8'), new RegExp(`Source session ID: ${sessionID}`));
+        assert.equal(result.handoffPath, null);
         assert.match(api.callsTo('terminal.send')[0].args[1], new RegExp(sessionID));
         closeLater();
         await new Promise(resolve => setImmediate(resolve));
         assert.deepEqual(api.callsTo('panes.close')[0].args, ['source-1']);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('session-only handoff accepts a session ID without a summary and rejects mismatched IDs', async () => {
+    const sessionID = '11111111-2222-4333-8444-555555555555';
+    const args = { sourcePaneID: 'source-1', fromAgent: 'claude', toAgent: 'codex', sourceSessionID: sessionID };
+    assert.equal(validateHandoff(args), null);
+    assert.equal(validateHandoff({ ...args, sourceSessionID: 'bad; id' }).code, 'BAD_SESSION');
+    const api = makeFakeApi({ panes: [{ id: 'source-1', agent: 'claude', agentSessionID: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', workingDirectory: '/tmp', workspaceID: 'ws1' }] });
+    assert.equal((await handoff(api, { settings: {} }, args)).code, 'SESSION_MISMATCH');
+    assert.equal(api.callsTo('panes.split').length, 0);
+});
+
+test('a failed target send leaves the source session open', async () => {
+    const api = makeFakeApi({ allowClose: true, panes: [{ id: 'source-1', agent: 'claude', agentSessionID: '11111111-2222-4333-8444-555555555555', workingDirectory: '/tmp', workspaceID: 'ws1' }] });
+    api.terminal.send = async () => { throw new Error('send failed'); };
+    let scheduled = false;
+    const result = await requestHandoff(api, { sessions: new Map() }, {}, { paneID: 'source-1' }, { scheduleClose: () => { scheduled = true; } });
+    assert.equal(result.code, 'SEND_FAILED');
+    assert.equal(scheduled, false);
+    assert.equal(api.callsTo('panes.close').length, 0);
+});
+
+test('the helper transfers a session ID without reading a summary from stdin', () => {
+    const root = mkdtempSync(join(tmpdir(), 'session-transfer-'));
+    const sessionID = '11111111-2222-4333-8444-555555555555';
+    const executable = join(root, 'kelpi');
+    const payloadPath = join(root, 'payload.json');
+    writeFileSync(executable, `#!${process.execPath}\nconst fs = require('node:fs'); const args = JSON.parse(process.argv.at(-1)); fs.writeFileSync(${JSON.stringify(payloadPath)}, JSON.stringify(args)); console.log(JSON.stringify({ok:true, toAgent:args.toAgent, paneID:'target-1', sourceSessionID:args.sourceSessionID, handoffPath:null}));\n`);
+    chmodSync(executable, 0o700);
+    try {
+        const output = execFileSync(process.execPath, [fileURLToPath(new URL('../skills/swarm-it/swarm-handoff.mjs', import.meta.url)), '--from', 'claude', '--to', 'codex', '--session-id', sessionID], {
+            input: '', encoding: 'utf8', timeout: 5000,
+            env: { ...process.env, PATH: `${root}${delimiter}${process.env.PATH}`, KELPI_PANE_ID: 'source-1' }
+        });
+        const payload = JSON.parse(readFileSync(payloadPath, 'utf8'));
+        assert.equal(payload.sourceSessionID, sessionID);
+        assert.equal(payload.goal, undefined);
+        assert.ok(output.includes(`source session ${sessionID}`));
+        assert.doesNotMatch(output, /undefined/);
     } finally { rmSync(root, { recursive: true, force: true }); }
 });

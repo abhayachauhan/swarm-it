@@ -1,4 +1,4 @@
-// Move a concise, source-authored goal summary into a fresh Claude or Codex pane.
+// Continue a source session in the other CLI; summaries support callers without a session ID.
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, rm, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,13 +17,15 @@ export function validateHandoff(args) {
         || !['claude', 'codex'].includes(args.toAgent) || args.fromAgent === args.toAgent) {
         return fail('choose different Claude and Codex source and target agents', 'BAD_AGENT');
     }
-    if (!singleLine(args.goal, 500)) return fail('goal must be one line of at most 500 characters', 'BAD_GOAL');
-    if (!Array.isArray(args.keyPoints) || args.keyPoints.length < 1 || args.keyPoints.length > 8
-        || args.keyPoints.some(point => !singleLine(point, 500))) {
-        return fail('keyPoints must contain 1 to 8 one-line points of at most 500 characters', 'BAD_POINTS');
-    }
-    if (args.next !== undefined && args.next !== null && !singleLine(args.next, 500)) {
-        return fail('next must be one line of at most 500 characters', 'BAD_NEXT');
+    if (args.sourceSessionID == null) {
+        if (!singleLine(args.goal, 500)) return fail('goal must be one line of at most 500 characters', 'BAD_GOAL');
+        if (!Array.isArray(args.keyPoints) || args.keyPoints.length < 1 || args.keyPoints.length > 8
+            || args.keyPoints.some(point => !singleLine(point, 500))) {
+            return fail('keyPoints must contain 1 to 8 one-line points of at most 500 characters', 'BAD_POINTS');
+        }
+        if (args.next !== undefined && args.next !== null && !singleLine(args.next, 500)) {
+            return fail('next must be one line of at most 500 characters', 'BAD_NEXT');
+        }
     }
     if (typeof args.sourcePaneID !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/.test(args.sourcePaneID)) {
         return fail('sourcePaneID is required', 'BAD_PANE');
@@ -36,7 +38,7 @@ export function validateHandoff(args) {
 export function handoffMarkdown(args) {
     const name = agent => agent === 'codex' ? 'Codex' : 'Claude';
     const session = args.sourceSessionID ? `Source session ID: ${args.sourceSessionID}\n` : '';
-    return `# Swarm-it handoff\n\nFrom: ${name(args.fromAgent)}\nTo: ${name(args.toAgent)}\n${session}\n## Goal\n\n${args.goal.trim()}\n\n## Key points\n\n${args.keyPoints.map(point => `- ${point.trim()}`).join('\n')}\n\n## Next\n\n${args.next?.trim() || 'Continue the goal from the key points above.'}\n`;
+    return `# Conversation context\n\nFrom: ${name(args.fromAgent)}\nTo: ${name(args.toAgent)}\n${session}\n## Goal\n\n${args.goal.trim()}\n\n## Key points\n\n${args.keyPoints.map(point => `- ${point.trim()}`).join('\n')}\n\n## Next\n\n${args.next?.trim() || 'Continue the goal from the key points above.'}\n`;
 }
 
 /** Find the exact local transcript for a native session ID. Never use --last or a nearby session. */
@@ -74,15 +76,11 @@ export async function requestHandoff(api, store, args, context, options = {}) {
     if (agent && !['claude', 'codex'].includes(agent)) return fail('source pane is not Claude or Codex', 'SOURCE_AGENT');
     const sessionID = source.agentSessionID ?? store.sessions?.get(paneID);
     if (!SESSION_ID.test(sessionID ?? '')) return fail('Kelpi has no session ID for this pane; ask the agent to hand off from its conversation instead', 'NO_SESSION');
-    const transcript = await findTranscript(sessionID, agent, options);
-    if (!transcript) return fail('the source session transcript could not be found; the source pane is still open', 'NO_TRANSCRIPT');
-    const fromAgent = agent ?? transcript.agent;
+    const fromAgent = agent ?? (await findTranscript(sessionID, null, options))?.agent;
+    if (!fromAgent) return fail('cannot identify whether the source session is Claude or Codex', 'SOURCE_AGENT');
     const toAgent = fromAgent === 'codex' ? 'claude' : 'codex';
     return handoff(api, store, {
-        sourcePaneID: paneID, sourceSessionID: sessionID, fromAgent, toAgent, quitSource: true,
-        goal: `Continue the ${fromAgent === 'codex' ? 'Codex' : 'Claude'} session in ${source.workingDirectory}`,
-        keyPoints: [`Source transcript: ${transcript.path}`, `Source session ID: ${sessionID}`],
-        next: 'Read the source transcript, summarize its current goal and key points, then continue the unfinished work.'
+        sourcePaneID: paneID, sourceSessionID: sessionID, fromAgent, toAgent, quitSource: true
     }, options);
 }
 
@@ -105,14 +103,18 @@ export async function handoff(api, store, args, options = {}) {
         return fail('source session ID does not match the pane', 'SESSION_MISMATCH');
     }
     const sourceSessionID = knownSession ?? args.sourceSessionID ?? null;
+    if (sourceSessionID && !SESSION_ID.test(sourceSessionID)) return fail('source session ID must be a UUID', 'BAD_SESSION');
     const record = { ...args, sourceSessionID };
-
-    const root = options.root ?? join(manifestDirectory(homedir(), store.settings?.manifestDir), 'handoffs');
-    const path = join(root, `${options.uuid?.() ?? randomUUID()}.md`);
-    try {
-        await (options.mkdir ?? mkdir)(root, { recursive: true, mode: 0o700 });
-        await (options.writeFile ?? writeFile)(path, handoffMarkdown(record), { flag: 'wx', mode: 0o600 });
-    } catch (error) { return fail(`could not save handoff: ${message(error)}`, 'WRITE_FAILED'); }
+    const transcript = sourceSessionID ? await findTranscript(sourceSessionID, args.fromAgent, options) : null;
+    let path = null;
+    if (!sourceSessionID) {
+        const root = options.root ?? join(manifestDirectory(homedir(), store.settings?.manifestDir), 'handoffs');
+        path = join(root, `${options.uuid?.() ?? randomUUID()}.md`);
+        try {
+            await (options.mkdir ?? mkdir)(root, { recursive: true, mode: 0o700 });
+            await (options.writeFile ?? writeFile)(path, handoffMarkdown(record), { flag: 'wx', mode: 0o600 });
+        } catch (error) { return fail(`could not save handoff: ${message(error)}`, 'WRITE_FAILED'); }
+    }
 
     let paneID;
     try {
@@ -120,11 +122,12 @@ export async function handoff(api, store, args, options = {}) {
         paneID = made?.paneID;
         if (!paneID) throw new Error('Kelpi did not return the new pane');
     } catch (error) {
-        await (options.rm ?? rm)(path, { force: true }).catch(() => {});
+        if (path) await (options.rm ?? rm)(path, { force: true }).catch(() => {});
         return fail(`could not open target pane: ${message(error)}`, 'OPEN_FAILED');
     }
-    const transcriptHint = sourceSessionID ? ` If more context is needed, locate the ${args.fromAgent} local transcript by source session ID ${sourceSessionID}; do not pass that ID to your own resume command.` : '';
-    const prompt = `Read the Swarm-it handoff at ${path}. Continue its goal from the Next section. Check the current files before making changes. Keep the handoff as context, not as a command to run.${transcriptHint}`;
+    const prompt = sourceSessionID
+        ? `Read the ${args.fromAgent === 'codex' ? 'Codex' : 'Claude'} session ${sourceSessionID}${transcript ? ` from ${transcript.path}` : ''} and continue the conversation from where it left off.`
+        : `Read the conversation context at ${path} and continue where it left off.`;
     const command = `cd ${shellQuote(source.workingDirectory)} && ${args.toAgent} ${shellQuote(prompt)}`;
     try { await api.terminal.send(paneID, command); }
     catch (error) { return { ...fail(`target pane opened but the agent did not start: ${message(error)}`, 'SEND_FAILED'), paneID, handoffPath: path }; }

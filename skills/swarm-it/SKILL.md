@@ -1,18 +1,23 @@
 ---
 name: swarm-it
-description: Plan and coordinate a swarm of Claude or Codex workers in Kelpi, or hand a goal from one CLI to the other. Use when the user asks to "swarm it", distribute work, assign implementation and review, or hand off to Claude or Codex.
+description: Plan and coordinate a swarm of Claude or Codex workers in Kelpi. Use when the user asks to "swarm it", distribute work, or assign implementation and review. Reading another CLI's session context does not require this skill.
 ---
 
 # Swarm it
 
 ## Hand off to the other CLI
 
-Kelpi's pane header **Hand off to other CLI** button takes the pane's session ID, finds its exact
-local transcript, opens the other CLI with instructions to summarize and continue, and closes the
-source pane after sending the target command. No agent action is needed for the button.
+Kelpi's pane header **Hand off to other CLI** button opens the other CLI with a plain request to read the
+source session ID and continue the conversation. It includes the transcript path when available and closes
+the source pane after sending the target command. The button and receiving CLI do not need this skill.
 
-When the user asks conversationally to move the current goal from Claude to Codex, or Codex to
-Claude, summarize the conversation you actually have. Include the goal, 1–8 key points (decisions, constraints, relevant
+When the source session ID is known, conversational transfers can use it directly, without a summary:
+
+```bash
+node <skill-dir>/swarm-handoff.mjs --from codex --to claude --session-id <uuid> --quit-source
+```
+
+If no session ID is available, summarize the conversation you actually have. Include the goal, 1–8 key points (decisions, constraints, relevant
 files or branch, and verified progress), and the next concrete step. Each field must be one line and
 at most 500 characters. Do not invent missing context. Run the plugin handoff helper from the
 source agent's Kelpi pane, replacing `--from` and `--to` with the actual CLIs:
@@ -26,13 +31,12 @@ JSON
 For Claude to Codex use `--from claude --to codex`. Include `--quit-source` when the user asked to
 leave the source. If you know your current session UUID, pass `--session-id <uuid>`; otherwise Kelpi uses a
 session ID it has recorded, if any. The helper uses `KELPI_PANE_ID` to identify the
-source, and the plugin saves the summary under `~/.kelpi-swarm/handoffs/`, opens a new pane in the
-same workspace, and starts the other CLI with that file as context. With `--quit-source`, the
+source. The plugin passes the known session ID, or saves the summary under `~/.kelpi-swarm/handoffs/` when no ID
+is known, and starts the other CLI in a new pane in the same workspace. With `--quit-source`, the
 source pane closes a few seconds after the target command is sent; without it, the source stays.
 The session ID is recorded for finding the source transcript, and is never passed to the other
-CLI's resume command. Report the new pane ID and handoff path. If there is no Kelpi pane ID, explain that the handoff
-must be run from a Kelpi pane. A conversational handoff carries a summary, not the full conversation or hidden
-tool state; the target agent should check current files before making changes.
+CLI's resume command. Report the new pane ID and source session ID or context path. If there is no Kelpi pane ID, explain that the handoff
+must be run from a Kelpi pane. A summary-only transfer carries the written context; the target agent should check current files before making changes.
 
 ## Swarm workers
 
