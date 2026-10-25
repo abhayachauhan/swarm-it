@@ -11,6 +11,7 @@ class Socket extends EventTarget {
         const m = JSON.parse(raw); this.sent.push(m);
         if ('result' in m && this.resolveAnswers !== false) queueMicrotask(() => this.message({ method: 'serverRequest/resolved', params: { threadId: 'thread-a', requestId: m.id } }));
         if (m.method === 'initialize') queueMicrotask(() => this.message({ id: m.id, result: {} }));
+        if (m.method === 'thread/items/list') queueMicrotask(() => this.message({ id: m.id, result: { data: [] } }));
         if (m.method === 'thread/loaded/list') queueMicrotask(() => this.message({ id: m.id, result: { data: ['thread-a'] } }));
         if (m.method === 'thread/resume') queueMicrotask(() => {
             this.message({ id: m.id, result: { thread: { name: 'A test', cwd: '/tmp' } } });

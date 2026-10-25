@@ -141,6 +141,9 @@ export interface AutoApproveEntry {
 
 /** What the backend pushes to views: command `get-state` result and event `local.swarm-view.snapshot` data. */
 export interface CodexQuestionRequest {
+    kind?: 'queued';
+    turnID?: string;
+    itemID?: string;
     requestID: string | number;
     threadID: string;
     name?: string;

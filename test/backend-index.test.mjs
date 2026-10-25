@@ -444,7 +444,7 @@ test('central Codex commands expose exact session-to-pane mappings and forward a
     let disposed = false, answered = null;
     const request = { requestID: 7, threadID: 'thread-a', questions: [{ id: 'q', question: 'Choose?' }] };
     const dispose = registerAll(api, { ...modules, createCodexQuestions: () => ({
-        async refresh() {}, list: () => [request, { ...request, requestID: 8, threadID: 'unmapped' }],
+        async refresh() {}, warnings: () => ['Codex test history warning'], list: () => [request, { ...request, requestID: 8, threadID: 'unmapped' }],
         async answer(args) { answered = args; return { ok: true }; }, dispose() { disposed = true; }
     }) });
     try {
@@ -454,6 +454,7 @@ test('central Codex commands expose exact session-to-pane mappings and forward a
         const snapshot = (await api.command('get-state')).snapshot;
         assert.equal(snapshot.codexQuestions[0].paneID, 'p');
         assert.equal(snapshot.codexQuestions[1].paneID, undefined);
+        assert.ok(snapshot.warnings.includes('Codex test history warning'));
         const args = { requestID: 7, threadID: 'thread-a', answers: { q: { answers: ['Proceed'] } } };
         assert.equal((await api.command('answer-codex-question', args)).ok, true);
         assert.deepEqual(answered, args);

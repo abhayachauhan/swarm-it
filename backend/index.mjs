@@ -98,6 +98,7 @@ export function registerAll(api, deps = modules) {
     let codexQuestions = null;
     function snapshotNow() {
         const snapshot = S.buildSnapshot(st, Date.now());
+        if (codexQuestions) snapshot.warnings.push(...(codexQuestions.warnings?.() ?? []));
         if (codexQuestions) snapshot.codexQuestionsConnected = codexQuestions.connected?.() ?? true;
         if (codexQuestions) snapshot.codexQuestions = codexQuestions.list().map(question => {
             const pane = [...st.panes.values()].find(p => p.agentSessionID === question.threadID || st.sessions.get(p.id) === question.threadID);

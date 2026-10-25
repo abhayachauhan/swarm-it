@@ -1,4 +1,4 @@
-// Join the existing local daemon; never start a server, turn, or change a thread's permissions.
+// Join the existing daemon. Only an explicit answer sends user input; permissions stay unchanged.
 import http from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -23,14 +23,31 @@ export function connectCodex(socketPath = join(process.env.CODEX_HOME || homedir
     return new WebSocket('ws://localhost/', { dispatcher });
 }
 
+function parseReply(item) {
+    const content = item.content?.filter(i => i.type !== 'skill' && i.type !== 'mention') || [];
+    if (content.length !== 1 || content[0].type !== 'text' || typeof content[0].text !== 'string') return null;
+    let text = content[0].text.trim();
+    if (text.startsWith('# Context from my IDE setup:\n')) text = text.split('\n## My request for Codex:\n').at(-1).trim();
+    const prefix = '<send_user_message_question_reply>', suffix = '</send_user_message_question_reply>';
+    if (!text.startsWith(prefix) || !text.endsWith(suffix)) return null;
+    try {
+        const parsed = JSON.parse(text.slice(prefix.length, -suffix.length));
+        const list = Array.isArray(parsed) ? parsed : [parsed];
+        return list.length && list.every(r => typeof r?.questionItemId === 'string' && typeof r.question === 'string' && typeof r.answer === 'string') ? list : null;
+    } catch { return null; }
+}
+
 export function createCodexQuestions({ connect = connectCodex, onChange = () => {}, timeoutMs = 5000 } = {}) {
     let socket, initialized, sequence = 0, closed = false;
     const answersWaiting = new Map();
+    const historyWarnings = new Map();
+    const seenItems = new Set(), answeredIDs = new Set(), hydrating = new Map();
     const calls = new Map(), questions = new Map(), threads = new Map(), subscribed = new Set();
     const changed = () => onChange();
     function clear(error) {
         for (const call of calls.values()) { clearTimeout(call.timer); call.reject(error); }
-        for (const answer of answersWaiting.values()) { clearTimeout(answer.timer); answer.reject(error); }
+        for (const answer of answersWaiting.values()) { clearTimeout(answer.timer); answer.reject?.(error); }
+        historyWarnings.clear(); seenItems.clear(); answeredIDs.clear(); hydrating.clear();
         answersWaiting.clear(); calls.clear(); questions.clear(); threads.clear(); subscribed.clear(); initialized = null;
         changed();
     }
@@ -46,6 +63,47 @@ export function createCodexQuestions({ connect = connectCodex, onChange = () => 
             try { send({ id, method, params }); } catch (error) { clearTimeout(timer); calls.delete(id); reject(error); }
         });
     }
+    function queuedItem(threadID, item, turnID) {
+        if (!item || typeof item.id !== 'string') return;
+        const key = `${threadID}:${item.id}`;
+        if (seenItems.has(key)) return;
+        if (item.type === 'agentMessage' && item.delivery === 'async' && Array.isArray(item.questions)
+            && item.questions.length && item.questions.every(q => typeof q?.title === 'string'
+                && (!q.options || (Array.isArray(q.options) && q.options.every(o => typeof o === 'string'))))) {
+            seenItems.add(key);
+            // Older desktop replies identify the whole source message instead of one question.
+            const pending = item.questions.map((q, index) => ({
+                id: JSON.stringify(['request_user_input_async', item.id, index]), question: q.title,
+                options: q.options?.map(label => ({ label }))
+            })).filter(q => !answeredIDs.has(`${threadID}:${q.id}`) && !answeredIDs.has(key));
+            if (pending.length) questions.set(`async:${key}`, { requestID: `async:${key}`, threadID, turnID, kind: 'queued', itemID: item.id, questions: pending });
+        } else if (item.type === 'userMessage') {
+            seenItems.add(key);
+            const replies = parseReply(item);
+            for (const reply of replies || []) answeredIDs.add(`${threadID}:${reply.questionItemId}`);
+            for (const [id, q] of questions) if (q.kind === 'queued' && q.threadID === threadID) {
+                q.questions = replies ? q.questions.filter(question => !answeredIDs.has(`${threadID}:${question.id}`) && !answeredIDs.has(`${threadID}:${q.itemID}`)) : [];
+                if (!q.questions.length) questions.delete(id);
+            }
+        }
+    }
+    function finishQueued(threadID, turnID) {
+        for (const [id, q] of questions) if (q.kind === 'queued' && q.threadID === threadID && q.turnID === turnID) questions.delete(id);
+    }
+    async function recoverQueued(threadID) {
+        let cursor, boundary = false;
+        const history = [];
+        do {
+            const page = await call('thread/items/list', { threadId: threadID, sortDirection: 'desc', limit: 100, ...(cursor ? { cursor } : {}) });
+            for (const { item, turnId } of page.data || []) {
+                // The boundary is older than every recovered question; replaying it would clear newer live items.
+                if (item.type === 'userMessage' && !parseReply(item)) { boundary = true; break; }
+                if (item.type === 'userMessage' || (item.type === 'agentMessage' && item.delivery === 'async')) history.push({ item, turnID: turnId });
+            }
+            cursor = page.nextCursor;
+        } while (cursor && !boundary);
+        for (const entry of history.reverse()) queuedItem(threadID, entry.item, entry.turnID);
+    }
     function receive(message) {
         if (!message.method && calls.has(message.id)) {
             const pending = calls.get(message.id); calls.delete(message.id); clearTimeout(pending.timer);
@@ -59,6 +117,19 @@ export function createCodexQuestions({ connect = connectCodex, onChange = () => 
                 questions.set(String(message.id), { requestID: message.id, threadID: p.threadId, questions: p.questions });
                 changed();
             }
+        } else if (message.method === 'item/completed') {
+            const p = message.params;
+            if (typeof p?.threadId === 'string') {
+                if (hydrating.has(p.threadId)) hydrating.get(p.threadId).push({ item: p.item, turnID: p.turnId });
+                else queuedItem(p.threadId, p.item, p.turnId);
+                changed();
+            }
+        } else if (message.method === 'turn/completed') {
+            const p = message.params;
+            const clearTurn = { endedTurnID: p?.turn?.id };
+            if (hydrating.has(p?.threadId)) hydrating.get(p.threadId).push(clearTurn);
+            else finishQueued(p?.threadId, clearTurn.endedTurnID);
+            changed();
         } else if (message.method === 'serverRequest/resolved') {
             const q = questions.get(String(message.params?.requestId));
             if (q?.threadID === message.params?.threadId) {
@@ -95,22 +166,36 @@ export function createCodexQuestions({ connect = connectCodex, onChange = () => 
             do {
                 const page = await call('thread/loaded/list', cursor ? { cursor } : {});
                 for (const id of page.data ?? []) {
-                    if (subscribed.has(id)) continue;
+                    if (subscribed.has(id) && !historyWarnings.has(id)) continue;
                     // Warm resume joins the running thread and replays pending requests; no overrides or turn/start.
-                    let result;
-                    try { result = await call('thread/resume', { threadId: id, excludeTurns: true }); }
-                    catch (error) {
-                        // Ephemeral sessions and sessions closed during discovery have no resumable rollout.
-                        if (/no rollout found|thread not found/i.test(error.message)) continue;
-                        throw error;
+                    hydrating.set(id, []);
+                    try {
+                        if (!subscribed.has(id)) {
+                            const result = await call('thread/resume', { threadId: id, excludeTurns: true });
+                            threads.set(id, { name: result.thread.name || id, cwd: result.thread.cwd });
+                            subscribed.add(id);
+                            if (result.thread.status && result.thread.status.type !== 'active') continue;
+                        }
+                        await recoverQueued(id);
+                        historyWarnings.delete(id);
+                    } catch (error) {
+                        // Keep other sessions and blocking questions usable when one history cannot be read.
+                        if (!/no rollout found|thread not found/i.test(error.message)) historyWarnings.set(id, `Codex questions (${threads.get(id)?.name || id}): ${error.message}. Refresh to retry.`);
                     }
-                    threads.set(id, { name: result.thread.name || id, cwd: result.thread.cwd });
-                    subscribed.add(id);
+                    finally {
+                        const live = hydrating.get(id) || [];
+                        hydrating.delete(id);
+                        for (const entry of live) {
+                            if (entry.endedTurnID) finishQueued(id, entry.endedTurnID);
+                            else queuedItem(id, entry.item, entry.turnID);
+                        }
+                    }
                 }
                 cursor = page.nextCursor;
             } while (cursor);
             changed();
         },
+        warnings() { return [...historyWarnings.values()]; },
         connected() { return socket?.readyState === 1 && !!initialized; },
         list() { return [...questions.values()].map(q => ({ ...q, ...threads.get(q.threadID) })); },
         async answer({ requestID, threadID, answers } = {}) {
@@ -121,6 +206,18 @@ export function createCodexQuestions({ connect = connectCodex, onChange = () => 
                     && answers[question.id].answers.length === 1 && typeof answers[question.id].answers[0] === 'string'
                     && answers[question.id].answers[0].trim().length > 0 && answers[question.id].answers[0].length <= 20000)) {
                 throw new Error('Answer every question before sending (maximum 20,000 characters each).');
+            }
+            if (q.kind === 'queued') {
+                const replies = q.questions.map(question => ({ questionItemId: question.id, question: question.question, answer: answers[question.id].answers[0] }));
+                const text = `<send_user_message_question_reply>${JSON.stringify(replies)}</send_user_message_question_reply>`;
+                // As in Codex's terminal, accepted ordinary input steers active work or starts an idle turn.
+                answersWaiting.set(String(requestID), {});
+                try {
+                    await call('turn/start', { threadId: threadID, input: [{ type: 'text', text }] });
+                    queuedItem(threadID, { id: `swarm-answer-${++sequence}`, type: 'userMessage', content: [{ type: 'text', text }] });
+                    changed();
+                    return { ok: true };
+                } finally { answersWaiting.delete(String(requestID)); }
             }
             // The server broadcasts resolved to every client, including the terminal. No answers are logged or persisted.
             return new Promise((resolve, reject) => {
