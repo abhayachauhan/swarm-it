@@ -15,6 +15,7 @@ Say **“swarm it”** to a Claude Code or Codex coordinator. The skill breaks y
 | **“Swarm it, all Codex.”** | Codex plans the work and starts Codex workers. |
 | **“Swarm it, all Claude.”** | Claude plans the work and starts Claude workers. |
 | **“Codex implements; Claude reviews.”** | The coordinator starts review after the implementation diff exists, returns findings to the implementer, and checks the fixes. Reverse the roles whenever you want. |
+| **“Swarm it, high effort.”** | Workers think harder. Without a level, the coordinator picks one per worker from how complex and risky its task is. |
 | **“Use both to review.”** | Separate Claude and Codex reviews can inspect the same change with different focuses. |
 | **“Hand this goal to the other CLI.”** | The other CLI opens beside the source with its session ID as context. The pane's **Hand off to other CLI** action works without the skill. |
 

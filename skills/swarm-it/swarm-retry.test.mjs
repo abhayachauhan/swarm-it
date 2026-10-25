@@ -159,6 +159,22 @@ test('swarm-retry keeps a Codex worker on Codex with its configured model', () =
   assert.deepEqual(manifest(s).workers.map(w => [w.paneID, w.agent, w.model]), [['P2', 'codex', 'gpt-6.1-sol']])
 })
 
+test('swarm-retry keeps the recorded effort, and --effort overrides it', () => {
+  const s = stub()
+  assert.equal(spawn(s, ['w1', s.task, '--agent', 'codex', '--path', s.home, '--effort', 'medium']).status, 0)
+  setPanes(s, [ME])
+  fs.writeFileSync(path.join(s.home, 'next-pane'), 'P2')
+  const kept = retry(s, ['P1:w1'])
+  assert.equal(kept.status, 0, kept.stderr)
+  assert.ok(kept.calls.filter(c => c.startsWith('pane send')).at(-1).includes('-c model_reasoning_effort=medium "Do the task'), kept.calls.join('\n'))
+  setPanes(s, [ME])
+  fs.writeFileSync(path.join(s.home, 'next-pane'), 'P3')
+  const raised = retry(s, ['P2:w1', '--effort', 'xhigh'])
+  assert.equal(raised.status, 0, raised.stderr)
+  assert.ok(raised.calls.filter(c => c.startsWith('pane send')).at(-1).includes('-c model_reasoning_effort=xhigh "Do the task'), raised.calls.join('\n'))
+  assert.deepEqual(manifest(s).workers.map(w => [w.paneID, w.effort]), [['P3', 'xhigh']])
+})
+
 test('swarm-retry refuses a worker whose pane still runs Claude, and starts nothing', () => {
   for (const pane of [{ id: 'P1', workspace_id: 'WS', status: 'running' }, { id: 'P1', workspace_id: 'WS', status: 'waitingForInput' },
     { id: 'P1', workspace_id: 'WS', status: 'idle', agent_session_id: '0f0f0f0f-0000-4000-8000-00000000c0de' }]) {
@@ -209,14 +225,19 @@ test('swarm-retry refuses an unknown worker, a wrong label, a missing task file 
   refused(['P1:w$(id)'], 'label must be letters, digits, dot, dash or underscore')
   refused(['P1;id:w1'], 'pane id must be letters, digits, dot, dash or underscore')
   refused(['P1:w1', '--model', 'sonnet;id'], 'mode and model must be plain words')
-  refused(['P1'], 'usage: swarm-retry <pane-id>:<label> [--model sonnet]')
-  refused([], 'usage: swarm-retry <pane-id>:<label> [--model sonnet]')
+  refused(['P1:w1', '--effort', 'ultra'], 'effort must be low, medium, high, xhigh or max')
+  refused(['P1'], 'usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high]')
+  refused([], 'usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high]')
   // The manifest is untrusted: a recorded value with shell characters is refused too.
   const m = manifest(s)
   m.workers[0].model = 'haiku;id'
   fs.writeFileSync(path.join(s.manifestDir, 'WS.json'), JSON.stringify(m))
   refused(['P1:w1'], 'recorded model must be a plain word')
   m.workers[0].model = 'haiku'
+  m.workers[0].effort = 'high;id'
+  fs.writeFileSync(path.join(s.manifestDir, 'WS.json'), JSON.stringify(m))
+  refused(['P1:w1'], 'recorded effort must be low, medium, high, xhigh or max')
+  delete m.workers[0].effort
   m.workers[0].dir = '/tmp/a b'
   fs.writeFileSync(path.join(s.manifestDir, 'WS.json'), JSON.stringify(m))
   refused(['P1:w1'], 'recorded task path and dir must be letters, digits, dot, dash, underscore or slash')

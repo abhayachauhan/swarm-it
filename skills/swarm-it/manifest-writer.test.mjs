@@ -24,6 +24,7 @@ function run(dir, ...args) {
 // Small hand-written checker for the subset of JSON Schema the manifest schema uses.
 function check(value, s, where, errors) {
   if ('const' in s && value !== s.const) errors.push(`${where}: expected ${s.const}`)
+  if (s.enum && !s.enum.includes(value)) errors.push(`${where}: ${JSON.stringify(value)} not in ${JSON.stringify(s.enum)}`)
   if (s.type) {
     const types = Array.isArray(s.type) ? s.type : [s.type]
     const actual = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value
@@ -100,7 +101,7 @@ test('atomic write leaves no temp file', () => {
   assert.deepEqual(fs.readdirSync(d), ['ws2.json'])
 })
 
-const RETRY = ['--task-path', '/plans/t.md', '--model', 'sonnet', '--mode', 'auto', '--dir', '/repos/x', '--started-at', '2026-10-17T01:02:03Z']
+const RETRY = ['--task-path', '/plans/t.md', '--model', 'sonnet', '--mode', 'auto', '--effort', 'high', '--dir', '/repos/x', '--started-at', '2026-10-17T01:02:03Z']
 
 test('add-worker records the retry fields, schema valid, and leaves them out when not given', () => {
   const d = tmpDir()
@@ -110,8 +111,8 @@ test('add-worker records the retry fields, schema valid, and leaves them out whe
   const m = JSON.parse(run(d, 'show', 'ws').stdout)
   assert.deepEqual(validate(m), [])
   assert.deepEqual(
-    { taskPath: m.workers[0].taskPath, model: m.workers[0].model, mode: m.workers[0].mode, dir: m.workers[0].dir, startedAt: m.workers[0].startedAt },
-    { taskPath: '/plans/t.md', model: 'sonnet', mode: 'auto', dir: '/repos/x', startedAt: '2026-10-17T01:02:03Z' })
+    { taskPath: m.workers[0].taskPath, model: m.workers[0].model, mode: m.workers[0].mode, effort: m.workers[0].effort, dir: m.workers[0].dir, startedAt: m.workers[0].startedAt },
+    { taskPath: '/plans/t.md', model: 'sonnet', mode: 'auto', effort: 'high', dir: '/repos/x', startedAt: '2026-10-17T01:02:03Z' })
   assert.deepEqual(Object.keys(m.workers[1]), ['paneID', 'label', 'task', 'resultPath', 'worktreePath', 'parent'], 'old shape kept')
 })
 
@@ -120,7 +121,7 @@ test('add-worker refuses bad retry fields and writes nothing', () => {
   run(d, 'init', 'ws', 'orch', 'coordinator')
   const before = fs.readFileSync(path.join(d, 'ws.json'), 'utf8')
   for (const bad of [['--task-path', 'rel/t.md'], ['--task-path', '/a/../t.md'], ['--dir', 'x'], ['--model', 'a b'], ['--mode', 'auto;id'],
-    ['--started-at', 'yesterday'], ['--model', 'x'.repeat(41)], ['--nope', 'x'], ['--model']]) {
+    ['--started-at', 'yesterday'], ['--model', 'x'.repeat(41)], ['--nope', 'x'], ['--model'], ['--effort', 'ultra'], ['--effort', 'High']]) {
     assert.notEqual(run(d, 'add-worker', 'ws', 'w1', 'one', 't', '-', '-', '-', ...bad).status, 0, bad.join(' '))
   }
   assert.equal(fs.readFileSync(path.join(d, 'ws.json'), 'utf8'), before)

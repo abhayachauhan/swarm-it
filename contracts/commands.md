@@ -41,7 +41,7 @@ Argument objects are plain JSON. `paneID` always means the Kelpi pane id (never 
 
 Labels must match `^[A-Za-z0-9._ -]{1,40}$`. `resultPath` and `worktreePath` must be absolute, with no `..` segment and no control character. An invalid manifest is rejected whole.
 
-Optional worker fields, written by `swarm-spawn` so `swarm-retry` can start a dead worker again; manifests without them still load: `taskPath` and `dir` (absolute, no `..`, at most 1000 characters, or null), `model` and `mode` (at most 40 characters, or null) and `startedAt` (ISO time, at most 40 characters, or null). The finish time is not stored: it is the result file's modification time.
+Optional worker fields, written by `swarm-spawn` so `swarm-retry` can start a dead worker again; manifests without them still load: `taskPath` and `dir` (absolute, no `..`, at most 1000 characters, or null), `model` and `mode` (at most 40 characters, or null), `effort` (`low`, `medium`, `high`, `xhigh`, `max`, or null for the CLI's default) and `startedAt` (ISO time, at most 40 characters, or null). The finish time is not stored: it is the result file's modification time.
 
 ## Pruning and archive
 

@@ -1,4 +1,4 @@
-// Manifest retry fields (taskPath, model, mode, dir, startedAt), auto-clean of a closed coordinator's workers,
+// Manifest retry fields (taskPath, model, mode, effort, dir, startedAt), auto-clean of a closed coordinator's workers,
 // and the result-path policy around the results/archive folder.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,12 +13,12 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const until = async cond => { for (let n = 0; n < 200 && !cond(); n += 1) await sleep(10); };
 const MIN = 60000;
 
-const RETRY = { taskPath: '/plans/t.md', model: 'sonnet', mode: 'auto', dir: '/repos/x', startedAt: '2026-10-17T01:02:03.000Z' };
+const RETRY = { taskPath: '/plans/t.md', model: 'sonnet', mode: 'auto', effort: 'high', dir: '/repos/x', startedAt: '2026-10-17T01:02:03.000Z' };
 const withFields = fields => ({ ...MANIFEST, workers: [{ ...MANIFEST.workers[0], ...fields }, MANIFEST.workers[1]] });
 
 test('validateManifest accepts the retry fields, null or absent, and an old manifest without them', () => {
     assert.deepEqual(validateManifest(withFields(RETRY)).errors, []);
-    assert.deepEqual(validateManifest(withFields({ taskPath: null, model: null, mode: null, dir: null, startedAt: null })).errors, []);
+    assert.deepEqual(validateManifest(withFields({ taskPath: null, model: null, mode: null, effort: null, dir: null, startedAt: null })).errors, []);
     assert.deepEqual(validateManifest(MANIFEST).errors, []);
 });
 
@@ -30,6 +30,8 @@ test('validateManifest caps and checks the retry fields', () => {
     assert.deepEqual(errors({ model: 'm'.repeat(41) }), ['manifest.workers[0].model: must be at most 40 characters']);
     assert.deepEqual(errors({ mode: 5 }), ['manifest.workers[0].mode: must be a string or null']);
     assert.deepEqual(errors({ startedAt: 'yesterday' }), ['manifest.workers[0].startedAt: must be an ISO time']);
+    assert.deepEqual(errors({ effort: 'ultra' }), ['manifest.workers[0].effort: must be one of low, medium, high, xhigh, max']);
+    assert.deepEqual(errors({ effort: 3 }), ['manifest.workers[0].effort: must be a string or null']);
     assert.deepEqual(errors({ finishedAt: '2026-10-17T01:02:03Z' }), ['manifest.workers[0]: unexpected property "finishedAt"']);
 });
 

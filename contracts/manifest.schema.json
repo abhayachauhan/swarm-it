@@ -34,6 +34,7 @@
           "taskPath": { "type": ["string", "null"], "maxLength": 1000 },
           "model": { "type": ["string", "null"], "maxLength": 40 },
           "mode": { "type": ["string", "null"], "maxLength": 40 },
+          "effort": { "enum": ["low", "medium", "high", "xhigh", "max", null] },
           "dir": { "type": ["string", "null"], "maxLength": 1000 },
           "startedAt": { "type": ["string", "null"], "maxLength": 40, "format": "date-time" }
         }

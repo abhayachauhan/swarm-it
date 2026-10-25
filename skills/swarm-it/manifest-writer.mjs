@@ -4,7 +4,7 @@
 //
 //   manifest-writer.mjs init <workspace-id> <orchestrator-pane-id> <orchestrator-label>
 //   manifest-writer.mjs add-worker <workspace-id> <pane-id> <label> <task> <result-path> [worktree-path] [parent-pane-id]
-//      optional flags: --agent claude|codex --task-path <abs> --model <m> --mode <x> --dir <abs> --started-at <iso>
+//      optional flags: --agent claude|codex --task-path <abs> --model <m> --mode <x> --effort <level> --dir <abs> --started-at <iso>
 //   manifest-writer.mjs remove-worker <workspace-id> <pane-id>
 //   kelpi pane list --json | manifest-writer.mjs prune [--keep <workspace-id>] [--older-than-minutes 10]
 //   manifest-writer.mjs set-orchestrator <workspace-id> <orchestrator-pane-id>
@@ -55,7 +55,9 @@ function checkPath(name, v) {
   return v
 }
 
-const FLAGS = { '--agent': 'agent', '--task-path': 'taskPath', '--model': 'model', '--mode': 'mode', '--dir': 'dir', '--started-at': 'startedAt' }
+const FLAGS = { '--agent': 'agent', '--task-path': 'taskPath', '--model': 'model', '--mode': 'mode', '--effort': 'effort', '--dir': 'dir', '--started-at': 'startedAt' }
+// The reasoning levels Claude and Codex both accept. Codex's ultra is left out: it starts its own agents.
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
 // Separates `--flag value` pairs from positional arguments.
 function splitFlags(args) {
@@ -83,6 +85,8 @@ function retryFields(flags) {
       checkPath(flag, v)
     } else if (key === 'agent') {
       if (!['claude', 'codex'].includes(v)) fail('--agent must be claude or codex')
+    } else if (key === 'effort') {
+      if (!EFFORTS.includes(v)) fail(`--effort must be one of ${EFFORTS.join(', ')}`)
     } else if (key === 'startedAt') {
       if (Number.isNaN(Date.parse(v))) fail('--started-at must be an ISO time')
     } else if (!/^[A-Za-z0-9.-]+$/.test(v)) fail(`${flag} must be a plain word`)
@@ -154,7 +158,7 @@ switch (cmd) {
   case 'add-worker': {
     const { positional, flags } = splitFlags(a)
     if (positional.length < 5 || positional.length > 7) {
-      fail('usage: add-worker <workspace-id> <pane-id> <label> <task> <result-path> [worktree-path] [parent-pane-id] [--task-path p] [--model m] [--mode x] [--dir d] [--started-at iso]')
+      fail('usage: add-worker <workspace-id> <pane-id> <label> <task> <result-path> [worktree-path] [parent-pane-id] [--task-path p] [--model m] [--mode x] [--effort level] [--dir d] [--started-at iso]')
     }
     const f = fileFor(positional[0])
     const m = load(f)

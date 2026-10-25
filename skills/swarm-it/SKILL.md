@@ -50,6 +50,22 @@ a convenience for unattended workers.
 The script itself defaults to Claude for compatibility, so a Codex coordinator must pass
 `--agent codex` when choosing Codex workers.
 
+Set each worker's reasoning effort with `--effort low|medium|high|xhigh|max`. Codex gets it as
+`model_reasoning_effort`, Claude as `--effort`. Use the user's level when they give one ("high
+effort", "go deep"), for every worker unless they say otherwise. Otherwise pick per worker:
+
+| Effort | Task |
+| --- | --- |
+| `low` | Mechanical and low risk: renames, formatting, a sweep, collecting facts |
+| `medium` | A well-specified change in one repo with clear acceptance criteria |
+| `high` | Several files or repos, an unclear spec, or a review |
+| `xhigh` | Hard or ambiguous work, or a retry after a worker failed at a lower level |
+| `max` | Only when the user asks for it |
+
+Raise one level when a mistake would be costly: auth, payments, data migrations, production
+infrastructure, security fixes. Never use Codex's `ultra`: it starts its own agents, so the cost of
+an unattended worker has no ceiling. `swarm-spawn` refuses it.
+
 Codex's tool sandbox can block Kelpi's local socket, even when Kelpi is running. If a spawn fails with
 `Operation not permitted` connecting to Kelpi, retry that same tool call through the normal approval
 mechanism (`sandbox_permissions: "require_escalated"`, with a justification for local Kelpi access).
@@ -75,7 +91,7 @@ the user before spawning more.
 2. Spawn each worker, one Bash call each:
 
    ```bash
-   <skill-dir>/swarm-spawn <label> <task-file> [--agent claude|codex] [--model <model>] [--path <repo-or-worktree>]
+   <skill-dir>/swarm-spawn <label> <task-file> [--agent claude|codex] [--model <model>] [--effort <level>] [--path <repo-or-worktree>]
    ```
 
    Use the directory containing this `SKILL.md` for `<skill-dir>` (normally
@@ -104,8 +120,8 @@ the user before spawning more.
 
 ## Retry and cleanup
 
-- A worker died or wrote no result: `<skill-dir>/swarm-retry <pane-id>:<label> [--model m]`. It reads the
-  worker's task file, mode, model and directory from the manifest, starts it again through `swarm-spawn`, and prints
+- A worker died or wrote no result: `<skill-dir>/swarm-retry <pane-id>:<label> [--model m] [--effort level]`. It reads the
+  worker's task file, mode, model, effort and directory from the manifest, starts it again through `swarm-spawn`, and prints
   the new `<pane-id>:<label>`. It refuses while the old pane still runs Claude, and for a worker started before the
   manifest recorded these (no task path).
 - `swarm-spawn` first runs `manifest-writer.mjs prune`: it drops workers whose pane is gone (once their result is
@@ -117,7 +133,7 @@ the user before spawning more.
 ## Rules
 
 - Labels, task paths and `--path` may use only letters, digits, `.`, `_`, `-` (and `/`, `~` in paths): every value is
-  typed into a shell, so swarm-spawn refuses anything else. `--mode` and `--model` must be plain words.
+  typed into a shell, so swarm-spawn refuses anything else. `--mode` and `--model` must be plain words, and `--effort` one of the five levels.
 - Address workers by pane id, never by label: workers live in another workspace.
 - Do NOT run `kelpi layout select`, `kelpi pane resize`, or pass `--focus`. The plugin places panes.
 - Results must stay under `~/.kelpi-swarm/results/`; the rail refuses any other path (BAD_RESULT_PATH).

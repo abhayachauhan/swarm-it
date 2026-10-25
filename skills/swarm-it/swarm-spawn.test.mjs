@@ -90,6 +90,34 @@ test('a Codex worker uses its sandbox and records its agent without a Claude mod
   assert.ok(!send.includes('claude -p') && !send.includes('--model sonnet'), send)
   const worker = JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8')).workers[0]
   assert.deepEqual([worker.agent, worker.model, worker.mode], ['codex', null, 'on-request'])
+  assert.equal(worker.effort, null)
+  assert.ok(!send.includes('model_reasoning_effort'), send)
+})
+
+test('--effort reaches Codex as model_reasoning_effort and Claude as --effort, and is recorded for swarm-retry', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const codex = spawn(s, ['impl', s.task, '--agent', 'codex', '--model', 'gpt-6.1-sol', '--effort', 'xhigh', '--path', s.home])
+  assert.equal(codex.status, 0, codex.stderr)
+  const codexSend = codex.calls.find(c => c.startsWith('pane send'))
+  assert.ok(codexSend.includes('--model gpt-6.1-sol -c model_reasoning_effort=xhigh "Do the task'), codexSend)
+  const worker = () => JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8')).workers[0]
+  assert.deepEqual([worker().label, worker().effort], ['impl', 'xhigh'])
+  // The stub hands out one pane id, so this worker replaces the first in the manifest.
+  const claude = spawn(s, ['fix', s.task, '--effort', 'low', '--path', s.home])
+  assert.equal(claude.status, 0, claude.stderr)
+  const claudeSend = claude.calls.filter(c => c.startsWith('pane send')).at(-1)
+  assert.ok(claudeSend.includes('claude -p --permission-mode auto --model sonnet --effort low "Do the task'), claudeSend)
+  assert.deepEqual([worker().label, worker().effort], ['fix', 'low'])
+})
+
+test('an unknown effort, Codex ultra included, is refused before anything runs', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  for (const effort of ['ultra', 'none', 'high;id', 'HIGH']) {
+    const { status, stderr, calls } = spawn(s, ['w1', s.task, '--agent', 'codex', '--effort', effort, '--path', s.home])
+    assert.notEqual(status, 0, effort)
+    assert.match(stderr, /effort must be low, medium, high, xhigh or max/)
+    assert.deepEqual(calls, [], `nothing ran for --effort ${effort}`)
+  }
 })
 
 test('failed, empty and invalid pane lists stop before changing manifests or archiving results', () => {

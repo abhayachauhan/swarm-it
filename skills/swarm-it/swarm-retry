@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# swarm-retry <pane-id>:<label> [--model sonnet]
-# Start a dead worker again through swarm-spawn, with the agent, label, task file, mode, model and
-# directory recorded in the manifest. Prints <pane-id>:<label> of the new pane, ready for swarm-wait.
+# swarm-retry <pane-id>:<label> [--model sonnet] [--effort high]
+# Start a dead worker again through swarm-spawn, with the agent, label, task file, mode, model, effort
+# and directory recorded in the manifest. Prints <pane-id>:<label> of the new pane, ready for swarm-wait.
 # The old result is archived by swarm-spawn. Refuses while the old pane still runs Claude.
 set -euo pipefail
 
-usage() { echo "usage: swarm-retry <pane-id>:<label> [--model sonnet]" >&2; exit 1; }
+usage() { echo "usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high]" >&2; exit 1; }
 bad() { echo "$1" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 worker=$1; shift
-newmodel=
+newmodel= neweffort=
 while [ $# -gt 0 ]; do
   case "$1" in
     --model) [ $# -ge 2 ] || usage; newmodel=$2; shift 2 ;;
+    --effort) [ $# -ge 2 ] || usage; neweffort=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -23,6 +24,7 @@ pane=${worker%%:*} label=${worker#*:}
 [[ $pane =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || bad "pane id must be letters, digits, dot, dash or underscore"
 [[ $label =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $label != *..* ]] || bad "label must be letters, digits, dot, dash or underscore"
 [[ -z $newmodel || $newmodel =~ ^[A-Za-z0-9.-]+$ ]] || bad "mode and model must be plain words"
+[[ -z $neweffort || $neweffort =~ ^(low|medium|high|xhigh|max)$ ]] || bad "effort must be low, medium, high, xhigh or max"
 
 MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
 SPAWN="$(dirname "$(realpath "$0")")/swarm-spawn"
@@ -38,7 +40,9 @@ task=$(jq -r '.taskPath // empty' <<<"$rec")
 [ -n "$task" ] || bad "worker $label has no recorded task path (started before swarm-retry existed); run swarm-spawn again by hand"
 agent=$(jq -r '.agent // "claude"' <<<"$rec")
 mode=$(jq -r '.mode // empty' <<<"$rec") model=$(jq -r '.model // empty' <<<"$rec") dir=$(jq -r '.dir // empty' <<<"$rec")
+effort=$(jq -r '.effort // empty' <<<"$rec")
 [ -z "$newmodel" ] || model=$newmodel
+[ -z "$neweffort" ] || effort=$neweffort
 [[ $agent = claude || $agent = codex ]] || bad "recorded agent must be claude or codex"
 
 # A worker whose Claude still runs would be started twice: Kelpi reports it as running, waiting, or holding a session.
@@ -48,11 +52,13 @@ fi
 
 [[ -z $mode || $mode =~ ^[A-Za-z-]+$ ]] || bad "recorded mode must be a plain word"
 [[ -z $model || $model =~ ^[A-Za-z0-9.-]+$ ]] || bad "recorded model must be a plain word"
+[[ -z $effort || $effort =~ ^(low|medium|high|xhigh|max)$ ]] || bad "recorded effort must be low, medium, high, xhigh or max"
 [[ $task =~ ^[A-Za-z0-9._/~-]+$ && ( -z $dir || $dir =~ ^[A-Za-z0-9._/~-]+$ ) ]] || bad "recorded task path and dir must be letters, digits, dot, dash, underscore or slash"
 
 args=("$label" "$task" --agent "$agent")
 [ -z "$mode" ] || args+=(--mode "$mode")
 [ -z "$model" ] || args+=(--model "$model")
+[ -z "$effort" ] || args+=(--effort "$effort")
 [ -z "$dir" ] || args+=(--path "$dir")
 new=$("$SPAWN" "${args[@]}")
 # The new pane has its own entry; drop the dead one so the label is listed once.

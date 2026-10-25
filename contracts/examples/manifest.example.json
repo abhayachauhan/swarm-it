@@ -12,6 +12,7 @@
       "taskPath": "/Users/you/repos/plans/repo-lag.md",
       "model": "sonnet",
       "mode": "auto",
+      "effort": "medium",
       "dir": "/Users/you/repos/example-wt-repo-lag",
       "startedAt": "2026-10-17T01:02:03Z"
     },
