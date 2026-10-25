@@ -49,7 +49,7 @@ try {
         process.stderr.write(`${result.error ?? 'handoff failed'}\n`);
         process.exit(1);
     }
-    process.stdout.write(`${result.toAgent} opened in pane ${result.paneID}; ${result.handoffPath ? `context saved at ${result.handoffPath}` : `source session ${result.sourceSessionID}`}${result.sourceCloseScheduled ? '; source pane will close' : ''}\n`);
+    process.stdout.write(`${result.toAgent} opened in pane ${result.paneID}; ${result.handoffPath ? `context saved at ${result.handoffPath}` : `source session ${result.sourceSessionID}`}${result.sourceClosed ? '; source pane closed' : result.sourceCloseScheduled ? '; source pane will close' : ''}\n`);
 } catch (error) {
     process.stderr.write(`handoff failed: ${error.message}\n`);
     process.exit(1);

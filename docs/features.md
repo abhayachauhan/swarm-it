@@ -29,7 +29,7 @@ Finished worker panes close after 10 minutes by default. The result stays on dis
 
 ## Hand the goal to the other CLI
 
-**Hand off to other CLI** in a pane's header or pane menu opens the other CLI in the same working directory with a plain request to read the source session ID and continue the conversation. It includes the exact transcript path when available, then closes the source after sending the target command. A missing session ID leaves the source open. This action does not require the Swarm-it skill or start a swarm.
+**Hand off to other CLI** in a pane's header or pane menu opens the other CLI in the same working directory with a plain request to read the source session ID and continue the conversation. It includes the exact transcript path when available, then closes the source after sending the target command. When Codex's hooks have not recorded the session, the button reads the exact session from the idle Codex pane before switching. Drafts, open questions and active replies leave Codex open. The destination uses its own pane ID, so later Kelpi commands do not target the closed source pane. If the session cannot be identified, the source stays open. This action does not require the Swarm-it skill or start a swarm.
 
 Conversational transfers use the source session ID when known. When no ID is available, the helper accepts a short **Goal / Key points / Next** context file under `~/.kelpi-swarm/handoffs/`. The receiving CLI reads the source conversation or context file and continues the work.
 

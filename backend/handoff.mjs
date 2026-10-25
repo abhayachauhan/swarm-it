@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, rm, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { codexInput, codexInputEmpty, readCodexSession } from './codex-session.mjs';
+import { parseCodexPrompt, PROMPT_CAPTURE_LINES } from './notify.mjs';
+import { capturePane } from './store.mjs';
 import { manifestDirectory } from './manifest.mjs';
 
 const fail = (error, code) => ({ ok: false, error, code });
@@ -72,16 +75,28 @@ export async function requestHandoff(api, store, args, context, options = {}) {
     try { source = (await api.panes.list()).find(p => p.id === paneID); }
     catch (error) { return fail(`could not list panes: ${message(error)}`, 'PANES_FAILED'); }
     if (!source || (source.type ?? 'shell') !== 'shell') return fail('source pane is not a terminal', 'NOT_SHELL');
-    const agent = source.agent ?? source.agentKind;
+    let verifiedSession = null;
+    let screen;
+    try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); }
+    catch (error) { return fail(`capture failed: ${message(error)}`, 'CAPTURE_FAILED'); }
+    if (codexInput(screen) !== null || parseCodexPrompt(screen)) {
+        if (source.status === 'running' || /Working[^\n]*esc to interrupt/i.test(screen.split('\n').slice(-20).join('\n'))) return fail('Codex is mid-reply; wait for it to finish', 'BUSY');
+        if (parseCodexPrompt(screen)) return fail('Codex is asking for input; answer it first', 'PROMPT_OPEN');
+        if (!codexInputEmpty(screen)) return fail("Codex's input box has text in it; clear it first", 'INPUT_NOT_EMPTY');
+        const status = await readCodexSession(api, paneID, screen, options);
+        if (!status.ok) return status;
+        verifiedSession = { paneID, agent: 'codex', sessionID: status.session };
+    }
+    const agent = verifiedSession?.agent ?? source.agent ?? source.agentKind;
     if (agent && !['claude', 'codex'].includes(agent)) return fail('source pane is not Claude or Codex', 'SOURCE_AGENT');
-    const sessionID = source.agentSessionID ?? store.sessions?.get(paneID);
+    const sessionID = verifiedSession?.sessionID ?? source.agentSessionID ?? store.sessions?.get(paneID);
     if (!SESSION_ID.test(sessionID ?? '')) return fail('Kelpi has no session ID for this pane; ask the agent to hand off from its conversation instead', 'NO_SESSION');
     const fromAgent = agent ?? (await findTranscript(sessionID, null, options))?.agent;
     if (!fromAgent) return fail('cannot identify whether the source session is Claude or Codex', 'SOURCE_AGENT');
     const toAgent = fromAgent === 'codex' ? 'claude' : 'codex';
     return handoff(api, store, {
         sourcePaneID: paneID, sourceSessionID: sessionID, fromAgent, toAgent, quitSource: true
-    }, options);
+    }, { ...options, verifiedSession });
 }
 
 /** Create the target in the same workspace. The caller may request closing the source after the target starts. */
@@ -93,12 +108,14 @@ export async function handoff(api, store, args, options = {}) {
     catch (error) { return fail(`could not list panes: ${message(error)}`, 'PANES_FAILED'); }
     if (!source) return fail('source pane no longer exists', 'NO_PANE');
     if ((source.type ?? 'shell') !== 'shell') return fail('source pane is not a terminal', 'NOT_SHELL');
-    if (source.agent && source.agent !== args.fromAgent) return fail('source pane runs a different agent', 'SOURCE_AGENT');
-    if (source.agentKind && source.agentKind !== args.fromAgent) return fail('source pane runs a different agent', 'SOURCE_AGENT');
+    const verified = options.verifiedSession;
+    const verifiedCodex = args.fromAgent === 'codex' && verified?.agent === 'codex' && verified.paneID === source.id && verified.sessionID === args.sourceSessionID;
+    if (!verifiedCodex && source.agent && source.agent !== args.fromAgent) return fail('source pane runs a different agent', 'SOURCE_AGENT');
+    if (!verifiedCodex && source.agentKind && source.agentKind !== args.fromAgent) return fail('source pane runs a different agent', 'SOURCE_AGENT');
     if (typeof source.workingDirectory !== 'string' || !source.workingDirectory.startsWith('/')) {
         return fail('source pane has no known working directory', 'NO_DIRECTORY');
     }
-    const knownSession = source.agentSessionID ?? store.sessions?.get(args.sourcePaneID) ?? null;
+    const knownSession = (verifiedCodex ? verified.sessionID : null) ?? source.agentSessionID ?? store.sessions?.get(args.sourcePaneID) ?? null;
     if (knownSession && args.sourceSessionID && knownSession !== args.sourceSessionID) {
         return fail('source session ID does not match the pane', 'SESSION_MISMATCH');
     }
@@ -128,13 +145,15 @@ export async function handoff(api, store, args, options = {}) {
     const prompt = sourceSessionID
         ? `Read the ${args.fromAgent === 'codex' ? 'Codex' : 'Claude'} session ${sourceSessionID}${transcript ? ` from ${transcript.path}` : ''} and continue the conversation from where it left off.`
         : `Read the conversation context at ${path} and continue where it left off.`;
-    const command = `cd ${shellQuote(source.workingDirectory)} && ${args.toAgent} ${shellQuote(prompt)}`;
+    const config = args.toAgent === 'codex' ? ` -c ${shellQuote(`shell_environment_policy.set.KELPI_PANE_ID=${JSON.stringify(paneID)}`)}` : '';
+    const command = `cd ${shellQuote(source.workingDirectory)} && export KELPI_PANE_ID=${shellQuote(paneID)} && ${args.toAgent}${config} ${shellQuote(prompt)}`;
     try { await api.terminal.send(paneID, command); }
     catch (error) { return { ...fail(`target pane opened but the agent did not start: ${message(error)}`, 'SEND_FAILED'), paneID, handoffPath: path }; }
     if (args.quitSource === true) {
-        // Let the source's plugin-run call return before its pane is closed. A failed target send never closes it.
-        const schedule = options.scheduleClose ?? (fn => setTimeout(fn, 3000));
-        schedule(() => { void api.panes.close(source.id).catch(() => {}); });
+        // Kelpi refuses pane operations after the command returns, so finish closing within this invocation.
+        await (options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))))(3000);
+        try { await api.panes.close(source.id); }
+        catch (error) { return { ...fail(`${args.toAgent} opened, but the source pane could not close: ${message(error)}`, 'CLOSE_FAILED'), paneID, sourceSessionID, handoffPath: path }; }
     }
-    return { ok: true, paneID, fromAgent: args.fromAgent, toAgent: args.toAgent, sourceSessionID, sourceCloseScheduled: args.quitSource === true, handoffPath: path };
+    return { ok: true, paneID, fromAgent: args.fromAgent, toAgent: args.toAgent, sourceSessionID, sourceClosed: args.quitSource === true, sourceCloseScheduled: false, handoffPath: path };
 }
