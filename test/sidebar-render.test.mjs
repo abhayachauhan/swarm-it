@@ -645,13 +645,13 @@ test('Codex questions show options and a draft in Swarm, with an optional pane s
 });
 
 
-test('folder trust is explained plainly with Go to pane and no automatic or clarification answer buttons', () => {
+test('folder trust offers explicit consent and pane navigation without generic approval buttons', () => {
     const calls = [];
     const item = { id: 'trust', paneID: 'worker', type: 'Request', agent: 'codex', approvable: false, text: 'Worker: Codex needs folder trust before this worker can start', promptBlock: 'Trust this folder?\n› 1. Trust and continue\n2. Quit' };
     const card = L.buildAttentionItem(fakeDoc, item, { onAnswer: r => calls.push(r.paneID) });
     assert.ok(find(card, n => n.text === 'Folder trust required').length);
     assert.equal(find(card, n => n.tag === 'code').length, 0);
     const buttons = find(card, n => n.tag === 'button');
-    assert.deepEqual(buttons.map(n => n.text), ['Go to pane']);
-    buttons[0].click(); assert.deepEqual(calls, ['worker']);
+    assert.deepEqual(buttons.map(n => n.text), ['Trust folder and continue', 'Go to pane']);
+    buttons[1].click(); assert.deepEqual(calls, ['worker']);
 });

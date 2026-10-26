@@ -594,7 +594,11 @@
                 root.append(more);
             }
         }
-        if (unrecognised) root.append(h(doc, 'div', 'att-text dim', inputQuestion ? 'Answer here or open the pane' : 'Answer in the pane'));
+        if (folderTrust) {
+            root.append(h(doc, 'div', 'att-text', 'Saves lasting repository trust. Project settings can run code.'));
+            root.append(h(doc, 'div', 'att-text', item.promptBlock));
+        }
+        if (unrecognised) root.append(h(doc, 'div', 'att-text dim', folderTrust ? 'Approve folder trust here or open the pane' : inputQuestion ? 'Answer here or open the pane' : 'Answer in the pane'));
         if (opts.armed) {
             const armed = h(doc, 'div', 'att-text att-armed', opts.armed === 'approve' ? 'Press Y again to approve' : 'Press N again to deny');
             armed.setAttribute('role', 'status');
@@ -602,6 +606,11 @@
         }
         const actions = h(doc, 'div', 'att-actions');
         if (unrecognised) {
+            if (folderTrust) {
+                const trust = button(doc, 'Trust folder and continue', 'btn btn-primary', () => handlers.onTrustFolder(item));
+                if (opts.locked) trust.disabled = true;
+                actions.append(trust);
+            }
             if (inputQuestion) actions.append(button(doc, 'Answer here', 'btn btn-primary', () => handlers.onLoadQuestions(), 'Read and answer Codex questions in Swarm'));
             actions.append(button(doc, 'Go to pane', 'btn btn-primary', () => handlers.onAnswer(item), 'Show the pane so you can answer the prompt there'));
         } else {

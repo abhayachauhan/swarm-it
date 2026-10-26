@@ -1,10 +1,10 @@
 // User actions. Nothing here merges, pushes or deletes a worktree. The only pane it closes is a manifest worker, in closeWorker.
 // Every pane is addressed by pane id (labels do not resolve across workspaces).
 import { handleItem } from './attention.mjs';
-import { parsePrompt, promptHash, PROMPT_CAPTURE_LINES } from './notify.mjs';
+import { parsePrompt, parseCodexPrompt, promptHash, PROMPT_CAPTURE_LINES } from './notify.mjs';
 import { isSafeLabel } from './manifest.mjs';
-import { persist, deriveState, actionableWorker, actionableOrchestrator, otherSwarmPane, anyClaudePane, resultContext, readResultText, capturePane, rememberSession, SESSION_ID, textHash } from './store.mjs';
-import { checkResultPath } from './safepath.mjs';
+import { persist, deriveState, actionableWorker, actionableOrchestrator, otherSwarmPane, anyClaudePane, resultContext, readResultText, capturePane, CAPTURE_TIMEOUT_MS, ownedRequestPane, rememberSession, SESSION_ID, textHash } from './store.mjs';
+import { checkResultPath, withTimeout } from './safepath.mjs';
 import { execFile } from 'node:child_process';
 
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
@@ -413,4 +413,26 @@ export async function pinOrchestrator(api, store, paneID) {
     store.pinnedOrchestratorPaneID = paneID;
     await persist(store);
     return { ok: true };
+}
+
+
+/** Explicit user consent only; Auto never calls this action. */
+export async function trustFolder(api, store, args) {
+    if (args?.confirm !== true) return fail('Confirm lasting repository trust before continuing.', 'CONFIRM_REQUIRED');
+    const item = store.attention.find(i => i.id === args.itemID);
+    if (!item || item.handledAt || item.agent !== 'codex' || !parseCodexPrompt(item.promptBlock)?.folderTrust
+        || !ownedRequestPane(store, item.paneID)) return fail('This folder trust request is no longer waiting.', 'STALE');
+    let read;
+    try { read = await withTimeout(api.terminal.read(item.paneID), CAPTURE_TIMEOUT_MS, 'checking folder trust'); }
+    catch (error) { return fail(`Cannot verify folder trust: ${message(error)}`, 'STALE'); }
+    const prompt = parseCodexPrompt(read.text);
+    if (!read.altScreen || !Number.isSafeInteger(read.revision) || read.revision < 0 || !prompt?.folderTrust
+        || !args.promptHash || promptHash(prompt.block) !== args.promptHash || item.promptHash !== args.promptHash
+        || !/^[❯›>]\s*1[.)]\s*Trust and continue$/mi.test(prompt.block)) {
+        return fail('The folder trust prompt changed; review the current card or open the pane.', 'STALE');
+    }
+    try { await api.terminal.sendKey(item.paneID, 'enter', { ifRevision: read.revision }); }
+    catch (error) { return fail(`Folder trust was not sent: ${message(error)}`, 'SEND_FAILED'); }
+    await handleItem(store.att, item.id);
+    return { ok: true, itemID: item.id, paneID: item.paneID };
 }

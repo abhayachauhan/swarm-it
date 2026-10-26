@@ -121,7 +121,7 @@ export function makeFakeApi(opts = {}) {
         },
         terminal: {
             async send(pane, text) { record('terminal.send', pane, text); return {}; },
-            async sendKey(pane, key) { record('terminal.sendKey', pane, key); return {}; },
+            async sendKey(pane, key, options) { record('terminal.sendKey', pane, key, ...(options ? [options] : [])); return {}; },
             async capture(pane, o) {
                 record('terminal.capture', pane, o);
                 const value = captures[typeof pane === 'string' ? pane : pane.paneID];

@@ -29,6 +29,7 @@
       { "id": "local.swarm-view.open-thread", "title": "Swarm: open worker thread" },
       { "id": "local.swarm-view.read-result", "title": "Swarm: read worker result file" },
       { "id": "local.swarm-view.capture-worker", "title": "Swarm: capture worker output" },
+      { "id": "local.swarm-view.trust-folder", "title": "Swarm: trust folder and continue Codex" },
       { "id": "local.swarm-view.approve", "title": "Swarm: approve permission request" },
       { "id": "local.swarm-view.deny", "title": "Swarm: deny permission request" },
       { "id": "local.swarm-view.snooze", "title": "Swarm: snooze attention item" },

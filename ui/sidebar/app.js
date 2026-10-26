@@ -147,6 +147,7 @@
     }
 
     const handlers = {
+        onTrustFolder: item => { void run('Trust folder', { command: `${L.CMD}trust-folder`, args: { itemID: item.id, promptHash: item.promptHash, confirm: true } }); },
         onLoadQuestions: () => { void run('Codex questions', { command: `${L.CMD}load-codex-questions`, args: {} }); },
         onQuestionDraft: (key, value) => { questionDrafts[key] = value; },
         onQuestionAnswer: request => {

@@ -216,3 +216,14 @@ test('central Codex answer keeps a typed draft across snapshots and sends the ma
     await app.pointerClick(app.button(app.refs.list, 'Go to pane'));
     assert.equal(app.reveals.at(-1), 'p-wait');
 });
+
+
+test('Trust folder and continue sends an explicit consent command after the card lock lifts', async () => {
+    const snap = fixture();
+    Object.assign(snap.attention[0], { agent: 'codex', approvable: false, promptBlock: 'Trust this folder?\n› 1. Trust and continue\n2. Quit' });
+    const app = await bootApp({ snapshot: snap });
+    assert.equal(app.button(app.card(0), 'Trust folder and continue').disabled, true);
+    await app.advance(600);
+    await app.pointerClick(app.button(app.card(0), 'Trust folder and continue'));
+    assert.deepEqual(sent(app, 'trust-folder').map(c => c.args), [{ itemID: snap.attention[0].id, promptHash: snap.attention[0].promptHash, confirm: true }]);
+});
