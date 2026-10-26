@@ -80,7 +80,7 @@ export async function requestHandoff(api, store, args, context, options = {}) {
     try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); }
     catch (error) { return fail(`capture failed: ${message(error)}`, 'CAPTURE_FAILED'); }
     if (codexInput(screen) !== null || parseCodexPrompt(screen)) {
-        if (source.status === 'running' || /Working[^\n]*esc to interrupt/i.test(screen.split('\n').slice(-20).join('\n'))) return fail('Codex is mid-reply; wait for it to finish', 'BUSY');
+        if (/Working[^\n]*esc to interrupt/i.test(screen.split('\n').filter(line => line.trim()).slice(-10).join('\n'))) return fail('Codex is mid-reply; wait for it to finish', 'BUSY');
         if (parseCodexPrompt(screen)) return fail('Codex is asking for input; answer it first', 'PROMPT_OPEN');
         if (!codexInputEmpty(screen)) return fail("Codex's input box has text in it; clear it first", 'INPUT_NOT_EMPTY');
         const status = await readCodexSession(api, paneID, screen, options);

@@ -264,3 +264,23 @@ test('a refused source close reports the open destination instead of silently cl
     assert.equal(api.callsTo('terminal.send').length, 1);
     assert.deepEqual(api.callsTo('panes.close').map(c => c.args), [['source-1']]);
 });
+
+test('an idle Codex handoff ignores stale Claude running metadata', async () => {
+    const api = missingCodexMetadata({ stale: true });
+    api.paneList[0].status = 'running';
+    const result = await requestHandoff(api, { sessions: new Map() }, {}, { paneID: 'source-1' }, { sleep: async () => {} });
+    assert.equal(result.ok, true);
+    assert.equal(result.fromAgent, 'codex'); assert.equal(result.sourceSessionID, nativeSession);
+    assert.equal(result.sourceClosed, true);
+    assert.equal(api.callsTo('terminal.send')[0].args[1], '/status');
+    assert.deepEqual(api.callsTo('panes.close').map(c => c.args), [['source-1']]);
+});
+
+test('a live working Codex is never handed off even when pane metadata says idle', async () => {
+    const api = missingCodexMetadata();
+    api.captureStore['source-1'] = `• Working (2m • esc to interrupt)\n${codexComposer}`;
+    const result = await requestHandoff(api, { sessions: new Map() }, {}, { paneID: 'source-1' }, { sleep: async () => {} });
+    assert.deepEqual(result, { ok: false, error: 'Codex is mid-reply; wait for it to finish', code: 'BUSY' });
+    assert.deepEqual(api.callsTo('terminal.send'), []);
+    assert.deepEqual(api.callsTo('panes.split'), []); assert.deepEqual(api.callsTo('panes.close'), []);
+});
