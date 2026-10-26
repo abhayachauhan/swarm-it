@@ -144,3 +144,23 @@ test('an idle offscreen Codex worker without hooks exposes folder trust while Au
         assert.equal(lastSnapshot(api).attention.filter(i => i.paneID === 'w1').length, 0);
     } finally { dispose(); }
 });
+
+test('a live Working footer clears a stale Codex waiting fallback but keeps genuine question cards', async () => {
+    const manifest = { ...MANIFEST, workers: MANIFEST.workers.map(w => w.paneID === 'w1' ? { ...w, agent: 'codex' } : w) };
+    const api = makeSwarmApi({ files: { '/m/ws1.json': JSON.stringify(manifest) }, captures: { w1: 'unknown input prompt' } });
+    const dispose = registerAll(api);
+    try {
+        await dispose.ready;
+        await api.upsert('w1', { agent: 'codex', status: 'waitingForInput' });
+        await sleep(100);
+        assert.equal(lastSnapshot(api).waitingPanes.some(p => p.paneID === 'w1'), true);
+        api.captureStore.w1 = '• Working (1m 55s • esc to interrupt)\n› Ask Codex to do anything\nGPT-6.1-Sol high · ~/repos\n? for shortcuts';
+        await sleep(100);
+        assert.deepEqual(lastSnapshot(api).waitingPanes, []);
+        assert.deepEqual(api.callsTo('terminal.sendKey'), []);
+        api.captureStore.w1 = '• Working (2m • esc to interrupt)\nQueued follow-up inputs\n? 1 question\n⇧← to answer\n› Ask Codex to do anything';
+        await sleep(100);
+        assert.equal(lastSnapshot(api).attention.filter(p => p.paneID === 'w1').length, 1);
+        assert.deepEqual(api.callsTo('terminal.sendKey'), []);
+    } finally { dispose(); }
+});

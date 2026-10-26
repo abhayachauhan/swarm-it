@@ -593,7 +593,9 @@ export function registerAll(api, deps = modules) {
             }
             const open = st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt && i.promptHash === hash);
             if (prompt && !open) { await N.onNotification(api, st, att, { data: { paneID, kind: 'prompt-scan' } }, { screen }); changed = true; }
-            if (worker && await noteUnparsed(worker, !prompt)) changed = true;
+            const working = codex && screen.split('\n').filter(line => line.trim()).slice(-10)
+                .some(line => /^\s*[•·]?\s*Working\s*\([^\n]*esc to interrupt\)/i.test(line));
+            if (worker && await noteUnparsed(worker, !prompt && !working)) changed = true;
         };
         /**
          * A worker waiting for input whose prompt does not parse (a pane a few columns wide wraps it one word per line)
