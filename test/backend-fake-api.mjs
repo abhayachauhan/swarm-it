@@ -275,3 +275,9 @@ export function makeSwarmApi(extra = {}) {
         permissions: extra.permissions
     });
 }
+
+export const CODEX_FOLDER_TRUST = [
+    'Folder access', '/repos/worktree', '', 'Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.',
+    'Folder settings can run code automatically, even without a model request.', '',
+    '› 1. Trust and continue', '  2. Quit', '', 'enter continue · esc quit', ...Array(75).fill('')
+].join('\n');

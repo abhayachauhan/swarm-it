@@ -568,9 +568,10 @@
         root.append(pane);
         const unrecognised = item.approvable === false;
         const inputQuestion = item.agent === 'codex' && /^Queued follow-up inputs\b/m.test(item.promptBlock ?? '');
+        const folderTrust = item.agent === 'codex' && /Trust this folder\?/i.test(item.promptBlock ?? '');
         const shown = cardCommand(item);
-        if (inputQuestion) {
-            root.append(h(doc, 'div', 'att-text', 'Question waiting in Codex'));
+        if (inputQuestion || folderTrust) {
+            root.append(h(doc, 'div', 'att-text', folderTrust ? 'Folder trust required' : 'Question waiting in Codex'));
             const prefix = `${item.paneID}: `;
             const text = String(item.text ?? '');
             root.append(h(doc, 'div', 'att-text', text.startsWith(prefix) ? text.slice(prefix.length) : text));

@@ -137,6 +137,14 @@ export function parseCodexPrompt(captureText) {
                 };
             }
         }
+        if (/^Trust this folder\?(?:\s|$)/i.test(lines[q])) {
+            const trust = lines.findIndex((line, index) => index > q && index <= q + 12 && /^[❯›>]?\s*1[.)]\s*Trust and continue$/i.test(line));
+            if (trust >= 0 && lines.slice(trust + 1, trust + 4).some(line => /^[❯›>]?\s*2[.)]\s*Quit$/i.test(line))) {
+                return { question: 'Codex needs folder trust before this worker can start',
+                    block: lines.slice(Math.max(start, q - 8), trust + 4).filter(Boolean).join('\n'),
+                    command: '', approvable: false, folderTrust: true };
+            }
+        }
         if (!CODEX_QUESTION.test(lines[q])) continue;
         const optionAt = lines.findIndex((line, index) => index > q && index <= q + 20 && CODEX_YES.test(line));
         if (optionAt < 0) continue;
@@ -217,7 +225,7 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
         const block = prompt?.block ?? 'Codex approval requested';
         const { item } = await addItem(att, {
             type: 'Request', paneID, agent: 'codex', promptHash: promptHash(block), promptBlock: prompt?.block,
-            approvable: false, text: prompt?.inputQuestion
+            approvable: false, text: prompt?.inputQuestion || prompt?.folderTrust
                 ? `${label}: ${prompt.question}`
                 : `${label} needs approval in Codex; open its pane to respond`,
             ...(other ? { swarmName: other.swarm.name, swarmWorkspaceID: other.swarm.workspaceID } : {})

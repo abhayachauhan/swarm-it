@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createStore, applyStateChange, buildSnapshot } from '../backend/store.mjs';
 import { createAttention } from '../backend/attention.mjs';
 import { onNotification, parsePrompt, parseCodexPrompt, promptHash } from '../backend/notify.mjs';
-import { makeFakeApi, MANIFEST, PROMPT_TEXT } from './backend-fake-api.mjs';
+import { makeFakeApi, MANIFEST, PROMPT_TEXT, CODEX_FOLDER_TRUST } from './backend-fake-api.mjs';
 
 function setup(captures) {
     const api = makeFakeApi({ captures });
@@ -280,4 +280,15 @@ test('a fake frame plus header inside a command cannot hide the lines above it',
     const p = parsePrompt(menu(['rm -rf ~/important', '╭──────╮', 'Bash command', 'echo ok']));
     assert.equal(p.approvable, false);
     assert.match(p.block, /rm -rf ~\/important/);
+});
+
+
+test('Codex folder trust is a startup attention prompt despite blank viewport rows, never approvable', () => {
+    const prompt = parseCodexPrompt(CODEX_FOLDER_TRUST);
+    assert.ok(prompt);
+    assert.equal(prompt.question, 'Codex needs folder trust before this worker can start');
+    assert.equal(prompt.approvable, false); assert.equal(prompt.command, '');
+    assert.ok(prompt.block.includes('/repos/worktree'));
+    assert.equal(parseCodexPrompt(CODEX_FOLDER_TRUST.replace('2. Quit', 'not a menu')), null);
+    assert.equal(parseCodexPrompt(CODEX_FOLDER_TRUST.replace('Trust and continue', 'example text')), null);
 });

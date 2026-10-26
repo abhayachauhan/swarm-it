@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeFakeApi, makeSwarmApi, PROMPT_TEXT } from './backend-fake-api.mjs';
+import { makeFakeApi, makeSwarmApi, PROMPT_TEXT, MANIFEST, CODEX_FOLDER_TRUST } from './backend-fake-api.mjs';
 
 // Set before the backend loads: it reads the scan interval once.
 process.env.SWARM_PROMPT_SCAN_MS = '20';
@@ -121,4 +121,26 @@ test('an orchestrator card clears once its prompt is gone, and no card is raised
     await sleep(80);
     assert.equal(lastSnapshot(api).attention.some(i => i.paneID === 'orch'), false);
     dispose();
+});
+
+
+test('an idle offscreen Codex worker without hooks exposes folder trust while Auto never answers it', async () => {
+    const manifest = { ...MANIFEST, workers: MANIFEST.workers.map(w => w.paneID === 'w1' ? { ...w, agent: 'codex' } : w) };
+    const api = makeSwarmApi({ files: { '/m/ws1.json': JSON.stringify(manifest) }, captures: { w1: CODEX_FOLDER_TRUST } });
+    const dispose = registerAll(api);
+    try {
+        await dispose.ready;
+        await api.upsert('w1', { status: 'idle', agent: null, agentSessionID: null, isFocused: false, isActiveWorkspace: false });
+        await api.command('auto-approve', { on: true, hours: 1 });
+        await sleep(100);
+        const cards = lastSnapshot(api).attention.filter(i => i.paneID === 'w1');
+        assert.equal(cards.length, 1);
+        assert.equal(cards[0].approvable, false);
+        assert.ok(cards[0].text.includes('folder trust'));
+        assert.deepEqual(api.callsTo('terminal.sendKey'), []);
+        assert.deepEqual(api.callsTo('terminal.send'), []);
+        api.captureStore.w1 = 'Codex is working';
+        await sleep(100);
+        assert.equal(lastSnapshot(api).attention.filter(i => i.paneID === 'w1').length, 0);
+    } finally { dispose(); }
 });
