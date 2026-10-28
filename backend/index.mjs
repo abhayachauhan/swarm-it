@@ -829,7 +829,14 @@ export function registerAll(api, deps = modules) {
     command('capture-worker', async args => needPane(args) ?? X.captureWorker(api, st, args.paneID, args.lines));
     command('send-to-worker', async args => needPane(args) ?? X.sendToWorker(api, st, args.paneID, args.text));
     command('handoff', async args => H.handoff(api, st, args));
-    command('request-handoff', async (args, context) => H.requestHandoff(api, st, args, context));
+    // Header/menu/keyboard commands must reject on refusal: Kelpi ignores an ok:false reply.
+    disposers.push(api.commands.register(`${PLUGIN_ID}.request-handoff`, async (args, context) => {
+        await ready;
+        const result = await serial(() => H.requestHandoff(api, st,
+            args && typeof args === 'object' ? args : {}, context && typeof context === 'object' ? context : {}));
+        if (!result.ok) throw Object.assign(new Error(result.error), { code: result.code });
+        return result;
+    }));
     command('open-result', async args => opensResult(args, () => X.openResult(api, st, args.paneID)));
     command('open-web-link', async args => needPane(args) ?? X.openWebLink(api, st, args.paneID, args.url));
     command('dismiss-worker', async args => needPane(args) ?? after(await X.dismissWorker(api, st, args.paneID)));

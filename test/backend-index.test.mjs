@@ -461,3 +461,33 @@ test('central Codex commands expose exact session-to-pane mappings and forward a
     } finally { dispose(); }
     assert.equal(disposed, true);
 });
+
+
+test('handoff shortcut exposes refusals to Kelpi and preserves both panes', async () => {
+    const api = makeSwarmApi();
+    const dispose = registerAll(api);
+    try {
+        await dispose.ready;
+        const panes = await api.panes.list();
+        await assert.rejects(api.command('request-handoff', {}, { paneID: 'missing-pane' }),
+            { message: 'source pane is not a terminal', code: 'NOT_SHELL' });
+        assert.deepEqual(await api.panes.list(), panes);
+        assert.equal(api.callsTo('panes.split').length, 0);
+        assert.equal(api.callsTo('panes.close').length, 0);
+        assert.equal(api.callsTo('terminal.send').length, 0);
+    } finally { dispose(); }
+});
+
+test('handoff shortcut forwards the invocation pane and successful result', async () => {
+    const api = makeSwarmApi();
+    const result = { ok: true, paneID: 'destination', fromAgent: 'codex', toAgent: 'claude', sourceClosed: true };
+    let received;
+    const dispose = registerAll(api, { ...modules, handoff: { ...modules.handoff,
+        async requestHandoff(_api, _store, args, context) { received = { args, context }; return result; }
+    } });
+    try {
+        await dispose.ready;
+        assert.deepEqual(await api.command('request-handoff', {}, { paneID: 'w1' }), result);
+        assert.deepEqual(received, { args: {}, context: { paneID: 'w1' } });
+    } finally { dispose(); }
+});
