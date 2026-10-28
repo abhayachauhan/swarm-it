@@ -149,6 +149,17 @@
     const handlers = {
         onTrustFolder: item => { void run('Trust folder', { command: `${L.CMD}trust-folder`, args: { itemID: item.id, promptHash: item.promptHash, confirm: true } }); },
         onLoadQuestions: () => { void run('Codex questions', { command: `${L.CMD}load-codex-questions`, args: {} }); },
+        onQuestionWorkspace: async request => {
+            if (request.paneID) { reveal(request.paneID, 'Go to workspace'); return; }
+            if (busy || disposed) return;
+            busy = true;
+            try {
+                const result = await api.commands.execute(`${L.CMD}locate-codex-pane`, { threadID: request.threadID, ...(request.name ? { name: request.name } : {}) });
+                if (result?.ok && result.paneID) reveal(result.paneID, 'Go to workspace');
+                else setNotice(L.describeResult('Go to workspace', result).message);
+            } catch (cause) { setNotice(`Go to workspace: ${cause instanceof Error ? cause.message : String(cause)}`); }
+            finally { busy = false; }
+        },
         onQuestionDraft: (key, value) => { questionDrafts[key] = value; },
         onQuestionAnswer: request => {
             const answers = Object.fromEntries(request.questions.map(q => [q.id, { answers: [questionDrafts[`${request.threadID}:${request.requestID}:${q.id}`] || ''] }]));

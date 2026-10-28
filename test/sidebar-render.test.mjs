@@ -632,13 +632,13 @@ test('Codex questions show options and a draft in Swarm, with an optional pane s
     ] };
     const nodes = L.buildCodexQuestions(fakeDoc, { codexQuestions: [request] }, { 'thread-a:17:choice': 'My draft' }, {
         onLoadQuestions() {}, onQuestionDraft: (...args) => calls.push(args),
-        onQuestionAnswer: r => calls.push(['send', r]), onReveal: (...args) => calls.push(args)
+        onQuestionAnswer: r => calls.push(['send', r]), onQuestionWorkspace: r => calls.push([r.paneID]), onReveal: (...args) => calls.push(args)
     });
     const root = new FakeNode('div'); root.append(...nodes);
     const inputs = find(root, n => n.tag === 'input');
     assert.equal(inputs[0].value, 'My draft'); assert.equal(inputs[1].type, 'password');
     const buttons = find(root, n => n.tag === 'button');
-    assert.deepEqual(buttons.map(n => n.text), ['Refresh', 'Staging', 'Send answer', 'Go to pane']);
+    assert.deepEqual(buttons.map(n => n.text), ['Refresh', 'Staging', 'Send answer', 'Go to workspace']);
     buttons[1].click(); assert.deepEqual(calls[0], ['thread-a:17:choice', 'Staging']);
     buttons[2].click(); assert.equal(calls[1][0], 'send');
     buttons[3].click(); assert.equal(calls[2][0], 'pane-a');

@@ -213,7 +213,7 @@ test('central Codex answer keeps a typed draft across snapshots and sends the ma
     assert.equal(input.value, 'Staging, then ask me');
     await app.pointerClick(app.button(app.refs.list, 'Send answer'));
     assert.deepEqual(sent(app, 'answer-codex-question').at(-1).args, { requestID: 17, threadID: 'thread-a', answers: { q: { answers: ['Staging, then ask me'] } } });
-    await app.pointerClick(app.button(app.refs.list, 'Go to pane'));
+    await app.pointerClick(app.button(app.refs.list, 'Go to workspace'));
     assert.equal(app.reveals.at(-1), 'p-wait');
 });
 
@@ -226,4 +226,19 @@ test('Trust folder and continue sends an explicit consent command after the card
     await app.advance(600);
     await app.pointerClick(app.button(app.card(0), 'Trust folder and continue'));
     assert.deepEqual(sent(app, 'trust-folder').map(c => c.args), [{ itemID: snap.attention[0].id, promptHash: snap.attention[0].promptHash, confirm: true }]);
+});
+
+
+test('Codex question workspace button resolves a missing pane link before revealing', async () => {
+    for (const ok of [true, false]) {
+        const snap = fixture();
+        snap.codexQuestions = [{ requestID: 17, threadID: 'thread-a', questions: [{ id: 'q', question: 'Choose?' }] }];
+        const app = await bootApp({ snapshot: snap, execute: command => command.endsWith('locate-codex-pane')
+            ? (ok ? { ok: true, paneID: 'verified-pane' } : { ok: false, error: 'No verified pane', code: 'NO_PANE' }) : null });
+        await app.pointerClick(app.button(app.refs.list, 'Go to workspace'));
+        assert.deepEqual(sent(app, 'locate-codex-pane').at(-1).args, { threadID: 'thread-a' });
+        assert.deepEqual(app.reveals, ok ? ['verified-pane'] : []);
+        if (!ok) assert.equal(app.footerText(), 'Go to workspace: No verified pane');
+        assert.equal(sent(app, 'answer-codex-question').length, 0);
+    }
 });

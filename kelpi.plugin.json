@@ -23,6 +23,7 @@
     ],
     "commands": [
       { "id": "local.swarm-view.focus-rail", "title": "Swarm: focus thread rail", "shortcut": "ctrl+alt+j" },
+      { "id": "local.swarm-view.locate-codex-pane", "title": "Swarm: find Codex session workspace" },
       { "id": "local.swarm-view.load-codex-questions", "title": "Swarm: load Codex questions" },
       { "id": "local.swarm-view.answer-codex-question", "title": "Swarm: answer Codex question" },
       { "id": "local.swarm-view.get-state", "title": "Swarm: get state snapshot" },

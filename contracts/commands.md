@@ -246,3 +246,7 @@ hooks, and if no hook returns a decision, it denies the tool call." Kelpi `docs/
 
 
 `local.swarm-view.trust-folder { itemID, promptHash, confirm: true }` accepts only a live Codex folder-trust card with the same prompt hash and **Trust and continue** selected. Requires an alternate-screen capture with a revision, and sends Enter with `ifRevision` so changed screens receive nothing. Success handles that one attention item. This explicit consent saves Codex's lasting repository trust; Auto never calls this command.
+
+## Codex question navigation
+
+`local.swarm-view.locate-codex-pane { threadID, name? }` returns `{ ok, paneID }` for the exact open session. The question card always offers **Go to workspace**. Existing session links navigate immediately. Missing links use a unique matching Codex title and footer. Duplicate names are disambiguated with `/status` in idle panes before navigation. Drafts and working turns are left alone. An unavailable session shows an error and opens no workspace.

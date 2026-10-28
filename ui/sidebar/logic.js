@@ -864,7 +864,7 @@
             }
             const actions = h(doc, 'div', 'att-actions');
             actions.append(button(doc, 'Send answer', 'btn btn-primary', () => handlers.onQuestionAnswer(request)));
-            if (request.paneID) actions.append(button(doc, 'Go to pane', 'btn', () => handlers.onReveal(request.paneID, 'Go to pane')));
+            actions.append(button(doc, 'Go to workspace', 'btn', () => handlers.onQuestionWorkspace(request)));
             card.append(actions); cards.push(card);
         }
         return cards;

@@ -1,3 +1,4 @@
+import { locateCodexPane } from './codex-navigation.mjs';
 import { createCodexQuestions } from './codex-questions.mjs';
 // Plugin backend entry. Wires modules and registers every command and event declared in kelpi.plugin.json.
 // `registerAll` takes the API object so tests can drive it with a fake (no Kelpi runtime needed).
@@ -22,7 +23,7 @@ import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 export const PLUGIN_ID = 'local.swarm-view';
 export const COMMANDS = [
     'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
-    'trust-folder', 'load-codex-questions', 'answer-codex-question', 'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
+    'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
     'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff'
 ].map(name => `${PLUGIN_ID}.${name}`);
@@ -775,6 +776,10 @@ export function registerAll(api, deps = modules) {
         } });
         try { await codexQuestions.refresh(); await publish(); return { ok: true }; }
         catch (error) { return fail(`${text(error)}. Go to pane is still available; local shared-daemon Codex sessions are required.`, 'CODEX_UNAVAILABLE'); }
+    });
+    command('locate-codex-pane', async args => {
+        const question = codexQuestions?.list().find(q => q.threadID === args.threadID);
+        return locateCodexPane(api, st, args.threadID, question?.name ?? (typeof args.name === 'string' ? args.name : undefined));
     });
     command('answer-codex-question', async args => {
         if (!codexQuestions) return fail('Load questions first.', 'CODEX_UNAVAILABLE');
