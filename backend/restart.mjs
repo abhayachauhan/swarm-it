@@ -2,6 +2,7 @@
 import { parsePrompt, parseCodexPrompt, PROMPT_CAPTURE_LINES } from './notify.mjs';
 import { capturePane, rememberSession, SESSION_ID } from './store.mjs';
 import { sendText, showsClaudeInput, textProblem } from './actions.mjs';
+import { claudeSuggestionRevision } from './claude-input.mjs';
 import { findTranscript } from './handoff.mjs';
 import { codexInput, codexInputEmpty, readCodexSession } from './codex-session.mjs';
 export { codexInputEmpty } from './codex-session.mjs';
@@ -94,10 +95,14 @@ export async function restartAgent(api, store, paneID, deps = {}) {
     const showsInput = text => codex ? codexInput(text) !== null : showsClaudeInput(text);
     if (parsePrompt(screen) || parseCodexPrompt(screen)) return done(fail(`${name} is asking for input; answer it first`, 'PROMPT_OPEN'));
     const atInput = showsInput(screen);
+    let suggestionRevision = null;
     if (pane.status === 'running') return done(fail(`${name} is mid-reply; wait for it to finish`, 'BUSY'));
     if (atInput) {
         if (BACKGROUND.test(screen.split('\n').slice(-20).join('\n'))) return done(fail(`${name} has background agents running; quitting would stop them`, 'BACKGROUND'));
-        if (!(codex ? codexInputEmpty(screen) : claudeInputEmpty(screen))) return done(fail(`${name}'s input box has text in it; clear it first`, 'INPUT_NOT_EMPTY'));
+        if (!codex && !claudeInputEmpty(screen)) {
+            suggestionRevision = await claudeSuggestionRevision(api, paneID, screen);
+        }
+        if (!(codex ? codexInputEmpty(screen) : claudeInputEmpty(screen) || suggestionRevision !== null)) return done(fail(`${name}'s input box has text in it; clear it first`, 'INPUT_NOT_EMPTY'));
         if (codex) {
             // Read the session from this TUI: hooks can be missing or still point at a previous conversation.
             const status = await readCodexSession(api, paneID, screen, { sleep, pollMs: EXIT_POLL_MS });
@@ -114,7 +119,13 @@ export async function restartAgent(api, store, paneID, deps = {}) {
         return done(sent.ok ? { ok: true, paneID, session, resumed: true } : sent);
     }
 
-    const quit = await sendText(api, paneID, '/exit');
+    let quit;
+    if (suggestionRevision !== null) {
+        try {
+            await api.terminal.send(paneID, '/exit', { ifRevision: suggestionRevision });
+            quit = { ok: true };
+        } catch (error) { quit = fail(`send failed: ${message(error)}`, 'SEND_FAILED'); }
+    } else quit = await sendText(api, paneID, '/exit');
     if (!quit.ok) return done(quit);
 
     const finished = (async () => {

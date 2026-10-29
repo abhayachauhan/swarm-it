@@ -250,3 +250,5 @@ hooks, and if no hook returns a decision, it denies the tool call." Kelpi `docs/
 ## Codex question navigation
 
 `local.swarm-view.locate-codex-pane { threadID, name? }` returns `{ ok, paneID }` for the exact open session. The question card always offers **Go to workspace**. Existing session links navigate immediately. Missing links use a unique matching Codex title and footer. Duplicate names are disambiguated with `/status` in idle panes before navigation. Drafts and working turns are left alone. An unavailable session shows an error and opens no workspace.
+
+Restart recognises Claude’s dim suggested prompt through the read-only styled terminal snapshot. A suggestion at the empty input cursor is ignored only while the screen revision stays unchanged; `/exit` is sent with that revision guard. Real drafts and unsupported or ambiguous styling still block restart. No input-clearing keys are sent.

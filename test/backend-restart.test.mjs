@@ -219,3 +219,29 @@ test('the same restart command detects Codex from its invocation pane', async ()
     assert.deepEqual(sent(api), ['/status', '/exit', `codex resume ${SID}`]);
     dispose();
 });
+
+test('a verified dim Claude suggestion restarts with a screen revision guard and no editing keys', async () => {
+    const api = setup({ screen: claudeScreen('Check again') });
+    api.terminal.read = async () => ({ text: claudeScreen('Check again'), revision: 42, cursor: { col: 2 } });
+    api.terminal.watch = async () => ({ subscription: 'suggestion', base64: Buffer.from(claudeScreen('\x1b[2mCheck again\x1b[22m')).toString('base64') });
+    api.terminal.unwatch = async () => {};
+    const send = api.terminal.send; let guard;
+    api.terminal.send = async (id, text, options) => { if (text === '/exit') guard = options; return send(id, text, options); };
+    const { result, finished } = await restartAgent(api, createStore(api), 'c1', noSleep);
+    assert.equal(result.restarting, true); assert.equal((await finished).resumed, true);
+    assert.deepEqual(guard, { ifRevision: 42 });
+    assert.deepEqual(sent(api), ['/exit', `claude --resume ${SID}`]);
+    assert.deepEqual(keys(api), ['enter']);
+});
+
+test('a changed screen refuses the guarded suggestion restart without resuming', async () => {
+    const api = setup({ screen: claudeScreen('Check again') });
+    api.terminal.read = async () => ({ text: claudeScreen('Check again'), revision: 42, cursor: { col: 2 } });
+    api.terminal.watch = async () => ({ subscription: 'suggestion', base64: Buffer.from(claudeScreen('\x1b[2mCheck again\x1b[22m')).toString('base64') });
+    api.terminal.unwatch = async () => {};
+    api.terminal.send = async () => { throw new Error('screen changed'); };
+    const before = api.captureStore.c1;
+    const { result } = await restartAgent(api, createStore(api), 'c1', noSleep);
+    assert.deepEqual(result, { ok: false, error: 'send failed: screen changed', code: 'SEND_FAILED' });
+    assert.equal(api.captureStore.c1, before); assert.deepEqual(keys(api), []);
+});
