@@ -252,3 +252,16 @@ hooks, and if no hook returns a decision, it denies the tool call." Kelpi `docs/
 `local.swarm-view.locate-codex-pane { threadID, name? }` returns `{ ok, paneID }` for the exact open session. The question card always offers **Go to workspace**. Existing session links navigate immediately. Missing links use a unique matching Codex title and footer. Duplicate names are disambiguated with `/status` in idle panes before navigation. Drafts and working turns are left alone. An unavailable session shows an error and opens no workspace.
 
 Restart recognises Claude’s dim suggested prompt through the read-only styled terminal snapshot. A suggestion at the empty input cursor is ignored only while the screen revision stays unchanged; `/exit` is sent with that revision guard. Real drafts and unsupported or ambiguous styling still block restart. No input-clearing keys are sent.
+
+
+## Workspace brief
+
+| Command | Args | Result | Behavior |
+|---|---|---|---|
+| `local.swarm-view.get-workspace-brief` | `{ workspaceID, force? }` | `{ ok, workspaceID, brief, pending, error }` | Reads the saved brief, drains completed model work, and schedules an eligible background summary when briefEnabled is true. No user-session prompts or keys. |
+| `local.swarm-view.edit-workspace-brief` | `{ workspaceID, goal?, goalPinned? }` | Same brief result | Saves a user correction or pin. Pinned goal survives generated updates. |
+| `local.swarm-view.open-workspace-brief` | `{ workspaceID, enableLayout? }` | `{ ok, paneID, workspaceID }` | Opens Details for an existing workspace. Optional enableLayout selects the reversible workspace container through the browser SDK. |
+
+The brief view is declared for pane and local.swarm-view.brief-slot. The workspace container stacks the brief above the native kelpi.workspace renderer. Hide brief restores kelpi.workspace. The browser follows the selected local workspace, rejects stale responses, preserves edit drafts and pauses polling while hidden.
+
+A model cannot set a verified pull-request state. The read-only metadata cache uses gh pr view with validated GitHub pull URLs, never model-supplied commands. Summarization runs in an isolated temporary directory with Sonnet, no tools, no MCP servers, no inherited project settings, no browser and no persisted model session. Previous brief and conversation contents are treated as data.

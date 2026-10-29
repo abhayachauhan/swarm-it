@@ -9,8 +9,15 @@
   "contributes": {
     "views": [
       { "id": "local.swarm-view.rail", "title": "Swarm", "entry": "ui/sidebar/index.html", "stateVersion": 1, "placements": ["sidebar.secondary", "pane"] },
+      { "id": "local.swarm-view.brief", "title": "Workspace brief", "entry": "ui/brief/index.html", "stateVersion": 1, "placements": ["pane", "local.swarm-view.brief-slot"] },
       { "id": "local.swarm-view.thread", "title": "Swarm thread", "entry": "ui/thread/index.html", "stateVersion": 1, "placements": ["pane"] },
       { "id": "local.swarm-view.run", "title": "Run suggested command", "entry": "ui/run/index.html", "stateVersion": 1, "placements": ["pane"] }
+    ],
+    "containers": [
+      { "id": "local.swarm-view.brief-layout", "title": "Workspace with brief", "placements": ["workspace"], "layout": "column", "slots": [
+        { "id": "local.swarm-view.brief-slot", "title": "Workspace brief", "defaultView": "local.swarm-view.brief", "weight": 1 },
+        { "id": "local.swarm-view.brief-terminal-slot", "title": "Terminal workspace", "defaultView": "kelpi.workspace", "weight": 6 }
+      ] }
     ],
     "menus": [
       { "id": "local.swarm-view.run-suggested.header", "command": "local.swarm-view.run-suggested", "placement": "pane.header", "group": "Suggested command", "order": 10, "when": { "pane.type": "shell" } },
@@ -26,6 +33,9 @@
       { "id": "local.swarm-view.locate-codex-pane", "title": "Swarm: find Codex session workspace" },
       { "id": "local.swarm-view.load-codex-questions", "title": "Swarm: load Codex questions" },
       { "id": "local.swarm-view.answer-codex-question", "title": "Swarm: answer Codex question" },
+      { "id": "local.swarm-view.get-workspace-brief", "title": "Swarm: read workspace brief" },
+      { "id": "local.swarm-view.edit-workspace-brief", "title": "Swarm: edit workspace brief" },
+      { "id": "local.swarm-view.open-workspace-brief", "title": "Workspace brief: details and plan" },
       { "id": "local.swarm-view.get-state", "title": "Swarm: get state snapshot" },
       { "id": "local.swarm-view.open-thread", "title": "Swarm: open worker thread" },
       { "id": "local.swarm-view.read-result", "title": "Swarm: read worker result file" },
@@ -62,6 +72,7 @@
       { "id": "local.swarm-view.counts", "placement": "statusbar", "text": "Swarm 0/0/0", "tooltip": "Swarm: waiting / running / finished", "tone": "default", "command": "local.swarm-view.focus-rail" }
     ],
     "settings": {
+      "briefEnabled": { "title": "Create automatic workspace briefs using Claude Sonnet", "type": "boolean", "default": false },
       "autoHide": { "title": "Move workers into the shared Workers workspace", "type": "boolean", "default": true },
       "autoCleanMinutes": { "title": "Close finished workers after this many minutes (0 = never)", "type": "number", "default": 10 },
       "snoozeMinutes": { "title": "Default snooze (minutes)", "type": "number", "default": 15 },

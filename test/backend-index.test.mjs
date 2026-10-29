@@ -491,3 +491,37 @@ test('handoff shortcut forwards the invocation pane and successful result', asyn
         assert.deepEqual(received, { args: {}, context: { paneID: 'w1' } });
     } finally { dispose(); }
 });
+
+test('workspace brief commands gate automatic work, preserve workspace identity and open Details', async () => {
+    for (const enabled of [false, true]) {
+        const api = makeFakeApi({ settings: { briefEnabled: enabled },
+            workspaces: [{ id: 'ws1', name: 'One' }, { id: 'ws2', name: 'Two' }], panes: [] });
+        const calls = [], brief = { goal: 'Enforce access checks', pullRequests: [] };
+        let ended = 0;
+        const dispose = registerAll(api, { ...modules,
+            createWorkspaceBriefs: () => ({
+                async get(id, options) { calls.push(['get', id, options]); return { ok: true, workspaceID: id, brief, pending: false, error: null }; },
+                async edit(id, args) { calls.push(['edit', id, args]); return { ok: true }; },
+                dispose() { ended++; }
+            }),
+            createBriefPulls: () => ({ enrich: value => value, dispose() { ended++; } })
+        });
+        try {
+            await dispose.ready;
+            const result = await api.command('get-workspace-brief', { workspaceID: 'ws2', force: true });
+            assert.deepEqual(calls[0], ['get', 'ws2', { refresh: enabled, force: true }]);
+            assert.equal(result.workspaceID, 'ws2');
+            assert.equal(result.error, enabled ? null : 'Automatic workspace briefs are off in plugin settings.');
+            await api.command('edit-workspace-brief', { workspaceID: 'ws2', goal: 'Keep this goal', goalPinned: true });
+            assert.deepEqual(calls[1], ['edit', 'ws2', { workspaceID: 'ws2', goal: 'Keep this goal', goalPinned: true }]);
+            assert.deepEqual(await api.command('open-workspace-brief', { workspaceID: 'missing' }),
+                { ok: false, error: 'Choose an open workspace for its brief', code: 'NO_WORKSPACE' });
+            assert.equal(api.callsTo('openView').length, 0);
+            assert.deepEqual(await api.command('open-workspace-brief', { workspaceID: 'ws2' }),
+                { ok: true, paneID: 'view-pane', workspaceID: 'ws2' });
+            assert.deepEqual(api.callsTo('openView')[0].args, ['local.swarm-view.brief', { workspaceID: 'ws2', state: { workspaceID: 'ws2', details: true } }]);
+            assert.deepEqual(api.callsTo('terminal.send'), []);
+        } finally { dispose(); }
+        assert.equal(ended, 2);
+    }
+});

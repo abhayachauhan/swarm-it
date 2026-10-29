@@ -1,3 +1,6 @@
+import { createWorkspaceBriefs } from './workspace-brief.mjs';
+import { generateWorkspaceBrief } from './brief-generator.mjs';
+import { createBriefPulls } from './brief-pulls.mjs';
 import { locateCodexPane } from './codex-navigation.mjs';
 import { createCodexQuestions } from './codex-questions.mjs';
 // Plugin backend entry. Wires modules and registers every command and event declared in kelpi.plugin.json.
@@ -22,7 +25,7 @@ import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 
 export const PLUGIN_ID = 'local.swarm-view';
 export const COMMANDS = [
-    'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
+    'get-workspace-brief', 'edit-workspace-brief', 'open-workspace-brief', 'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
     'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
     'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff'
@@ -97,6 +100,10 @@ export function registerAll(api, deps = modules) {
     const emit = (name, data) => (typeof api.emit === 'function' ? api.emit(name, data) : api.events.emit(name, data));
 
     let codexQuestions = null;
+    const briefs = (deps.createWorkspaceBriefs ?? createWorkspaceBriefs)({ api,
+        generate: deps.generateWorkspaceBrief ?? generateWorkspaceBrief });
+    const briefPulls = (deps.createBriefPulls ?? createBriefPulls)();
+
     function snapshotNow() {
         const snapshot = S.buildSnapshot(st, Date.now());
         if (codexQuestions) snapshot.warnings.push(...(codexQuestions.warnings?.() ?? []));
@@ -761,6 +768,24 @@ export function registerAll(api, deps = modules) {
     const needItem = args => (typeof args.itemID === 'string' && args.itemID ? null : fail('itemID is required', 'BAD_ARGS'));
     const after = async result => { if (result?.ok) { await settle(); await publish(); } return result; };
 
+    command('get-workspace-brief', async args => {
+        const enabled = st.settings.briefEnabled === true;
+        const result = await briefs.get(args.workspaceID, { refresh: enabled, force: args.force === true });
+        return { ...result, ...(result.brief ? { brief: briefPulls.enrich(result.brief) } : {}),
+            ...(!enabled ? { error: 'Automatic workspace briefs are off in plugin settings.' } : {}) };
+    });
+    command('edit-workspace-brief', async args => briefs.edit(args.workspaceID, args));
+    command('open-workspace-brief', async (args, context) => {
+        const workspaceID = args.workspaceID ?? context.workspaceID;
+        if (typeof workspaceID !== 'string' || !(await api.workspaces.list()).some(w => w.id === workspaceID))
+            return fail('Choose an open workspace for its brief', 'NO_WORKSPACE');
+        try {
+            const opened = await api.openView('local.swarm-view.brief', { workspaceID,
+                state: { workspaceID, details: true, ...(args.enableLayout === true ? { enableLayout: true } : {}) } });
+            return { ok: true, paneID: opened.paneID, workspaceID };
+        } catch (error) { return fail(text(error), 'OPEN_FAILED'); }
+    });
+
     command('get-state', async args => {
         // A view that knows the workspace the user is in passes it, and the rail follows.
         const moved = await follow(args.workspaceID);
@@ -983,6 +1008,8 @@ export function registerAll(api, deps = modules) {
     const dispose = () => {
         disposed = true;
         codexQuestions?.dispose();
+        briefs.dispose();
+        briefPulls.dispose();
         for (const off of disposers.splice(0)) { try { off(); } catch { /* already gone */ } }
         A.stop(att);
     };

@@ -21,6 +21,22 @@ Say **“swarm it”** to a Claude Code or Codex coordinator. The skill breaks y
 
 Each worker gets its own Kelpi pane in a shared **Workers** workspace. Your coordinator stays in place. Completed workers write a short **Goal / Done / Next** result; the rail keeps the result after the worker pane closes.
 
+## Remember each workspace
+
+![Rendered example workspace brief with a descriptive change, current step, next action and pull request title](docs/workspace-brief.png)
+
+**Workspace with brief** adds a wide reference above the terminal: the change you are making, Now or Needs you, Next, and a pull request title you can understand without opening GitHub. **Details** opens the unique plan and progress, lets you correct or pin the goal, and offers **Hide brief**.
+
+The plugin reads a bounded slice of the selected workspace's Claude or Codex conversation. A separate, tool-free Claude Sonnet call creates the brief using your installed Claude login. This uses Claude usage and does not send prompts into your working session. Summaries are cached, changed context is checked while the view is visible, and generation is limited to one process and no more than once per two minutes for a workspace. The first brief can be created during active work; later busy turns keep the saved brief until the conversation settles. GitHub titles and states are checked separately with read-only GitHub CLI calls; unavailable status is labelled Unverified.
+
+Automatic briefs are off on a fresh install. Enable them in the plugin settings, then choose **Workspace with brief** for the workspace view:
+
+```sh
+kelpi plugin settings local.swarm-view --key briefEnabled --value true
+```
+
+Briefs follow the workspace across restarts and Claude/Codex handoffs. Pinned goals take priority over automatic updates. Existing summaries remain when generation is disabled. If Kelpi’s shared plugin storage is full, new briefs are saved as private files under ~/.kelpi-swarm/briefs/ without pruning existing Swarm history.
+
 ## One rail for the whole run
 
 ![Illustration of Claude and Codex requests in the Swarm rail](docs/approvals.svg)

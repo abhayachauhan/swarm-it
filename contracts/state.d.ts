@@ -228,3 +228,23 @@ export interface ManifestWorker {
 
 /** Standard command result envelope for every `local.swarm-view.*` command. */
 export type CommandResult<T = unknown> = ({ ok: true } & T) | { ok: false; error: string; code?: string };
+
+
+/** Per-workspace reference, fetched separately from the Swarm snapshot. */
+export interface WorkspaceBrief {
+    goal: string;
+    now: string;
+    next: string;
+    needsYou: string;
+    steps: { text: string; state: 'done' | 'active' | 'todo' }[];
+    pullRequests: { url: string; title: string; status: string }[];
+    updatedAt: string | null;
+    goalPinned: boolean;
+}
+export interface WorkspaceBriefResult {
+    ok: boolean;
+    workspaceID?: string;
+    brief?: WorkspaceBrief | null;
+    pending?: boolean;
+    error?: string | null;
+}

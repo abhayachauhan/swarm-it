@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace brief</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="app" aria-label="Workspace brief">
+  <div class="heading"><strong>Workspace brief</strong><button id="details" type="button">Details</button><button id="refresh" type="button" hidden>Refresh</button></div>
+  <dl id="summary">
+    <div><dt>Goal</dt><dd id="goal">Preparing brief…</dd></div>
+    <div><dt id="now-label">Now</dt><dd id="now"></dd></div>
+    <div><dt>Next</dt><dd id="next"></dd></div>
+  </dl>
+  <div id="pull-requests" aria-label="Pull requests"></div>
+  <p id="status" role="status"></p>
+  <section id="full" hidden aria-label="Brief details">
+    <div class="actions"><h1>Plan and progress</h1><button id="hide" type="button">Hide brief</button></div>
+    <ol id="steps"></ol>
+    <p id="empty-steps"></p>
+    <form id="editor">
+      <label for="goal-input">Goal</label>
+      <textarea id="goal-input" rows="3"></textarea>
+      <label class="pin"><input id="goal-pinned" type="checkbox"> Keep this goal pinned</label>
+      <div class="actions"><button id="save" type="submit">Save goal</button><button id="pin" type="button">Pin goal</button><button id="cancel" type="button">Reset draft</button></div>
+    </form>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
