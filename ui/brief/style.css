@@ -32,6 +32,12 @@ textarea { width: 100%; resize: vertical; min-height: 54px; color: inherit; back
 .compact .heading { float: right; margin-left: 8px; }
 .compact .heading strong { display: none; }
 .compact dl { margin: 0 0 2px; }
-.compact dl > div:first-child { display: block; padding-right: 88px; margin-bottom: 2px; }
-.compact dl > div:first-child dt { display: none; }
+.compact #summary > div:first-child { display: block; padding-right: 88px; margin-bottom: 2px; }
+.compact #summary > div:first-child dt { display: none; }
 .compact #goal { font-weight: 600; font-size: 17px; }
+.pr-assessment { margin-top: 6px; }
+.pr-assessment + .pr-assessment { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 12px; }
+.pr-assessment .pr-link { font-weight: 600; }
+.pr-assessment dl > div { grid-template-columns: 82px minmax(0, 1fr); }
+.pr-assessment dd { display: block; overflow: visible; -webkit-line-clamp: unset; }
+.assessment-note { color: var(--muted); font-size: 13px; margin: 4px 0; }

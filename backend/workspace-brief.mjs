@@ -1,3 +1,4 @@
+import { pullReferences } from './brief-references.mjs';
 // Workspace summaries only read the selected conversation. The caller owns feature gating.
 import { open, constants, mkdir, lstat, realpath, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -46,7 +47,8 @@ function normalize(value) {
         if (!validPullURL(pr?.url) || !clean(pr.title, 200) || seen.has(pr.url)) return [];
         seen.add(pr.url);
         // Only the coordinator's independent metadata lookup can verify a model's status.
-        return [{ url: pr.url, title: clean(pr.title, 200), status: 'unverified' }];
+        return [{ url: pr.url, title: clean(pr.title, 200), status: 'unverified', assessmentHead: clean(pr.assessmentHead, 64),
+            ...Object.fromEntries(['problem', 'change', 'risk', 'validation'].map(key => [key, clean(pr[key], 300)])) }];
     }).slice(0, 8);
     return brief;
 }
@@ -98,12 +100,26 @@ async function transcriptMessages(path, agent) {
             return buffer.toString('utf8', 0, result.bytesRead);
         };
         const head = await read(0, Math.min(stat.size, WINDOW_BYTES));
-        if (stat.size <= WINDOW_BYTES) return parseMessages(head, agent);
+        if (stat.size <= WINDOW_BYTES) return { messages: parseMessages(head, agent), references: pullReferences(head) };
         const start = Math.max(WINDOW_BYTES, stat.size - WINDOW_BYTES);
         const tail = await read(start, Math.min(WINDOW_BYTES, stat.size - start));
-        return [...parseMessages(head.slice(0, head.lastIndexOf('\n')), agent),
-            ...parseMessages(tail.slice(tail.indexOf('\n') + 1), agent)];
+        return { messages: [...parseMessages(head.slice(0, head.lastIndexOf('\n')), agent),
+            ...parseMessages(tail.slice(tail.indexOf('\n') + 1), agent)], references: pullReferences(head + '\n' + tail) };
     } finally { await file.close(); }
+}
+
+async function referencedPlan(firstGoal, home) {
+    let base;
+    try { base = await realpath(join(home, 'repos')); } catch { return ''; }
+    for (const match of firstGoal.matchAll(/(?:~|\/)[A-Za-z0-9_./-]+\.md\b/g)) {
+        try {
+            const path = await realpath(match[0].startsWith('~/') ? join(home, match[0].slice(2)) : match[0]);
+            if (!path.startsWith(base + '/')) continue;
+            const result = await readResultSafely(path, { maxBytes: 32 * 1024 });
+            if (result.ok) return result.text.slice(0, 6000);
+        } catch { /* An absent or out-of-repository plan is not evidence. */ }
+    }
+    return '';
 }
 
 async function contextFor(api, workspaceID, home) {
@@ -125,23 +141,27 @@ async function contextFor(api, workspaceID, home) {
     const claudeWorking = /^\s*[✢✳✶✻✽⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏*]\s*[^\n]*(?:esc|ctrl\+c) to interrupt/i;
     const busy = (agent === 'codex' && liveRows.some(line => liveWorking.test(line)))
         || (agent === 'claude' && pane.status === 'running' && liveRows.some(line => claudeWorking.test(line)));
-    let messages = [], source = 'screen';
+    let messages = [], references = pullReferences(screen), source = 'screen';
     if (!mismatch && pane.agentSessionID) {
         const transcript = await findTranscript(pane.agentSessionID, agent, { home });
         if (transcript) {
-            try { messages = await transcriptMessages(transcript.path, transcript.agent); } catch { /* screen fallback */ }
+            try { const loaded = await transcriptMessages(transcript.path, transcript.agent); messages = loaded.messages; references = [...new Set([...loaded.references, ...references])].slice(-8); } catch { /* screen fallback */ }
             if (messages.length) source = `${transcript.agent} transcript`;
         }
     }
     if (!messages.length && (!agent || !screen.trim())) return null;
     let firstGoal = messages.find(message => message.role === 'user')?.text.slice(0, 4000) ?? '';
+    let taskPlan = await referencedPlan(firstGoal, home);
+    references = pullReferences(JSON.stringify({ references, taskPlan, recent: messages.map(m => m.text).join('\n').slice(-18000), screen }));
     let recent = messages.length ? messages.map(message => `${message.role}: ${message.text}`).join('\n').slice(-18_000)
         : screen.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').slice(-18_000);
-    let context = JSON.stringify({ workspaceID, paneID: pane.id, agent, source, firstGoal, recent });
+    let context = JSON.stringify({ workspaceID, paneID: pane.id, agent, source, firstGoal, recent, taskPlan, pullReferences: references });
     while (context.length > CONTEXT_LIMIT) {
         if (recent.length) recent = recent.slice(Math.max(1, Math.ceil((context.length - CONTEXT_LIMIT) / 2)));
-        else firstGoal = firstGoal.slice(0, Math.floor(firstGoal.length / 2));
-        context = JSON.stringify({ workspaceID, paneID: pane.id, agent, source, firstGoal, recent });
+        else if (taskPlan.length) taskPlan = taskPlan.slice(0, Math.floor(taskPlan.length / 2));
+        else if (firstGoal.length) firstGoal = firstGoal.slice(0, Math.floor(firstGoal.length / 2));
+        else throw new Error('Workspace context exceeds its evidence budget');
+        context = JSON.stringify({ workspaceID, paneID: pane.id, agent, source, firstGoal, recent, taskPlan, pullReferences: references });
     }
     return { context, fingerprint: textHash(context), busy };
 }
@@ -233,11 +253,12 @@ export function createWorkspaceBriefs({ api, generate, now = Date.now, home = ho
     }
     async function load(workspaceID) {
         if (records.has(workspaceID)) return records.get(workspaceID);
-        const record = { brief: null, fingerprint: null, lastAttempt: null, error: null, dirty: false, fileBacked: false };
+        const record = { brief: null, fingerprint: null, lastAttempt: null, error: null, dirty: false, fileBacked: false, assessmentVersion: 0 };
         const sidecar = await readSidecar(workspaceID);
         const saved = sidecar ?? await api.storage.get(keyFor(workspaceID));
         record.fileBacked = sidecar !== null;
         if (saved?.version === 1) {
+            record.assessmentVersion = saved.assessmentVersion === 2 ? 2 : 0;
             try {
                 if (saved.brief) {
                     const brief = normalize(saved.brief);
@@ -283,6 +304,7 @@ export function createWorkspaceBriefs({ api, generate, now = Date.now, home = ho
                 record.brief = { ...payload, goal: record.brief?.goalPinned ? record.brief.goal : payload.goal,
                     goalPinned: record.brief?.goalPinned ?? false, updatedAt: new Date(timestamp()).toISOString() };
                 record.fingerprint = completed.fingerprint;
+                record.assessmentVersion = 2;
                 record.error = null;
             } catch (error) { record.error = errorText(error); record.lastAttempt = timestamp(); }
         }
@@ -304,11 +326,12 @@ export function createWorkspaceBriefs({ api, generate, now = Date.now, home = ho
                     await flush();
                     if (disposed) return fail('Workspace briefs are disposed');
                     const elapsed = record.lastAttempt === null ? Infinity : timestamp() - record.lastAttempt;
-                    if (!refresh || job || elapsed < INTERVAL) return response(workspaceID, record);
+                    const upgrade = record.brief !== null && record.assessmentVersion !== 2 && !record.error;
+                    if (!refresh || job || (elapsed < INTERVAL && !upgrade)) return response(workspaceID, record);
                     const context = await contextFor(api, workspaceID, home);
                     if (disposed) return fail('Workspace briefs are disposed');
                     if (!context) return { ...response(workspaceID, record), error: 'No Claude or Codex conversation is available in this workspace' };
-                    if ((context.busy && record.brief !== null) || (!force && !record.error && record.fingerprint === context.fingerprint)) return response(workspaceID, record);
+                    if ((context.busy && record.brief !== null && !upgrade && !force) || (!upgrade && !force && !record.error && record.fingerprint === context.fingerprint)) return response(workspaceID, record);
                     record.lastAttempt = timestamp();
                     await persist(workspaceID, record);
                     if (disposed) return fail('Workspace briefs are disposed');

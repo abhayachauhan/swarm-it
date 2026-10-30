@@ -237,7 +237,7 @@ export interface WorkspaceBrief {
     next: string;
     needsYou: string;
     steps: { text: string; state: 'done' | 'active' | 'todo' }[];
-    pullRequests: { url: string; title: string; status: string }[];
+    pullRequests: { url: string; title: string; status: string; problem?: string; change?: string; risk?: string; validation?: string; checks?: string; assessmentHead?: string; evidenceAt?: string | null }[];
     updatedAt: string | null;
     goalPinned: boolean;
 }

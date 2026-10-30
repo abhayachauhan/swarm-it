@@ -11,7 +11,7 @@ import { generateWorkspaceBrief, resolveClaudeExecutable } from '../backend/brie
 const brief = () => ({
     goal: 'Show workspace progress above the terminal', now: 'Verifying summary isolation', next: 'Run the checks', needsYou: '',
     steps: [{ text: 'Verify isolation', state: 'active' }, { text: 'Run checks', state: 'todo' }],
-    pullRequests: [{ url: 'https://github.com/example/project/pull/12', title: 'Show workspace progress above the terminal', status: 'unverified' }],
+    pullRequests: [{ url: 'https://github.com/example/project/pull/12', title: 'Show workspace progress above the terminal', status: 'unverified', problem: 'Work loses context', change: 'Add the brief', risk: 'Unknown. Not reviewed', validation: 'Runtime not verified' }],
 });
 const envelope = value => ({ type: 'result', subtype: 'success', is_error: false, structured_output: value });
 const expected = (code, message, name = 'Error') => ({ code, message, name });
@@ -332,5 +332,13 @@ test('aborting during executable discovery does not start a child', async () => 
         } });
         assert.equal(resolutions, 1);
         assert.deepEqual(p.calls, []);
+    }
+});
+
+test('a PR assessment cannot silently omit risk or validation evidence', async () => {
+    for (const field of ['problem', 'change', 'risk', 'validation']) {
+        const value = brief(); delete value.pullRequests[0][field];
+        const p = provider({ value });
+        await rejectsPreserving(p, invalid);
     }
 });

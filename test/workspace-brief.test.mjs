@@ -193,7 +193,7 @@ test('busy screens retain the previous brief with no pending update', async () =
     const before = (await controller.get('ws1', { refresh: false })).brief;
     advance();
     api.captureStore.main = 'Working (esc to interrupt)';
-    const busy = await controller.get('ws1', { force: true });
+    const busy = await controller.get('ws1');
     assert.deepEqual(busy.brief, before);
     assert.equal(busy.pending, false);
     assert.equal(calls.length, 1);
@@ -239,7 +239,7 @@ test('bounds fields, deduplicates steps and pull requests, and never trusts mode
     assert.equal(brief.goal.length, 100);
     assert.equal(brief.steps.length, 12);
     assert.equal(brief.steps.filter(step => step.text.toLowerCase() === 'one').length, 1);
-    assert.deepEqual(brief.pullRequests, [{ url: 'https://github.com/owner/repo/pull/12', title: 'Useful change title', status: 'unverified' }]);
+    assert.deepEqual(brief.pullRequests, [{ url: 'https://github.com/owner/repo/pull/12', title: 'Useful change title', status: 'unverified', assessmentHead: '', problem: '', change: '', risk: '', validation: '' }]);
 });
 
 test('malformed output preserves the previous brief and yields an exact error', async () => {
@@ -467,7 +467,7 @@ test('a first brief is generated during ongoing work, then continued busy activi
         for (let n = 0; n < 3; n++) {
             advance();
             api.captureStore.main = `Progress changed ${n}\n${status}`;
-            const busy = await controller.get('ws1', { force: true });
+            const busy = await controller.get('ws1');
             assert.equal(busy.pending, false);
             assert.deepEqual(busy.brief, first.brief);
         }
@@ -684,4 +684,73 @@ test('failure to create the size-error fallback preserves plugin data and never 
     assert.equal(writes, 1, 'the file-backed record must recover without another API write');
     assert.deepEqual([...api.storageMap], before);
     controller.dispose();
+});
+
+test('legacy workflow-only briefs upgrade once during active work without discarding the pinned goal', async () => {
+    const saved = { version: 1, brief: { ...payload('Pinned user goal'), updatedAt: '2026-10-01T00:00:00Z', goalPinned: true },
+        fingerprint: null, lastAttempt: 1_800_000_000_000, error: null };
+    const storage = new Map([['workspace-brief.v1.ws1', saved]]);
+    const { api, calls, controller } = setup({ storage, pane: { agent: 'codex' } });
+    api.captureStore.main = '• Working (4s • esc to interrupt)\n› \n? for shortcuts';
+    assert.equal((await controller.get('ws1')).pending, true);
+    await settle();
+    const upgraded = await controller.get('ws1', { refresh: false });
+    assert.equal(upgraded.brief.goal, 'Pinned user goal');
+    assert.equal(storage.get('workspace-brief.v1.ws1').assessmentVersion, 2);
+    await controller.get('ws1'); assert.equal(calls.length, 1); controller.dispose();
+});
+
+test('tool commands contribute exact PR references without becoming summary instructions', async t => {
+    for (const agent of ['claude', 'codex']) {
+        const home = await homeFor(t);
+        const command = 'gh pr view 842 --repo mr-yum/crew --json title';
+        const tool = agent === 'claude' ? { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command } }] } }
+            : { type: 'response_item', payload: { type: 'function_call', arguments: JSON.stringify({ cmd: command }) } };
+        await transcript(home, agent, SESSION, [(agent === 'claude' ? claude : codex)('user', 'Understand the sync PR'), tool]);
+        const { controller, calls, api } = setup({ home, pane: { agent, agentSessionID: SESSION } });
+        await controller.get('ws1');
+        const context = JSON.parse(calls[0].context);
+        assert.deepEqual(context.pullReferences, ['https://github.com/mr-yum/crew/pull/842']);
+        assert.doesNotMatch(context.recent, /gh pr view/);
+        assert.deepEqual(api.callsTo('terminal.send'), []); controller.dispose();
+    }
+});
+
+test('explicit refresh can reassess an active workspace after the rate limit without sending session input', async () => {
+    const { api, controller, advance, calls } = setup({ pane: { agent: 'codex' } });
+    await controller.get('ws1'); await settle(); await controller.get('ws1', { refresh: false });
+    api.captureStore.main = '• Working (4s • esc to interrupt)\n› \n? for shortcuts';
+    advance();
+    assert.equal((await controller.get('ws1')).pending, false);
+    assert.equal((await controller.get('ws1', { force: true })).pending, true);
+    assert.equal(calls.length, 2); assert.deepEqual(api.callsTo('terminal.send'), []); controller.dispose();
+});
+
+test('an explicitly referenced repository plan supplies the problem context without following paths outside repositories', async t => {
+    const home = await homeFor(t), planDir = join(home, 'repos', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(join(planDir, 'brief.md'), 'Problem: copied schemas drift. Use mr-yum/crew#842.');
+    await transcript(home, 'claude', SESSION, [claude('user', 'Read ~/repos/plans/brief.md and continue'), claude('assistant', 'Reviewing current work')]);
+    const a = setup({ home, pane: { agentSessionID: SESSION } });
+    await a.controller.get('ws1');
+    assert.match(JSON.parse(a.calls[0].context).taskPlan, /copied schemas drift/);
+    assert.ok(JSON.parse(a.calls[0].context).pullReferences.includes('https://github.com/mr-yum/crew/pull/842'));
+    a.controller.dispose();
+    await writeFile(join(home, 'private.md'), 'Not authorized repository context');
+    await transcript(home, 'claude', SESSION, [claude('user', 'Read ~/private.md')]);
+    const b = setup({ home, pane: { agentSessionID: SESSION } });
+    await b.controller.get('ws1');
+    assert.equal(JSON.parse(b.calls[0].context).taskPlan, '');
+    assert.doesNotMatch(b.calls[0].context, /Not authorized repository context/); b.controller.dispose();
+});
+
+test('escaped plan content is reduced until the serialized evidence fits its budget', { timeout: 1000 }, async t => {
+    const home = await homeFor(t);
+    await mkdir(join(home, 'repos', 'plans'), { recursive: true });
+    await writeFile(join(home, 'repos', 'plans', 'large.md'), '\u0000'.repeat(6000));
+    await transcript(home, 'claude', SESSION, [claude('user', 'Read ~/repos/plans/large.md'), claude('assistant', 'Checking the plan')]);
+    const { controller, calls } = setup({ home, pane: { agentSessionID: SESSION } });
+    await controller.get('ws1');
+    assert.ok(calls[0].context.length <= 24000);
+    assert.ok(JSON.parse(calls[0].context).taskPlan.length < 6000); controller.dispose();
 });

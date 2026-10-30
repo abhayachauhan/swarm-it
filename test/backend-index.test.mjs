@@ -525,3 +525,23 @@ test('workspace brief commands gate automatic work, preserve workspace identity 
         assert.equal(ended, 2);
     }
 });
+
+test('PR evidence reaches the model and assessments are bound to the revision actually read', async () => {
+    const api = makeFakeApi({ settings: { briefEnabled: true } });
+    let generate, received;
+    const result = { goal: 'Solve drift', now: '', next: '', needsYou: '', steps: [],
+        pullRequests: [{ url: 'https://github.com/o/r/pull/12', title: 'Add sync', problem: 'Schema drift', change: 'Add a disabled bot', risk: 'Unknown', validation: 'Dry run pending' }] };
+    const dispose = registerAll(api, { ...modules,
+        createWorkspaceBriefs: options => { generate = options.generate; return { dispose() {} }; },
+        createBriefPulls: () => ({ async prepare(context) { assert.equal(context, 'source'); return JSON.stringify({ pullEvidence: [{ url: result.pullRequests[0].url, head: 'verified-head' }] }); }, dispose() {} }),
+        generateWorkspaceBrief: async request => { received = request; return result; }
+    });
+    try {
+        await dispose.ready;
+        const actual = await generate({ context: 'source', previous: null });
+        assert.equal(JSON.parse(received.context).pullEvidence[0].head, 'verified-head');
+        assert.equal(actual.pullRequests[0].assessmentHead, 'verified-head');
+        assert.equal(result.pullRequests[0].assessmentHead, undefined);
+        assert.deepEqual(api.callsTo('terminal.send'), []);
+    } finally { dispose(); }
+});

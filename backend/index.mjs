@@ -100,9 +100,17 @@ export function registerAll(api, deps = modules) {
     const emit = (name, data) => (typeof api.emit === 'function' ? api.emit(name, data) : api.events.emit(name, data));
 
     let codexQuestions = null;
-    const briefs = (deps.createWorkspaceBriefs ?? createWorkspaceBriefs)({ api,
-        generate: deps.generateWorkspaceBrief ?? generateWorkspaceBrief });
     const briefPulls = (deps.createBriefPulls ?? createBriefPulls)();
+    const briefs = (deps.createWorkspaceBriefs ?? createWorkspaceBriefs)({ api,
+        generate: async request => {
+            const context = await briefPulls.prepare(request.context, request.previous, request.signal);
+            const result = await (deps.generateWorkspaceBrief ?? generateWorkspaceBrief)({ ...request, context });
+            let evidence = [];
+            try { evidence = JSON.parse(context).pullEvidence || []; } catch { /* conversation-only source */ }
+            return { ...result, pullRequests: result.pullRequests.map(pr => ({
+                ...pr, assessmentHead: evidence.find(item => item.url === pr.url)?.head || ''
+            })) };
+        } });
 
     function snapshotNow() {
         const snapshot = S.buildSnapshot(st, Date.now());

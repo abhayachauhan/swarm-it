@@ -199,3 +199,29 @@ test('polling pauses while either Kelpi view or document is hidden and resumes w
     h.document.hidden = false; h.intervals[0].fn(); await flush(); assert.equal(h.calls.length, count + 1);
     assert.deepEqual(JSON.parse(JSON.stringify(h.calls.at(-1))), { command: 'get-workspace-brief', args: { workspaceID: 'fixed' } });
 });
+
+test('PR assessments explain the problem, change, risk and validation in Details and keep live checks separate', () => {
+    const d = doc();
+    const render = rendering.createBriefRenderer(d.document, { details: true, onLink() {} });
+    const data = brief();
+    Object.assign(data.pullRequests[0], { problem: 'Copied schemas drift behind production',
+        change: 'Add a disabled schema-sync pipeline', risk: 'Medium. GitHub write credentials need a real integration test.',
+        validation: 'Session reports 126 mocked tests. Real container and App key dry run not verified.', checks: '1 passed, 1 pending' });
+    render({ workspaceID: 'a', brief: data });
+    const content = d.$('pull-requests').textContent;
+    for (const value of ['Copied schemas drift', 'disabled schema-sync', 'Medium.', '126 mocked tests', '1 passed, 1 pending']) assert.ok(content.includes(value), value);
+    assert.ok(!content.includes('safe to release'));
+    data.pullRequests[0].risk = '';
+    render({ workspaceID: 'a', brief: data });
+    assert.match(d.$('pull-requests').textContent, /Unknown. No risk assessment/);
+});
+
+test('the compact PR card leads with the problem while preserving a user-pinned headline', () => {
+    const d = doc(), render = rendering.createBriefRenderer(d.document, { details: false, onLink() {} });
+    const data = brief('Merge the wiring PRs'); data.pullRequests[0].problem = 'Copied schemas drift behind production';
+    render({ workspaceID: 'a', brief: data });
+    assert.equal(d.$('goal').textContent, 'Copied schemas drift behind production');
+    assert.equal(d.$('now-row').hidden, true); assert.equal(d.$('next-row').hidden, true);
+    data.goalPinned = true; render({ workspaceID: 'a', brief: data });
+    assert.equal(d.$('goal').textContent, 'Merge the wiring PRs');
+});

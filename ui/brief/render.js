@@ -35,6 +35,11 @@ export function createBriefRenderer(document, { details, onLink }) {
         renderedWorkspace = model.workspaceID;
         const links = [];
         const prs = Array.isArray(model.brief?.pullRequests) ? model.brief.pullRequests : [];
+        const assessmentMode = !details && prs.some(pr => pullLink(pr.url));
+        if (assessmentMode && !model.brief?.goalPinned && text(prs[0]?.problem)) $('goal').textContent = prs[0].problem;
+        $('now-row').hidden = assessmentMode;
+        $('next-row').hidden = assessmentMode;
+        $('details').textContent = assessmentMode && model.brief?.needsYou ? 'Decision needed · Details' : 'Details';
         for (const pr of details ? prs : prs.slice(0, 1)) {
             const link = pullLink(pr.url);
             if (!link) continue;
@@ -45,7 +50,36 @@ export function createBriefRenderer(document, { details, onLink }) {
             button.title = link.url;
             const id = model.workspaceID;
             button.addEventListener('click', () => onLink(link.url, id));
-            row.append(button); links.push(row);
+            row.className = 'pr-assessment';
+            row.append(button);
+            const fields = details ? [
+                ['Problem', pr.problem || 'Not yet explained. Refresh this brief.'],
+                ['Change', pr.change || 'Not yet assessed.'],
+                ['Risk', pr.risk || 'Unknown. No risk assessment recorded.'],
+                ['Validation', [pr.checks || 'GitHub checks not verified', pr.validation || 'Runtime validation not verified.'].join('. ')]
+            ] : [
+                ['Change', pr.change || 'Open Details for an assessment.'],
+                ['Risk', pr.risk || 'Unknown. No risk assessment recorded.'],
+                ['Validation', [pr.checks || 'GitHub checks not verified', pr.validation || 'Runtime validation not verified.'].join('. ')]
+            ];
+            const assessment = document.createElement('dl');
+            for (const [label, value] of fields) {
+                const field = document.createElement('div');
+                const name = document.createElement('dt'); name.textContent = label;
+                const body = document.createElement('dd'); body.textContent = value;
+                field.append(name, body); assessment.append(field);
+            }
+            row.append(assessment);
+            if (details && pr.evidenceAt) {
+                const checked = document.createElement('p'); checked.className = 'assessment-note';
+                checked.textContent = 'Risk is a preliminary assessment from the available evidence. ' + ageLabel(pr.evidenceAt);
+                row.append(checked);
+            }
+            links.push(row);
+        }
+        if (!details && prs.length > 1) {
+            const more = document.createElement('div'); more.className = 'assessment-note';
+            more.textContent = (prs.length - 1) + ' more pull requests in Details'; links.push(more);
         }
         $('pull-requests').replaceChildren(...links);
         if (!details) return;
