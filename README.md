@@ -23,19 +23,21 @@ Each worker gets its own Kelpi pane in a shared **Workers** workspace. Your coor
 
 ## Remember each workspace
 
-![Rendered example workspace brief with a descriptive change, current step, next action and pull request title](docs/workspace-brief.png)
+![A single plain-language session status line with a Details button](docs/workspace-brief.png)
 
-**Workspace with brief** adds a wide reference above the terminal: the problem you are solving and, for each linked pull request, what changes, the risk assessment and validation evidence. The compact card shows the main pull request; Details shows all related changes. Workspaces without a pull request show Now and Next. **Details** opens the unique plan and progress, lets you correct or pin the goal, and offers **Hide brief**.
+**Toolbar with session status** shows one sentence below the normal toolbar, such as “The changes are ready; waiting for your review.” There is no brief title or large header panel. **Details** opens the goal, plan, pull request changes, risk and validation evidence. User-pinned goals stay in Details.
 
-The plugin reads a bounded slice of the selected workspace's Claude or Codex conversation. A separate, tool-free Claude Sonnet call creates the brief using your installed Claude login. This uses Claude usage and does not send prompts into your working session. Summaries are cached, changed context is checked while the view is visible, and generation is limited to one process and no more than once per two minutes for a workspace. The first brief can be created during active work; later busy turns keep the saved brief until the conversation settles. Before summarising a pull request, the plugin reads its GitHub description, changed files, checks and a bounded diff excerpt. Risk is an assessment, not a full code review. Live checks are shown separately from session-reported tests and runtime validation. Missing evidence stays Unknown or Not verified; green checks never mean a production dry run happened. A changed revision invalidates the old risk assessment.
+The plugin reads a bounded slice of the selected workspace’s Claude or Codex conversation. A separate, tool-free Sonnet call uses your installed Claude login. This uses Claude usage and does not send prompts into your working session. Changed context is checked while visible, with one summary process and a two-minute automatic refresh limit per workspace.
 
-Automatic briefs are off on a fresh install. Enable them in the plugin settings, then choose **Workspace with brief** for the workspace view:
+Pull request assessments use the GitHub description, changed files, checks and a bounded diff excerpt. Risk is preliminary; live checks and reported runtime validation stay separate. Missing evidence stays Unknown, and a changed revision invalidates the old assessment.
+
+Automatic briefs are off on a fresh install. Enable them in plugin settings, then choose **Toolbar with session status** for the toolbar view:
 
 ```sh
 kelpi plugin settings local.swarm-view --key briefEnabled --value true
 ```
 
-Briefs follow the workspace across restarts and Claude/Codex handoffs. Pinned goals take priority over automatic updates. Existing summaries remain when generation is disabled. If Kelpi’s shared plugin storage is full, new briefs are saved as private files under ~/.kelpi-swarm/briefs/ without pruning existing Swarm history.
+Existing brief layouts migrate automatically. **Hide status line** restores the native toolbar. Summaries survive restarts and handoffs; when shared plugin storage is full, private files under ~/.kelpi-swarm/briefs/ preserve them without pruning Swarm history.
 
 ## One rail for the whole run
 

@@ -9,12 +9,16 @@
   "contributes": {
     "views": [
       { "id": "local.swarm-view.rail", "title": "Swarm", "entry": "ui/sidebar/index.html", "stateVersion": 1, "placements": ["sidebar.secondary", "pane"] },
-      { "id": "local.swarm-view.brief", "title": "Workspace brief", "entry": "ui/brief/index.html", "stateVersion": 1, "placements": ["pane", "local.swarm-view.brief-slot"] },
+      { "id": "local.swarm-view.brief", "title": "Workspace brief", "entry": "ui/brief/index.html", "stateVersion": 1, "placements": ["pane", "local.swarm-view.brief-slot", "local.swarm-view.brief-status-slot"] },
       { "id": "local.swarm-view.thread", "title": "Swarm thread", "entry": "ui/thread/index.html", "stateVersion": 1, "placements": ["pane"] },
       { "id": "local.swarm-view.run", "title": "Run suggested command", "entry": "ui/run/index.html", "stateVersion": 1, "placements": ["pane"] }
     ],
     "containers": [
-      { "id": "local.swarm-view.brief-layout", "title": "Workspace with brief", "placements": ["workspace"], "layout": "column", "slots": [
+      { "id": "local.swarm-view.brief-toolbar", "title": "Toolbar with session status", "placements": ["topbar"], "bandHeights": { "topbar": 64 }, "layout": "column", "slots": [
+        { "id": "local.swarm-view.brief-toolbar-main", "title": "Toolbar", "defaultView": "kelpi.topbar", "weight": 1 },
+        { "id": "local.swarm-view.brief-status-slot", "title": "Session status", "defaultView": "local.swarm-view.brief", "weight": 1 }
+      ] },
+      { "id": "local.swarm-view.brief-layout", "title": "Workspace with brief (legacy)", "placements": ["workspace"], "layout": "column", "slots": [
         { "id": "local.swarm-view.brief-slot", "title": "Workspace brief", "defaultView": "local.swarm-view.brief", "weight": 1 },
         { "id": "local.swarm-view.brief-terminal-slot", "title": "Terminal workspace", "defaultView": "kelpi.workspace", "weight": 6 }
       ] }

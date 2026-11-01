@@ -1,3 +1,10 @@
+/** Current stage only; goals and the longer plan belong in Details. */
+export function currentStatus(brief) {
+    const value = text(brief?.now).trim() || text(brief?.needsYou).trim()
+        || text(brief?.steps?.find(step => step.state === 'active')?.text).trim();
+    return value.replace(/\s+/g, ' ') || 'No current update yet. Open Details to refresh.';
+}
+
 export const text = value => typeof value === 'string' ? value : '';
 
 export function pullLink(value) {

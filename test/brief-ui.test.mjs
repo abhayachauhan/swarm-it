@@ -112,14 +112,14 @@ test('only ordinary GitHub pull URLs are clickable, never scripts or lookalike h
     assert.deepEqual(logic.pullLink('https://github.com/o/r/pull/123'), { url: 'https://github.com/o/r/pull/123', number: '123' });
 });
 
-async function boot({ state = {}, chrome = { workspace: { id: 'a' } }, execute, selectView, ready = Promise.resolve(), getChrome } = {}) {
+async function boot({ state = {}, chrome = { workspace: { id: 'a' } }, execute, selectView, ready = Promise.resolve(), getChrome, workbench = { slots: [] } } = {}) {
     const d = doc(), calls = [], intervals = [], listeners = {};
     let chromeListener;
     const api = { ready, state, visible: true, panes: { list: async ({ workspaceID }) => [{ id: `pane-${workspaceID}`, workspaceID, isFocused: true }] }, commands: { execute: async (command, args) => {
         command = command.replace('local.swarm-view.', ''); calls.push({ command, args });
         return execute ? execute(command, args) : response(args.workspaceID);
     } }, command: async args => { calls.push({ command: 'native', args }); return { ok: true }; },
-    ui: { selectView: async (...args) => { calls.push({ command: 'selectView', args }); if (selectView) return selectView(...args); },
+    ui: { getWorkbench: async () => workbench, selectView: async (...args) => { calls.push({ command: 'selectView', args }); if (selectView) return selectView(...args); },
         onChrome: fn => { chromeListener = fn; return () => calls.push({ command: 'stop' }); }, getChrome: getChrome || (async () => chrome) } };
     const source = readFileSync(new URL('../ui/brief/app.js', import.meta.url), 'utf8')
         .replace(/^import \{([^}]*)\} from '\.\/logic.js';/m, 'const {$1} = logic;')
@@ -158,14 +158,14 @@ test('late initial chrome cannot undo a newer selection and details stays bound 
     assert.deepEqual(JSON.parse(JSON.stringify(details.calls.at(-1))), { command: 'edit-workspace-brief', args: { workspaceID: 'fixed', goal: 'Edited goal', goalPinned: true } });
 });
 
-test('bootstrap enables the workspace layout only in Details, reports failure and Hide restores native Workspaces', async () => {
+test('bootstrap enables the status toolbar only in Details, reports failure and Hide restores the native toolbar', async () => {
     const h = await boot({ state: { workspaceID: 'fixed', details: true, enableLayout: true }, selectView: () => { throw new Error('Layout unavailable'); } });
     await h.started; await flush();
-    assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0])), { command: 'selectView', args: ['workspace', 'local.swarm-view.brief-layout'] });
-    assert.equal(h.$('status').textContent.includes('Could not enable brief: Layout unavailable'), true);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0])), { command: 'selectView', args: ['topbar', 'local.swarm-view.brief-toolbar'] });
+    assert.equal(h.$('status').textContent.includes('Could not enable status line: Layout unavailable'), true);
     await h.fire('hide'); assert.equal(h.$('status').textContent, 'Could not hide brief: Layout unavailable');
     const ok = await boot({ state: { workspaceID: 'fixed', details: true, enableLayout: true } }); await ok.started; await flush(); await ok.fire('hide');
-    assert.deepEqual(JSON.parse(JSON.stringify(ok.calls.at(-1))), { command: 'selectView', args: ['workspace', 'kelpi.workspace'] });
+    assert.deepEqual(JSON.parse(JSON.stringify(ok.calls.at(-1))), { command: 'selectView', args: ['topbar', 'kelpi.topbar'] });
     const header = await boot({ state: { enableLayout: true } }); await header.started; await flush();
     assert.equal(header.calls.filter(x => x.command === 'selectView').length, 0);
 });
@@ -216,12 +216,35 @@ test('PR assessments explain the problem, change, risk and validation in Details
     assert.match(d.$('pull-requests').textContent, /Unknown. No risk assessment/);
 });
 
-test('the compact PR card leads with the problem while preserving a user-pinned headline', () => {
+test('the compact header shows only current progress, without a title, plan or PR cards', () => {
     const d = doc(), render = rendering.createBriefRenderer(d.document, { details: false, onLink() {} });
-    const data = brief('Merge the wiring PRs'); data.pullRequests[0].problem = 'Copied schemas drift behind production';
+    const data = brief('Merge the wiring PRs'); data.now = 'The changes are ready; waiting for your review.';
+    data.needsYou = 'A long approval question'; data.goalPinned = true;
     render({ workspaceID: 'a', brief: data });
-    assert.equal(d.$('goal').textContent, 'Copied schemas drift behind production');
-    assert.equal(d.$('now-row').hidden, true); assert.equal(d.$('next-row').hidden, true);
-    data.goalPinned = true; render({ workspaceID: 'a', brief: data });
-    assert.equal(d.$('goal').textContent, 'Merge the wiring PRs');
+    assert.equal(d.$('current-status').textContent, 'The changes are ready; waiting for your review.');
+    for (const id of ['summary', 'pull-requests', 'status', 'full']) assert.equal(d.$(id).hidden, true);
+    assert.equal(d.$('current-status').hidden, false);
+    assert.equal(d.$('details').textContent, 'Details');
+    assert.doesNotMatch(readFileSync(new URL('../ui/brief/index.html', import.meta.url), 'utf8'), /<strong>Workspace brief/);
+});
+
+
+test('legacy headers migrate in order without replacing a custom workspace view', async () => {
+    const legacy = await boot({ workbench: { slots: [{ id: 'workspace', viewID: 'local.swarm-view.brief-layout' }] } });
+    await legacy.started; await flush();
+    assert.deepEqual(JSON.parse(JSON.stringify(legacy.calls.filter(c => c.command === 'selectView'))), [
+        { command: 'selectView', args: ['topbar', 'local.swarm-view.brief-toolbar'] },
+        { command: 'selectView', args: ['workspace', 'kelpi.workspace'] }
+    ]);
+    const custom = await boot({ state: { details: true, workspaceID: 'a', enableLayout: true },
+        workbench: { slots: [{ id: 'workspace', viewID: 'another.custom-view' }] } });
+    await custom.started; await flush();
+    assert.deepEqual(JSON.parse(JSON.stringify(custom.calls.filter(c => c.command === 'selectView'))),
+        [{ command: 'selectView', args: ['topbar', 'local.swarm-view.brief-toolbar'] }]);
+});
+
+test('one-line status falls back to a question or active step, never the goal title', () => {
+    assert.equal(logic.currentStatus({ goal: 'A title', now: '', needsYou: 'Choose a release date' }), 'Choose a release date');
+    assert.equal(logic.currentStatus({ goal: 'A title', steps: [{ state: 'active', text: 'Checking the release' }] }), 'Checking the release');
+    assert.equal(logic.currentStatus({ goal: 'A title' }), 'No current update yet. Open Details to refresh.');
 });

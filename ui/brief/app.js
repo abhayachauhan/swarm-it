@@ -6,10 +6,15 @@ await api.ready;
 const $ = id => document.getElementById(id);
 const details = api.state?.details === true;
 let layoutError = '';
-if (details && api.state?.enableLayout === true) {
-    try { await api.ui.selectView('workspace', 'local.swarm-view.brief-layout'); }
-    catch (cause) { layoutError = `Could not enable brief: ${cause.message || String(cause)}`; }
-}
+try {
+    const workbench = typeof api.ui.getWorkbench === 'function' ? await api.ui.getWorkbench() : null;
+    const legacy = workbench?.slots?.some(slot => slot.id === 'workspace' && slot.viewID === 'local.swarm-view.brief-layout');
+    if (legacy || (details && api.state?.enableLayout === true)) {
+        // Select the new header first: restoring the old workspace unmounts this legacy view.
+        await api.ui.selectView('topbar', 'local.swarm-view.brief-toolbar');
+        if (legacy) await api.ui.selectView('workspace', 'kelpi.workspace');
+    }
+} catch (cause) { layoutError = `Could not enable status line: ${cause.message || String(cause)}`; }
 let disposed = false, selected = null;
 const render = createBriefRenderer(document, { details, onLink: async (url, workspaceID) => {
     if (disposed || selected !== workspaceID || !pullLink(url)) return;
@@ -40,7 +45,7 @@ $('cancel').addEventListener('click', () => {
 $('hide').addEventListener('click', async () => {
     if (!details) return;
     $('hide').disabled = true;
-    try { await api.ui.selectView('workspace', 'kelpi.workspace'); layoutError = ''; $('status').textContent = 'Brief hidden'; }
+    try { await api.ui.selectView('topbar', 'kelpi.topbar'); layoutError = ''; $('status').textContent = 'Status line hidden'; }
     catch (cause) { layoutError = `Could not hide brief: ${cause.message || String(cause)}`; $('status').textContent = layoutError; }
     finally { $('hide').disabled = false; }
 });

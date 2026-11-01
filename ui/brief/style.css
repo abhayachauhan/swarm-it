@@ -28,13 +28,10 @@ h1 { font-size: 18px; margin: 14px 0 6px; }
 textarea { width: 100%; resize: vertical; min-height: 54px; color: inherit; background: transparent; font: inherit; border: 1px solid var(--border); border-radius: 4px; padding: 5px; }
 .pin { margin-top: 7px; }
 @media (max-width: 220px) { #app { padding: 4px; } dl > div { grid-template-columns: 54px minmax(0, 1fr); gap: 4px; } }
-/* The compact card gives the change the first line; the slot already names the brief. */
-.compact .heading { float: right; margin-left: 8px; }
-.compact .heading strong { display: none; }
-.compact dl { margin: 0 0 2px; }
-.compact #summary > div:first-child { display: block; padding-right: 88px; margin-bottom: 2px; }
-.compact #summary > div:first-child dt { display: none; }
-.compact #goal { font-weight: 600; font-size: 17px; }
+/* The toolbar shows only current progress; the full brief stays in Details. */
+.compact { display: flex; align-items: center; gap: 10px; padding: 3px 8px; height: 100%; }
+.compact .heading { order: 2; flex: none; }
+.compact #current-status { flex: 1; min-width: 0; margin: 0; font-size: 17px; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pr-assessment { margin-top: 6px; }
 .pr-assessment + .pr-assessment { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 12px; }
 .pr-assessment .pr-link { font-weight: 600; }

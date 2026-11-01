@@ -1,4 +1,4 @@
-import { ageLabel, briefSummary, pullLink, text } from './logic.js';
+import { ageLabel, briefSummary, currentStatus, pullLink, text } from './logic.js';
 
 // Keep form nodes mounted: polling must not replace a focused field or a user's draft.
 export function createBriefRenderer(document, { details, onLink }) {
@@ -7,6 +7,10 @@ export function createBriefRenderer(document, { details, onLink }) {
     $('details').hidden = details;
     $('refresh').hidden = !details;
     $('full').hidden = !details;
+    $('current-status').hidden = details;
+    $('summary').hidden = !details;
+    $('pull-requests').hidden = !details;
+    $('status').hidden = !details;
     let renderedWorkspace = null;
     return model => {
         const summary = briefSummary(model.brief);
@@ -18,6 +22,11 @@ export function createBriefRenderer(document, { details, onLink }) {
         if (model.pending) messages.push('Preparing update…');
         if (model.error) messages.push(model.error);
         $('status').textContent = messages.filter(Boolean).join(' · ');
+        $('current-status').textContent = !model.workspaceID ? 'Select a workspace'
+            : model.brief ? currentStatus(model.brief)
+            : model.error ? 'Could not update this session. Open Details.'
+            : 'Reading the current session…';
+        $('current-status').title = [currentStatus(model.brief), ...messages].filter(Boolean).join(' · ');
         $('details').disabled = !model.workspaceID;
         $('refresh').disabled = !model.workspaceID || model.loading || model.saving;
         $('save').disabled = !model.workspaceID || model.saving;
@@ -35,11 +44,9 @@ export function createBriefRenderer(document, { details, onLink }) {
         renderedWorkspace = model.workspaceID;
         const links = [];
         const prs = Array.isArray(model.brief?.pullRequests) ? model.brief.pullRequests : [];
-        const assessmentMode = !details && prs.some(pr => pullLink(pr.url));
-        if (assessmentMode && !model.brief?.goalPinned && text(prs[0]?.problem)) $('goal').textContent = prs[0].problem;
-        $('now-row').hidden = assessmentMode;
-        $('next-row').hidden = assessmentMode;
-        $('details').textContent = assessmentMode && model.brief?.needsYou ? 'Decision needed · Details' : 'Details';
+        $('now-row').hidden = false;
+        $('next-row').hidden = false;
+        $('details').textContent = 'Details';
         for (const pr of details ? prs : prs.slice(0, 1)) {
             const link = pullLink(pr.url);
             if (!link) continue;
