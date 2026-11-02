@@ -451,6 +451,14 @@ test('central Codex commands expose exact session-to-pane mappings and forward a
         await dispose.ready;
         assert.equal((await api.command('answer-codex-question', {})).ok, false);
         assert.equal((await api.command('load-codex-questions')).ok, true);
+        assert.equal((await api.command('load-codex-questions', { paneID: 'p' })).ok, true);
+        assert.deepEqual(await api.command('load-codex-questions', { paneID: 'separate-worker' }), {
+            ok: false, code: 'QUESTION_UNAVAILABLE',
+            error: 'The connected Codex server has no question for this pane. The worker may use a separate Codex server, or the question may have cleared. Use Go to pane to answer there.'
+        });
+        assert.equal(answered, null);
+        assert.equal(api.callsTo('terminal.send').length, 0);
+        assert.equal(api.callsTo('terminal.sendKey').length, 0);
         const snapshot = (await api.command('get-state')).snapshot;
         assert.equal(snapshot.codexQuestions[0].paneID, 'p');
         assert.equal(snapshot.codexQuestions[1].paneID, undefined);

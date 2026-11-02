@@ -45,6 +45,8 @@ Existing brief layouts migrate automatically. **Hide status line** restores the 
 
 The rail shows **Needs you**, **Running**, and **Done**. Claude permission cards include **Approve** and **Deny**; before sending a key, the plugin checks that the live prompt still matches the card. Codex permission cards offer **Go to pane**, where you answer Codex's native prompt. The plugin never sends Claude-style approval keystrokes to Codex. For Codex clarification questions, choose **Answer here** to read the question, select an option or type a reply, and **Send answer** directly from Swarm. **Go to pane** remains available.
 
+Central Codex answers require the question to belong to the connected local Codex server. Some terminal workers run through a separate server, which can leave their question marker visible while the connected server has no question to return. **Answer here** reports this limitation for the selected pane; use **Go to pane** for those workers. A notification without a visible approval menu is labelled as a notification, rather than an approval. Delayed notifications are ignored when the terminal visibly shows Codex working without a prompt.
+
 The timed **Auto** control can approve eligible requests while you are away. It works through Kelpi's permission provider for Claude and through a separate Codex `PermissionRequest` hook for safe Bash requests. Other requests stay with you. Auto has a time limit, an activity log, and [documented safeguards](docs/permissions.md).
 
 ## Move between Claude and Codex

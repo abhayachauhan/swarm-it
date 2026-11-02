@@ -148,7 +148,7 @@
 
     const handlers = {
         onTrustFolder: item => { void run('Trust folder', { command: `${L.CMD}trust-folder`, args: { itemID: item.id, promptHash: item.promptHash, confirm: true } }); },
-        onLoadQuestions: () => { void run('Codex questions', { command: `${L.CMD}load-codex-questions`, args: {} }); },
+        onLoadQuestions: item => { void run('Codex questions', { command: `${L.CMD}load-codex-questions`, args: item?.paneID ? { paneID: item.paneID } : {} }); },
         onQuestionWorkspace: async request => {
             if (request.paneID) { reveal(request.paneID, 'Go to workspace'); return; }
             if (busy || disposed) return;

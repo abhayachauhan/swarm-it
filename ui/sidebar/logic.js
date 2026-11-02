@@ -611,7 +611,7 @@
                 if (opts.locked) trust.disabled = true;
                 actions.append(trust);
             }
-            if (inputQuestion) actions.append(button(doc, 'Answer here', 'btn btn-primary', () => handlers.onLoadQuestions(), 'Read and answer Codex questions in Swarm'));
+            if (inputQuestion) actions.append(button(doc, 'Answer here', 'btn btn-primary', () => handlers.onLoadQuestions(item), 'Read and answer Codex questions in Swarm'));
             actions.append(button(doc, 'Go to pane', 'btn btn-primary', () => handlers.onAnswer(item), 'Show the pane so you can answer the prompt there'));
         } else {
             const yes = button(doc, 'Approve', 'btn btn-primary', () => handlers.onAttention('approve', item), 'Approve (Y)');

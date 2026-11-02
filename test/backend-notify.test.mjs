@@ -68,6 +68,17 @@ test('Codex parser requires a current menu; notification still raises a generic 
     const { item } = await onNotification(api, store, att, note('codex', { title: 'Codex' }));
     assert.equal(item.approvable, false);
     assert.match(item.text, /open its pane/);
+    assert.doesNotMatch(item.text, /needs approval/);
+});
+
+test('a delayed Codex notification cannot claim approval while the terminal is working', async () => {
+    const { api, store, att } = setup({ codex: '• Working (7m 33s • esc to interrupt)\n› Ask Codex to do anything\nGPT-6.1-Sol high · ~/repos\n← for agents · ? for shortcuts' });
+    applyStateChange(store, { kind: 'pane-upserted', paneID: 'codex', pane: { id: 'codex', agent: 'codex', status: 'waitingForInput', workspaceID: 'ws1' } });
+    const before = store.attention.slice();
+    assert.deepEqual(await onNotification(api, store, att, note('codex', { title: 'Codex', body: 'Waiting for approval' })), { ok: true, ignored: 'codex-working' });
+    assert.deepEqual(store.attention, before);
+    assert.equal(api.callsTo('terminal.sendKey').length, 0);
+    assert.equal(api.callsTo('terminal.send').length, 0);
 });
 
 test('Codex hook title identifies a pane whose Kelpi agent field is empty', async () => {

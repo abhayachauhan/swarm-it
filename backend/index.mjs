@@ -803,11 +803,17 @@ export function registerAll(api, deps = modules) {
         if (moved) await publish();
         return { ok: true, snapshot: snapshotNow() };
     });
-    command('load-codex-questions', async () => {
+    command('load-codex-questions', async args => {
         codexQuestions ??= (deps.createCodexQuestions ?? createCodexQuestions)({ onChange: () => {
             if (!disposed) serial(publish).catch(() => {});
         } });
-        try { await codexQuestions.refresh(); await publish(); return { ok: true }; }
+        try {
+            await codexQuestions.refresh(); await publish();
+            if (args.paneID && !snapshotNow().codexQuestions?.some(question => question.paneID === args.paneID)) {
+                return fail('The connected Codex server has no question for this pane. The worker may use a separate Codex server, or the question may have cleared. Use Go to pane to answer there.', 'QUESTION_UNAVAILABLE');
+            }
+            return { ok: true };
+        }
         catch (error) { return fail(`${text(error)}. Go to pane is still available; local shared-daemon Codex sessions are required.`, 'CODEX_UNAVAILABLE'); }
     });
     command('locate-codex-pane', async args => {

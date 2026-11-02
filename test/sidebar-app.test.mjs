@@ -8,6 +8,16 @@ const REQUEST_ID = 'Request:p-wait:2026-10-08T00:58:00.000Z';
 const sent = (app, name) => app.calls.filter(c => c.command === `local.swarm-view.${name}`);
 const labels = root => root.querySelectorAll('button').map(b => b.text);
 
+test('Answer here asks for the clicked Codex pane rather than unrelated server questions', async () => {
+    const snap = fixture();
+    Object.assign(snap.attention[0], { agent: 'codex', approvable: false, command: '',
+        promptBlock: 'Queued follow-up inputs\n? 1 question\n⇧← to answer' });
+    const app = await bootApp({ snapshot: snap });
+    await app.pointerClick(app.button(app.card(0), 'Answer here'));
+    assert.deepEqual(sent(app, 'load-codex-questions').map(call => call.args), [{ paneID: snap.attention[0].paneID }]);
+    assert.equal(sent(app, 'answer-codex-question').length, 0);
+});
+
 test('a double-click that collapses a card cannot land on Approve: Approve and Deny lock for 400 ms after an expand or collapse', async () => {
     const snap = fixture();
     snap.attention[0].command = 'echo one\necho two\necho three\necho four';

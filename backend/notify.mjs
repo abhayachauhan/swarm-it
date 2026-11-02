@@ -222,12 +222,18 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
             catch { screenText = ''; }
         }
         const prompt = parseCodexPrompt(screenText);
+        // A delayed hook can arrive after Codex has already continued. A notification alone
+        // is not evidence that an approval is still waiting.
+        const working = screenText.split('\n').filter(line => line.trim()).slice(-10)
+            .some(line => /^\s*[•·]?\s*Working\s*\([^\n]*esc to interrupt\)/i.test(line));
+        if (!prompt && working) return { ok: true, ignored: 'codex-working' };
         const block = prompt?.block ?? 'Codex approval requested';
         const { item } = await addItem(att, {
             type: 'Request', paneID, agent: 'codex', promptHash: promptHash(block), promptBlock: prompt?.block,
             approvable: false, text: prompt?.inputQuestion || prompt?.folderTrust
                 ? `${label}: ${prompt.question}`
-                : `${label} needs approval in Codex; open its pane to respond`,
+                : prompt ? `${label} needs approval in Codex; open its pane to respond`
+                    : `${label}: Codex sent a notification; open its pane to check`,
             ...(other ? { swarmName: other.swarm.name, swarmWorkspaceID: other.swarm.workspaceID } : {})
         });
         return { ok: true, item };
