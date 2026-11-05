@@ -821,6 +821,7 @@ export function registerAll(api, deps = modules) {
         return locateCodexPane(api, st, args.threadID, question?.name ?? (typeof args.name === 'string' ? args.name : undefined));
     });
     command('answer-codex-question', async args => {
+        if (args.itemID) return A.answerNativeQuestion(api, st, args);
         if (!codexQuestions) return fail('Load questions first.', 'CODEX_UNAVAILABLE');
         try { const result = await codexQuestions.answer(args); await publish(); return result; }
         catch (error) { return fail(text(error), 'QUESTION_CHANGED'); }

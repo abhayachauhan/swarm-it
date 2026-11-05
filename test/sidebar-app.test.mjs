@@ -252,3 +252,10 @@ test('Codex question workspace button resolves a missing pane link before reveal
         assert.equal(sent(app, 'answer-codex-question').length, 0);
     }
 });
+
+test('native worker choices send the exact card and option, without using the shared server',async()=>{
+ const snap=fixture();Object.assign(snap.attention[0],{agent:'codex',approvable:false,command:'',promptBlock:'Queued follow-up inputs\n1 of 2\nQuestion?',nativeQuestion:{options:['Permit three checks','Use prepared builds','Other']}});
+ const app=await bootApp({snapshot:snap});await app.pointerClick(app.button(app.card(0),'Use prepared builds'));
+ assert.deepEqual(sent(app,'answer-codex-question').map(c=>c.args),[{itemID:snap.attention[0].id,promptHash:snap.attention[0].promptHash,option:1}]);
+ assert.equal(sent(app,'load-codex-questions').length,0);
+});

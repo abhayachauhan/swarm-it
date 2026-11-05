@@ -124,6 +124,22 @@ export function parseCodexPrompt(captureText) {
     const lines = captureText.replace(ANSI, '').split('\n').map(line => line.trim());
     const filled = lines.map((line, index) => line ? index : -1).filter(index => index >= 0);
     const start = filled[Math.max(0, filled.length - 25)] ?? 0;
+    // Expanded native clarification, including narrow panes that wrap the question.
+    const heading = lines.findLastIndex(line => /^(?:[•·]\s+)?Queued follow-up inputs$/.test(line));
+    const submit = lines.findLastIndex(line => /^enter\s+submit\b/i.test(line));
+    if (heading >= 0 && submit > heading && submit >= lines.length - 5) {
+        const counter = lines.findIndex((line, i) => i > heading && /^\d+ of \d+$/.test(line));
+        const first = lines.findIndex((line, i) => i > counter && /^[›❯>]?[\s]*1[.)]\s+/.test(line));
+        const choices = lines.slice(first, submit).filter(Boolean).map(line => /^([›❯>]?)\s*(\d+)[.)]\s+(.+)$/.exec(line));
+        if (counter > heading && first > counter + 1 && choices.length && choices.length <= 12
+            && choices.every((m, i) => m && Number(m[2]) === i + 1)) {
+            const options = choices.map(m => m[3]);
+            return { question: lines.slice(counter + 1, first).filter(Boolean).join(' '),
+                block: lines.slice(heading, submit + 1).join('\n'), command: '', approvable: false,
+                inputQuestion: true, expandedQuestion: true, options,
+                selected: choices.findIndex(m => !!m[1]), counter: lines[counter] };
+        }
+    }
     for (let q = lines.length - 1; q >= start; q -= 1) {
         const queued = /^\?\s+([1-9]\d*)\s+questions?$/i.exec(lines[q]);
         if (queued && lines.slice(Math.max(start, q - 2), q).some(line => /^(?:[•·]\s+)?Queued follow-up inputs$/i.test(line))) {
@@ -230,6 +246,7 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
         const block = prompt?.block ?? 'Codex approval requested';
         const { item } = await addItem(att, {
             type: 'Request', paneID, agent: 'codex', promptHash: promptHash(block), promptBlock: prompt?.block,
+            ...(prompt?.expandedQuestion ? { nativeQuestion: { options: prompt.options } } : {}),
             approvable: false, text: prompt?.inputQuestion || prompt?.folderTrust
                 ? `${label}: ${prompt.question}`
                 : prompt ? `${label} needs approval in Codex; open its pane to respond`

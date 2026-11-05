@@ -436,3 +436,31 @@ export async function trustFolder(api, store, args) {
     await handleItem(store.att, item.id);
     return { ok: true, itemID: item.id, paneID: item.paneID };
 }
+
+/** A user clicks a displayed native choice. Each key is bound to a fresh terminal revision. */
+export async function answerNativeQuestion(api, store, args) {
+    const item = store.attention.find(i => i.id === args.itemID);
+    const original = parseCodexPrompt(item?.promptBlock);
+    if (!item || item.handledAt || item.agent !== 'codex' || !ownedRequestPane(store, item.paneID)
+        || item.promptHash !== args.promptHash || !original?.expandedQuestion
+        || !Number.isInteger(args.option) || !original.options[args.option]) return fail('This question changed. Review the current card.', 'STALE');
+    if (/^Other\b/i.test(original.options[args.option])) return fail('Open the pane to type a custom answer.', 'CUSTOM_ANSWER');
+    const signature = p => JSON.stringify([p?.question, p?.counter, p?.options]);
+    try {
+        for (let step = 0; step <= 12; step++) {
+            const read = await withTimeout(api.terminal.read(item.paneID), CAPTURE_TIMEOUT_MS, 'checking Codex question');
+            const prompt = parseCodexPrompt(read.text);
+            if (!read.altScreen || !Number.isSafeInteger(read.revision) || read.revision < 0 || !prompt?.expandedQuestion
+                || prompt.selected < 0 || signature(prompt) !== signature(original)) return fail('This question changed. Open the pane or refresh.', 'STALE');
+            if (prompt.selected === args.option) {
+                await api.terminal.sendKey(item.paneID, 'enter', { ifRevision: read.revision });
+                await handleItem(store.att, item.id);
+                return { ok: true };
+            }
+            if (step === 12) break;
+            await api.terminal.sendKey(item.paneID, prompt.selected < args.option ? 'down' : 'up', { ifRevision: read.revision });
+            await new Promise(resolve => setTimeout(resolve, 75));
+        }
+        return fail('Codex did not select that answer. Open the pane to continue.', 'NOT_SELECTED');
+    } catch (error) { return fail(`Answer was not confirmed: ${message(error)}`, 'SEND_FAILED'); }
+}

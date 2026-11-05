@@ -147,6 +147,7 @@
     }
 
     const handlers = {
+        onQuestionChoice: (item, option) => { void run('Answer Codex', { command: `${L.CMD}answer-codex-question`, args: { itemID: item.id, promptHash: item.promptHash, option } }); },
         onTrustFolder: item => { void run('Trust folder', { command: `${L.CMD}trust-folder`, args: { itemID: item.id, promptHash: item.promptHash, confirm: true } }); },
         onLoadQuestions: item => { void run('Codex questions', { command: `${L.CMD}load-codex-questions`, args: item?.paneID ? { paneID: item.paneID } : {} }); },
         onQuestionWorkspace: async request => {

@@ -567,6 +567,7 @@
         pane.setAttribute('title', String(item.paneID ?? ''));
         root.append(pane);
         const unrecognised = item.approvable === false;
+        const nativeQuestion = item.nativeQuestion;
         const inputQuestion = item.agent === 'codex' && /^Queued follow-up inputs\b/m.test(item.promptBlock ?? '');
         const folderTrust = item.agent === 'codex' && /Trust this folder\?/i.test(item.promptBlock ?? '');
         const shown = cardCommand(item);
@@ -611,7 +612,8 @@
                 if (opts.locked) trust.disabled = true;
                 actions.append(trust);
             }
-            if (inputQuestion) actions.append(button(doc, 'Answer here', 'btn btn-primary', () => handlers.onLoadQuestions(item), 'Read and answer Codex questions in Swarm'));
+            if (nativeQuestion) for (const [index, label] of nativeQuestion.options.entries()) actions.append(button(doc, label, 'btn btn-primary', () => /^Other\b/i.test(label) ? handlers.onAnswer(item) : handlers.onQuestionChoice(item, index)));
+            if (inputQuestion && !nativeQuestion) actions.append(button(doc, 'Answer here', 'btn btn-primary', () => handlers.onLoadQuestions(item), 'Read and answer Codex questions in Swarm'));
             actions.append(button(doc, 'Go to pane', 'btn btn-primary', () => handlers.onAnswer(item), 'Show the pane so you can answer the prompt there'));
         } else {
             const yes = button(doc, 'Approve', 'btn btn-primary', () => handlers.onAttention('approve', item), 'Approve (Y)');
@@ -837,7 +839,7 @@
         head.append(h(doc, 'span', 'dim', 'Codex questions'), button(doc, 'Refresh', 'btn', () => handlers.onLoadQuestions()));
         cards.push(head);
         if (!snapshot.codexQuestions.length) cards.push(h(doc, 'p', 'dim', snapshot.codexQuestionsConnected === false
-            ? 'Not connected. Refresh or use Go to pane.' : 'No pending questions on the local Codex server.'));
+            ? 'Not connected. Refresh or use Go to pane.' : 'No server questions. Worker questions appear below.'));
         for (const request of snapshot.codexQuestions) {
             const card = h(doc, 'div', 'att');
             card.append(h(doc, 'div', 'att-text', request.paneLabel || request.name || request.threadID));
