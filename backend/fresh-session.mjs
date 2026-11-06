@@ -50,9 +50,10 @@ async function freshAttempt(api, store, args = {}, context = {}, options = {}) {
         const loaded = await (options.readMessages ?? transcriptMessages)(transcript.path, agent);
         if (loaded.omitted && !loaded.tailCount) return fail('Recent conversation text was not found in the transcript tail. The source was left open.', 'NO_RECENT_CONTEXT');
         if (!loaded.messages?.length) return fail('The source transcript has no readable conversation.', 'EMPTY_TRANSCRIPT');
-        const normal = text => text.replace(/\s/g, '');
+        const normal = text => text.replace(/^\s*```[^\n]*$/gm, '').replace(/!?\[([^\[\]\n]+)\]\([^)\n]*\)/g, '$1').replace(/[^\p{L}\p{N}]/gu, '');
         const latestAssistant = loaded.messages.filter(m => m.role === 'assistant').at(-1)?.text;
-        if (agent === 'claude' && (loaded.cwd !== source.workingDirectory || !latestAssistant || !normal(screen).includes(normal(latestAssistant).slice(-120)))) return fail('The saved Claude session does not match the visible conversation or directory. The source was left open.', 'NO_SESSION');
+        const tail = normal((latestAssistant ?? '').slice(-8192)).slice(-120);
+        if (agent === 'claude' && (loaded.cwd !== source.workingDirectory || tail.length < 24 || !normal(lines.join('\n')).includes(tail))) return fail('The saved Claude session does not match the visible conversation or directory. The source was left open.', 'NO_SESSION');
         const first = loaded.messages.find(m => m.role === 'user')?.text.slice(0, 4000) ?? '';
         const recent = loaded.messages.map(m => `${m.role}: ${m.text}`).join('\n').slice(-18000);
         const summary = await (options.generate ?? generateWorkspaceBrief)({context: JSON.stringify({firstGoal:first,recent})}, {timeoutMs:Math.min(10_000, Math.max(1, deadline-Date.now()-12_000))});

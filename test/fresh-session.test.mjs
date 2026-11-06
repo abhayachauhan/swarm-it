@@ -73,3 +73,21 @@ test('stale Claude transcript or mismatched directory cannot clear the visible c
   assert.deepEqual(await freshSession(api,{settings:{}},{paneID:'source'},{},options),{ok:false,code:'NO_SESSION',error:'The saved Claude session does not match the visible conversation or directory. The source was left open.'});assert.equal(restarted(),undefined);assert.equal(api.callsTo('terminal.send').length,0);
  }
 });
+test('rendered Claude Markdown matches its exact transcript without clearing a different session',async()=>{
+ const {api,options,restarted}=setup();
+ api.captureStore.source=empty.replace('Compaction limit. No builds or workers started.','Next\nUse /compact if you stay on F012, otherwise /clear.');
+ options.readMessages=async()=>({cwd:'/tmp/repo',messages:[{role:'user',text:'Continue the current task'},{role:'assistant',text:'**Next**\nUse `/compact` if you stay on F012, otherwise `/clear`.'}]});
+ assert.equal((await freshSession(api,{settings:{}},{paneID:'source'},{},options)).ok,true);assert.equal(restarted().p,'source');assert.equal(restarted().deps.fresh.session,id);assert.equal(api.callsTo('terminal.send').length,0);
+});
+test('formatting-only and short Markdown replies cannot bypass source verification',async()=>{
+ for(const text of ['***','___','~~','**Merged**','[PR #123](https://github.com/o/r/pull/123)']){
+  const {api,options,restarted}=setup();options.readMessages=async()=>({cwd:'/tmp/repo',messages:[{role:'user',text:'Previous task'},{role:'assistant',text}]});
+  assert.deepEqual(await freshSession(api,{settings:{}},{paneID:'source'},{},options),{ok:false,code:'NO_SESSION',error:'The saved Claude session does not match the visible conversation or directory. The source was left open.'});assert.equal(restarted(),undefined);
+ }
+});
+test('headings, emphasis, links and ANSI styling match the rendered reply',async()=>{
+ const {api,options,restarted}=setup();const rendered='Next\nThe current findings and validation evidence are saved in the review notes. Read the saved handoff before continuing.';
+ api.captureStore.source=empty.replace('Compaction limit. No builds or workers started.',rendered.replace('saved handoff','\x1b[32msaved handoff\x1b[0m'));
+ options.readMessages=async()=>({cwd:'/tmp/repo',messages:[{role:'user',text:'Continue the current task'},{role:'assistant',text:'## Next\nThe _current findings_ and ~~validation~~ evidence are saved in the **review notes**. Read the [saved handoff](https://example.com/plan) before continuing.'}]});
+ assert.equal((await freshSession(api,{settings:{}},{paneID:'source'},{},options)).ok,true);assert.equal(restarted().p,'source');
+});
