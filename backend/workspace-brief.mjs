@@ -88,7 +88,7 @@ function parseMessages(text, agent) {
     return messages;
 }
 
-async function transcriptMessages(path, agent) {
+export async function transcriptMessages(path, agent) {
     // Read bounded windows through one regular-file handle. Large transcripts never get loaded whole.
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
@@ -101,10 +101,18 @@ async function transcriptMessages(path, agent) {
         };
         const head = await read(0, Math.min(stat.size, WINDOW_BYTES));
         if (stat.size <= WINDOW_BYTES) return { messages: parseMessages(head, agent), references: pullReferences(head) };
-        const start = Math.max(WINDOW_BYTES, stat.size - WINDOW_BYTES);
-        const tail = await read(start, Math.min(WINDOW_BYTES, stat.size - start));
-        return { messages: [...parseMessages(head.slice(0, head.lastIndexOf('\n')), agent),
-            ...parseMessages(tail.slice(tail.indexOf('\n') + 1), agent)], references: pullReferences(head + '\n' + tail) };
+        // Native transcripts can put a tiny text response in a very large JSON row.
+        // Grow the tail window until a complete message is found, without loading an unbounded file.
+        let size = WINDOW_BYTES, start, tail, tailMessages;
+        do {
+            size = Math.min(stat.size, size * 2, 8 * 1024 * 1024);
+            start = Math.max(0, stat.size - size);
+            tail = await read(start, size);
+            tailMessages = parseMessages(start ? tail.slice(tail.indexOf('\n') + 1) : tail, agent);
+        } while (!tailMessages.length && start && size < 8 * 1024 * 1024);
+        const messages = start ? [...parseMessages(head.slice(0, head.lastIndexOf('\n')), agent), ...tailMessages] : tailMessages;
+        const planPaths = [...new Set(messages.flatMap(m => [...m.text.matchAll(/(?:~|\/)[A-Za-z0-9_./-]+\.md\b/g)].map(m => m[0])))].slice(-32);
+        return { omitted: start > 0, tailCount: tailMessages.length, planPaths, messages, references: pullReferences(head + '\n' + tail) };
     } finally { await file.close(); }
 }
 

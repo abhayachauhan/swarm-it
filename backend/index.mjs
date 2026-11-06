@@ -1,3 +1,4 @@
+import { freshSession } from './fresh-session.mjs';
 import { createWorkspaceBriefs } from './workspace-brief.mjs';
 import { generateWorkspaceBrief } from './brief-generator.mjs';
 import { createBriefPulls } from './brief-pulls.mjs';
@@ -28,7 +29,7 @@ export const COMMANDS = [
     'get-workspace-brief', 'edit-workspace-brief', 'open-workspace-brief', 'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
     'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
-    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff'
+    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff', 'fresh-session'
 ].map(name => `${PLUGIN_ID}.${name}`);
 export const COUNTS_ITEM = `${PLUGIN_ID}.counts`;
 export const SNAPSHOT_EVENT = 'snapshot';
@@ -875,6 +876,12 @@ export function registerAll(api, deps = modules) {
     command('send-to-worker', async args => needPane(args) ?? X.sendToWorker(api, st, args.paneID, args.text));
     command('handoff', async args => H.handoff(api, st, args));
     // Header/menu/keyboard commands must reject on refusal: Kelpi ignores an ok:false reply.
+    disposers.push(api.commands.register(`${PLUGIN_ID}.fresh-session`, async (args, context) => {
+        await ready;
+        const result = await freshSession(api, st, args ?? {}, context ?? {});
+        if (!result.ok) throw Object.assign(new Error(`${result.error}${result.handoffPath ? ` Saved summary: ${result.handoffPath}.` : ''}${result.sourceSessionID ? ` Original session: ${result.sourceSessionID}.` : ''}`), result);
+        return result;
+    }));
     disposers.push(api.commands.register(`${PLUGIN_ID}.request-handoff`, async (args, context) => {
         await ready;
         const result = await serial(() => H.requestHandoff(api, st,

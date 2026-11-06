@@ -245,3 +245,31 @@ test('a changed screen refuses the guarded suggestion restart without resuming',
     assert.deepEqual(result, { ok: false, error: 'send failed: screen changed', code: 'SEND_FAILED' });
     assert.equal(api.captureStore.c1, before); assert.deepEqual(keys(api), []);
 });
+
+test('fresh continuation keeps the same pane, uses guarded exit, and starts either CLI without resume',async()=>{
+ for(const agent of ['claude','codex']){
+  const api=setup({screen:agent==='codex'?codexScreen():claudeScreen(),pane:{agent}});
+  api.terminal.read=async()=>({text:api.captureStore.c1,altScreen:true,revision:42});
+  const send=api.terminal.send;api.terminal.send=async(p,text,o)=>{if(text==='/exit')assert.deepEqual(o,{ifRevision:42});return send(p,text,o);};
+  const flow=await restartAgent(api,createStore(api),'c1',{...noSleep,fresh:{path:'/tmp/summary.md',agent,session:SID}});
+  assert.equal((await flow.finished).ok,true);
+  const command=sent(api).at(-1);assert.match(command,new RegExp(`^${agent}${agent==='claude'?' --model opus':''} '`));assert.match(command,/\/tmp\/summary.md/);assert.doesNotMatch(command,/--resume|codex resume/);assert.equal(api.callsTo('panes.close').length,0);
+ }
+});
+test('fresh continuation refuses an old session ID before quitting',async()=>{
+ const api=setup();const flow=await restartAgent(api,createStore(api),'c1',{...noSleep,fresh:{path:'/tmp/summary.md',agent:'claude',session:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'}});
+ assert.deepEqual(flow.result,{ok:false,error:'The source session changed; the saved summary was kept.',code:'SESSION_CHANGED'});assert.deepEqual(sent(api),[]);
+});
+
+test('fresh Claude handles a verified dim suggestion on the main screen and a wrapped shell launch',async()=>{
+ const api=setup({screen:claudeScreen('Check again')});
+ api.terminal.read=async()=>({text:claudeScreen('Check again'),revision:42,cursor:{col:2},altScreen:false});
+ api.terminal.watch=async()=>({subscription:'ghost',base64:Buffer.from(claudeScreen('\x1b[2mCheck again\x1b[22m')).toString('base64')});api.terminal.unwatch=async()=>{};
+ const send=api.terminal.send;api.terminal.send=async(p,text,o)=>{const r=await send(p,text,o);if(o?.bare)api.captureStore.c1=api.captureStore.c1.match(/.{1,80}/g).join('\n');return r;};
+ const flow=await restartAgent(api,createStore(api),'c1',{...noSleep,fresh:{path:'/tmp/a-long-handoff-path-for-testing-the-wrapped-launch-command-1234567890.md',agent:'claude',session:SID}});
+ assert.equal((await flow.finished).ok,true);assert.deepEqual(keys(api),['enter']);
+});
+test('source fingerprint change before exit never quits the source',async()=>{
+ const api=setup();const flow=await restartAgent(api,createStore(api),'c1',{...noSleep,fresh:{path:'/tmp/summary.md',agent:'claude',session:SID,unchanged:async()=>false}});
+ assert.deepEqual(flow.result,{ok:false,error:'The source conversation changed after summarising; try again.',code:'SESSION_CHANGED'});assert.deepEqual(sent(api),[]);
+});

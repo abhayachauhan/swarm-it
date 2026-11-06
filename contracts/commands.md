@@ -273,3 +273,7 @@ Risk is an inference from the description/files/diff excerpt, not a full review.
 
 
 The compact brief now renders a single current-progress sentence with Details. Goals, titles, pull-request assessments, timestamps and plans remain in Details or the line’s tooltip. The toolbar container is local.swarm-view.brief-toolbar, with the native kelpi.topbar followed by the status view in a 64-pixel band. Existing workspace brief containers migrate by selecting the new toolbar before restoring kelpi.workspace. Custom workspace views are preserved. Hide status line restores kelpi.topbar.
+
+### Fresh session and continue
+
+`local.swarm-view.fresh-session` accepts an optional `paneID`; pane-header actions use the current pane. The command saves a private tool-free Sonnet summary and starts a fresh conversation in the same pane and CLI, without native resume flags. Claude launches Opus; Codex uses its configured default. Original transcripts and handoff-plan references remain recoverable. Busy sessions, background agents, drafts and open questions are refused. Summary generation has a ten-second deadline; failures before exit keep the old session open. Failures after exit include the saved summary path. Duplicate in-flight requests are refused. The `freshSessionEnabled` plugin setting disables the button action. No cloud changes or approval decisions are authorised by this action.

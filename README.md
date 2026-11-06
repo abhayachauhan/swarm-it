@@ -106,3 +106,13 @@ kelpi plugin validate .
 ```
 
 [Feature guide](docs/features.md) · [Setup](docs/setup.md) · [Permissions](docs/permissions.md) · [Historical Claude/Codex implementation plan](docs/claude-codex-plan.md)
+
+## Start fresh without losing the goal
+
+Choose **Fresh session and continue (summarise context)** in a Claude or Codex pane header. A tool-free Sonnet call saves a private summary with the goal, progress, next step, original user goal and recent conversation. This uses your Claude login and usage. The same tool then starts a fresh conversation in the same pane and directory, without resuming the old session ID. The workspace layout and Swarm pane identity stay intact.
+
+The summary comes from the saved transcript, so a conversation at its compaction limit does not need to answer another prompt. Claude starts Opus; Codex uses its configured default. Existing handoff-plan references are carried into the summary. The full old transcript stays on disk. A summary failure leaves the source conversation open. If the new CLI fails to launch after the old one exits, the saved summary and original session ID remain available for recovery. Leave the composer empty and finish background agents first. Historical approvals do not authorise new actions. A 10-second summary deadline keeps the operation within Kelpi's command time limit; a slow summary fails without clearing the conversation.
+
+Disable this action with the **Allow the Fresh session and continue button** plugin setting.
+
+Use this on a coordinator or ordinary conversation. Manifest workers must finish or stop first, so their result tracking cannot accidentally attach to a new session.

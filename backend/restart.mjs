@@ -45,17 +45,17 @@ export async function typeResumeLine(api, paneID, line, sleep = pause) {
     if (problem) return fail(problem, 'BAD_TEXT');
     const typed = async () => {
         await sleep(TYPE_SETTLE_MS);
-        try { return (await capturePane(api, paneID, 10)).split('\n').filter(l => l.trim()).at(-1) ?? ''; } catch { return ''; }
+        try { return (await capturePane(api, paneID, Math.min(4096, Math.max(10, line.length + 2)))).replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').split('\n').map(l => l.trimEnd()).filter(l => l.trim()).join('').trimEnd(); } catch { return ''; }
     };
     try {
         await api.terminal.send(paneID, line, { bare: true });
         let screen = await typed();
-        if (screen.includes(`${line}~`)) {
+        if (screen.endsWith(`${line}~`)) {
             await api.terminal.sendKey(paneID, 'backspace');
             screen = await typed();
-            if (screen.includes(`${line}~`)) return fail('the shell kept a stray ~ after the resume line; nothing was run', 'TYPED_WRONG');
+            if (screen.endsWith(`${line}~`)) return fail('the shell kept a stray ~ after the resume line; nothing was run', 'TYPED_WRONG');
         }
-        if (!screen.includes(line)) return fail('the resume line did not reach the shell as typed; nothing was run', 'TYPED_WRONG');
+        if (!screen.endsWith(line)) return fail('the resume line did not reach the shell as typed; nothing was run', 'TYPED_WRONG');
         await api.terminal.sendKey(paneID, 'enter');
         return { ok: true, paneID };
     } catch (error) {
@@ -112,13 +112,24 @@ export async function restartAgent(api, store, paneID, deps = {}) {
         }
     }
     if (typeof session !== 'string' || !SESSION_ID.test(session)) return done(fail('no Claude or Codex session is known for this pane', 'NO_SESSION'));
-    const resumeLine = codex ? `codex resume ${session}` : `claude --resume ${session}`;
+    if (deps.fresh && (!atInput || deps.fresh.session !== session || deps.fresh.agent !== agent)) return done(fail('The source session changed; the saved summary was kept.', 'SESSION_CHANGED'));
+    const quote = value => "'" + value.replace(/'/g, "'\"'\"'") + "'";
+    const freshPrompt = deps.fresh ? `Read ${deps.fresh.path} and follow its continuation instructions.` : null;
+    const resumeLine = deps.fresh ? `${agent}${codex ? "" : " --model opus"} ${quote(freshPrompt)}` : codex ? `codex resume ${session}` : `claude --resume ${session}`;
     if (!atInput) {
         if (pane.agentSessionID) return done(fail(`${name} is busy in this pane; wait for it to finish`, 'BUSY'));
         const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
         return done(sent.ok ? { ok: true, paneID, session, resumed: true } : sent);
     }
 
+    if (deps.fresh) {
+        if (deps.fresh.unchanged && !await deps.fresh.unchanged()) return done(fail('The source conversation changed after summarising; try again.', 'SESSION_CHANGED'));
+        const read = await api.terminal.read(paneID);
+        if ((codex && !read.altScreen) || !Number.isSafeInteger(read.revision) || read.revision < 0) return done(fail('The source changed before clearing; try again.', 'SESSION_CHANGED'));
+        if (!(codex ? codexInputEmpty(read.text) : claudeInputEmpty(read.text) || suggestionRevision === read.revision) || parsePrompt(read.text) || parseCodexPrompt(read.text)
+            || BACKGROUND.test(read.text) || /(?:esc|ctrl\+c) to interrupt/i.test(read.text.split("\n").filter(l => l.trim()).slice(-12).join("\n"))) return done(fail('The source is no longer idle with an empty input box.', 'SESSION_CHANGED'));
+        suggestionRevision = read.revision;
+    }
     let quit;
     if (suggestionRevision !== null) {
         try {
@@ -129,7 +140,7 @@ export async function restartAgent(api, store, paneID, deps = {}) {
     if (!quit.ok) return done(quit);
 
     const finished = (async () => {
-        for (let waited = 0; waited < timeoutMs; waited += EXIT_POLL_MS) {
+        for (let waited = 0; waited < timeoutMs && (!deps.deadline || Date.now() < deps.deadline - 2500); waited += EXIT_POLL_MS) {
             await sleep(EXIT_POLL_MS);
             const now = await freshPane(api, paneID);
             if (!now) return fail('the pane closed', 'NO_PANE');

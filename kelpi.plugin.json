@@ -24,6 +24,8 @@
       ] }
     ],
     "menus": [
+      { "id": "local.swarm-view.fresh-session.header", "command": "local.swarm-view.fresh-session", "placement": "pane.header", "group": "Swarm", "order": 15, "when": { "pane.type": "shell" } },
+      { "id": "local.swarm-view.fresh-session.pane", "command": "local.swarm-view.fresh-session", "placement": "pane", "group": "Swarm", "order": 15, "when": { "pane.type": "shell" } },
       { "id": "local.swarm-view.run-suggested.header", "command": "local.swarm-view.run-suggested", "placement": "pane.header", "group": "Suggested command", "order": 10, "when": { "pane.type": "shell" } },
       { "id": "local.swarm-view.run-suggested.pane", "command": "local.swarm-view.run-suggested", "placement": "pane", "group": "Suggested command", "order": 10, "when": { "pane.type": "shell" } },
       { "id": "local.swarm-view.copy-suggested.pane", "command": "local.swarm-view.copy-suggested", "placement": "pane", "group": "Suggested command", "order": 20, "when": { "pane.type": "shell" } },
@@ -33,6 +35,7 @@
       { "id": "local.swarm-view.handoff.pane", "command": "local.swarm-view.request-handoff", "placement": "pane", "group": "Swarm", "order": 20, "when": { "pane.type": "shell" } }
     ],
     "commands": [
+      { "id": "local.swarm-view.fresh-session", "title": "Fresh session and continue (summarise context)", "icon": "restart" },
       { "id": "local.swarm-view.focus-rail", "title": "Swarm: focus thread rail", "shortcut": "ctrl+alt+j" },
       { "id": "local.swarm-view.locate-codex-pane", "title": "Swarm: find Codex session workspace" },
       { "id": "local.swarm-view.load-codex-questions", "title": "Swarm: load Codex questions" },
@@ -76,6 +79,7 @@
       { "id": "local.swarm-view.counts", "placement": "statusbar", "text": "Swarm 0/0/0", "tooltip": "Swarm: waiting / running / finished", "tone": "default", "command": "local.swarm-view.focus-rail" }
     ],
     "settings": {
+      "freshSessionEnabled": { "title": "Allow the Fresh session and continue button", "type": "boolean", "default": true },
       "briefEnabled": { "title": "Create automatic workspace briefs using Claude Sonnet", "type": "boolean", "default": false },
       "autoHide": { "title": "Move workers into the shared Workers workspace", "type": "boolean", "default": true },
       "autoCleanMinutes": { "title": "Close finished workers after this many minutes (0 = never)", "type": "number", "default": 10 },
