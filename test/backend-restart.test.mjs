@@ -251,9 +251,9 @@ test('fresh continuation keeps the same pane, uses guarded exit, and starts eith
   const api=setup({screen:agent==='codex'?codexScreen():claudeScreen(),pane:{agent}});
   api.terminal.read=async()=>({text:api.captureStore.c1,altScreen:true,revision:42});
   const send=api.terminal.send;api.terminal.send=async(p,text,o)=>{if(text==='/exit')assert.deepEqual(o,{ifRevision:42});return send(p,text,o);};
-  const flow=await restartAgent(api,createStore(api),'c1',{...noSleep,fresh:{path:'/tmp/summary.md',agent,session:SID}});
+  const flow=await restartAgent(api,createStore(api),'c1',{...noSleep,fresh:{path:'/tmp/summary.md',agent,session:SID,cwd:'/tmp/repo'}});
   assert.equal((await flow.finished).ok,true);
-  const command=sent(api).at(-1);assert.match(command,new RegExp(`^${agent}${agent==='claude'?' --model opus':''} '`));assert.match(command,/\/tmp\/summary.md/);assert.doesNotMatch(command,/--resume|codex resume/);assert.equal(api.callsTo('panes.close').length,0);
+  const command=sent(api).at(-1);assert.match(command,new RegExp(`^cd '/tmp/repo' && ${agent}${agent==='claude'?' --model opus':''} '`));assert.match(command,/\/tmp\/summary.md/);assert.doesNotMatch(command,/--resume|codex resume/);assert.equal(api.callsTo('panes.close').length,0);
  }
 });
 test('fresh continuation refuses an old session ID before quitting',async()=>{
@@ -272,4 +272,9 @@ test('fresh Claude handles a verified dim suggestion on the main screen and a wr
 test('source fingerprint change before exit never quits the source',async()=>{
  const api=setup();const flow=await restartAgent(api,createStore(api),'c1',{...noSleep,fresh:{path:'/tmp/summary.md',agent:'claude',session:SID,unchanged:async()=>false}});
  assert.deepEqual(flow.result,{ok:false,error:'The source conversation changed after summarising; try again.',code:'SESSION_CHANGED'});assert.deepEqual(sent(api),[]);
+});
+test('a space at a shell wrap boundary is preserved before the launch is submitted',async()=>{
+ const api=setup({screen:SHELL,pane:{agentSessionID:null}});const send=api.terminal.send;
+ api.terminal.send=async(p,text,o)=>{const r=await send(p,text,o);if(o?.bare){const cut=text.indexOf(' and ')+1;api.captureStore.c1='$ '+text.slice(0,cut)+'\n'+text.slice(cut);}return r;};
+ const {typeResumeLine}=await import('../backend/restart.mjs');assert.equal((await typeResumeLine(api,'c1',"claude --model opus 'Read /tmp/summary.md and follow it.'",async()=>{})).ok,true);assert.deepEqual(keys(api),['enter']);
 });

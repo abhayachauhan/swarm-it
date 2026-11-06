@@ -88,6 +88,14 @@ function parseMessages(text, agent) {
     return messages;
 }
 
+function lastTranscriptCwd(text) {
+    for (const line of text.split('\n').reverse()) {
+        try { const row = JSON.parse(line); const cwd = row.cwd ?? row.payload?.cwd; if (typeof cwd === 'string' && cwd.startsWith('/')) return cwd; } catch { /* partial line */ }
+    }
+    return null;
+}
+const transcriptPlans = messages => [...new Set(messages.flatMap(m => [...m.text.matchAll(/(?:~|\/)[A-Za-z0-9_./-]+\.md\b/g)].map(m => m[0])))].slice(-32);
+
 export async function transcriptMessages(path, agent) {
     // Read bounded windows through one regular-file handle. Large transcripts never get loaded whole.
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -100,7 +108,7 @@ export async function transcriptMessages(path, agent) {
             return buffer.toString('utf8', 0, result.bytesRead);
         };
         const head = await read(0, Math.min(stat.size, WINDOW_BYTES));
-        if (stat.size <= WINDOW_BYTES) return { messages: parseMessages(head, agent), references: pullReferences(head) };
+        if (stat.size <= WINDOW_BYTES) { const messages = parseMessages(head, agent); return { messages, cwd: lastTranscriptCwd(head), planPaths: transcriptPlans(messages), references: pullReferences(head) }; }
         // Native transcripts can put a tiny text response in a very large JSON row.
         // Grow the tail window until a complete message is found, without loading an unbounded file.
         let size = WINDOW_BYTES, start, tail, tailMessages;
@@ -111,8 +119,8 @@ export async function transcriptMessages(path, agent) {
             tailMessages = parseMessages(start ? tail.slice(tail.indexOf('\n') + 1) : tail, agent);
         } while (!tailMessages.length && start && size < 8 * 1024 * 1024);
         const messages = start ? [...parseMessages(head.slice(0, head.lastIndexOf('\n')), agent), ...tailMessages] : tailMessages;
-        const planPaths = [...new Set(messages.flatMap(m => [...m.text.matchAll(/(?:~|\/)[A-Za-z0-9_./-]+\.md\b/g)].map(m => m[0])))].slice(-32);
-        return { omitted: start > 0, tailCount: tailMessages.length, planPaths, messages, references: pullReferences(head + '\n' + tail) };
+        const planPaths = transcriptPlans(messages);
+        return { cwd: lastTranscriptCwd(tail) ?? lastTranscriptCwd(head), omitted: start > 0, tailCount: tailMessages.length, planPaths, messages, references: pullReferences(head + '\n' + tail) };
     } finally { await file.close(); }
 }
 

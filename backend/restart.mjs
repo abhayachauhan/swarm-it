@@ -45,7 +45,7 @@ export async function typeResumeLine(api, paneID, line, sleep = pause) {
     if (problem) return fail(problem, 'BAD_TEXT');
     const typed = async () => {
         await sleep(TYPE_SETTLE_MS);
-        try { return (await capturePane(api, paneID, Math.min(4096, Math.max(10, line.length + 2)))).replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').split('\n').map(l => l.trimEnd()).filter(l => l.trim()).join('').trimEnd(); } catch { return ''; }
+        try { return (await capturePane(api, paneID, Math.min(4096, Math.max(10, line.length + 2)))).replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').split('\n').filter(l => l.trim()).join('').trimEnd(); } catch { return ''; }
     };
     try {
         await api.terminal.send(paneID, line, { bare: true });
@@ -115,7 +115,8 @@ export async function restartAgent(api, store, paneID, deps = {}) {
     if (deps.fresh && (!atInput || deps.fresh.session !== session || deps.fresh.agent !== agent)) return done(fail('The source session changed; the saved summary was kept.', 'SESSION_CHANGED'));
     const quote = value => "'" + value.replace(/'/g, "'\"'\"'") + "'";
     const freshPrompt = deps.fresh ? `Read ${deps.fresh.path} and follow its continuation instructions.` : null;
-    const resumeLine = deps.fresh ? `${agent}${codex ? "" : " --model opus"} ${quote(freshPrompt)}` : codex ? `codex resume ${session}` : `claude --resume ${session}`;
+    const resumeLine = deps.fresh ? `${deps.fresh.cwd ? `cd ${quote(deps.fresh.cwd)} && ` : ""}${agent}${codex ? "" : " --model opus"} ${quote(freshPrompt)}` : codex ? `codex resume ${session}` : `claude --resume ${session}`;
+    if (textProblem(resumeLine)) return done(fail('The launch command is invalid; the source was left open.', 'BAD_TEXT'));
     if (!atInput) {
         if (pane.agentSessionID) return done(fail(`${name} is busy in this pane; wait for it to finish`, 'BUSY'));
         const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
@@ -130,6 +131,7 @@ export async function restartAgent(api, store, paneID, deps = {}) {
             || BACKGROUND.test(read.text) || /(?:esc|ctrl\+c) to interrupt/i.test(read.text.split("\n").filter(l => l.trim()).slice(-12).join("\n"))) return done(fail('The source is no longer idle with an empty input box.', 'SESSION_CHANGED'));
         suggestionRevision = read.revision;
     }
+    if (deps.deadline && Date.now() >= deps.deadline - 2500) return done(fail('The restart deadline was reached; the source was left open.', 'TIMEOUT'));
     let quit;
     if (suggestionRevision !== null) {
         try {
@@ -148,6 +150,7 @@ export async function restartAgent(api, store, paneID, deps = {}) {
             try { text = await capturePane(api, paneID, 40); } catch { continue; }
             const goodbye = codex ? text.includes(`Session ID: ${session}`) : /Resume this session with/.test(text);
             if (showsInput(text) || (now.agentSessionID && !goodbye)) continue;
+            if (deps.deadline && Date.now() >= deps.deadline - 2500) return fail('Restart timed out; use the saved summary to continue.', 'TIMEOUT');
             await sleep(SHELL_SETTLE_MS);
             const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
             return sent.ok ? { ok: true, paneID, session, resumed: true } : sent;
