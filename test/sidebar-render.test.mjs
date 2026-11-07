@@ -67,9 +67,9 @@ test('static source never uses innerHTML on snapshot data', () => {
 test('the list is sectioned: Needs you (cards), Running, Done; each pane appears once; archived omitted', () => {
     const refs = makeRefs();
     L.render(fakeDoc, refs, view(fixture(), { selectedPaneID: 'p-run', railFocused: true }), handlers());
-    const options = refs.list.children.filter(n => n.attrs.role === 'option');
+    const options = refs.list.children.filter(n => n.attrs.role === 'group');
     assert.deepEqual(options.map(r => r.dataset.paneId), ['p-wait', 'p-run']);
-    assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.textContent), ['Needs you · 1', 'Running · 1', 'Done · 3']);
+    assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.textContent), ['Needs you · 1', 'Running · 1', 'Done · 3Show']);
     // The waiting worker with a card is the card, not a worker row.
     assert.equal(options[0].className, 'att att-request');
     assert.equal(options[0].dataset.itemId, 'Request:p-wait:2026-10-08T00:58:00.000Z');
@@ -105,15 +105,16 @@ test('empty sections are not drawn', () => {
     assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.textContent), ['Running · 1']);
 });
 
-test('Done is a count only: no rows and no buttons; with only finished workers the rail shows just that count', () => {
+test('Done starts collapsed with a Show button and retains finished worker counts', () => {
     const refs = makeRefs();
     L.render(fakeDoc, refs, view(fixture()), handlers());
     const heads = refs.list.children.filter(n => n.className.startsWith('sec-head'));
-    assert.deepEqual(heads.map(head => find(head, n => n.tag === 'button' || n.tagName === 'BUTTON').length), [0, 0, 0]);
+    assert.deepEqual(heads.map(head => find(head, n => n.tag === 'button' || n.tagName === 'BUTTON').length), [0, 0, 1]);
     assert.equal(L.clearDoneEffect, undefined);
     const finished = { ...fixture(), attention: [], workers: fixture().workers.filter(w => w.state === 'done' || w.state === 'error') };
     L.render(fakeDoc, refs, view(finished), handlers());
-    assert.deepEqual(refs.list.children.map(n => n.textContent), ['Done · 3']);
+    assert.deepEqual(refs.list.children.filter(n => n.className.startsWith('sec-head')).map(n => n.textContent), ['Done · 3Show']);
+    assert.equal(find(refs.list, n => n.dataset.paneId).length, 0);
 });
 
 test('clicking a card selects it, so Y/N land on that request', () => {
@@ -265,7 +266,7 @@ test('empty states: one line when there is nothing at all, Connecting before the
     const refs = makeRefs();
     const empty = { ...fixture(), orchestrator: null, workers: [], attention: [], snoozed: [] };
     L.render(fakeDoc, refs, view(empty), handlers());
-    assert.deepEqual(refs.list.children.map(n => n.text), ['No workers yet.']);
+    assert.ok(refs.list.children.some(n => n.text === 'No workers yet.'));
     L.render(fakeDoc, refs, view(null), handlers());
     assert.match(refs.list.textContent, /Connecting/);
     assert.equal(refs.list.children.length, 1);
@@ -458,7 +459,7 @@ test('row verbs: Stop (two steps, hover or selected only) while running; Open an
 test('the status line is clean: no box drawing, no git status, a prompt line becomes the state', () => {
     const refs = makeRefs();
     const snap = fixture();
-    const set = (id, lastLine) => { snap.workers.find(w => w.paneID === id).lastLine = lastLine; };
+    const set = (id, lastLine) => { const row = snap.workers.find(w => w.paneID === id); row.lastLine = lastLine; row.task = ''; };
     set('p-run', '│ Reading files ─── main ↑16 !10 ?3');
     L.render(fakeDoc, refs, view(snap), handlers());
     const last = id => find(find(refs.list, n => n.dataset.paneId === id)[0], n => n.className === 'last')[0].text;
@@ -493,7 +494,7 @@ test('auto-approve off: the header says "Auto: off"; a click opens a menu of 4 h
     toggle.click();
     assert.deepEqual(calls, [['auto-menu']], 'the click opens the menu; nothing is turned on yet');
     const texts = find(refs.head, n => n.tag === 'button').map(b => b.text);
-    assert.deepEqual(texts, ['⌂ Coordinator', 'Auto: off'], 'no log link while the log is empty');
+    assert.deepEqual(texts, ['⌂ Coordinator', 'Auto: off', 'A−', 'A+', 'Terminal 17px'], 'no log link while the log is empty');
     assert.equal(find(refs.panel, n => n.tag === 'button').length, 0, 'the menu is closed until opened');
     // Open (ui.autoMenuOpen): four choices, each sending its key.
     const morning = new Date(2026, 9, 11, 7, 30).getTime();

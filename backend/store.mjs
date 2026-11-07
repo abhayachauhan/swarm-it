@@ -98,6 +98,7 @@ export function createStore(api) {
         hiddenWorkspaceID: null,
         /** Worker pane id to the time it was first seen finished (in memory): auto-clean closes it after the delay. */
         doneSince: new Map(),
+        displayPrompts: new Set(),
         /** Old `<name> · workers` workspaces already tried for removal this run. */
         legacyTried: new Set(),
         /** Set once a view reports the workspace the user is in: only that workspace's swarm is shown. */
@@ -211,7 +212,7 @@ export function applyStateChange(store, change, now) {
         isActiveWorkspace: pane.isActiveWorkspace ?? prev?.isActiveWorkspace ?? false,
         workspaceID: change.workspaceID ?? pane.workspaceID ?? prev?.workspaceID ?? null,
         workspaceName: pane.workspaceName ?? prev?.workspaceName ?? null,
-        agent: pane.agent ?? pane.agentKind ?? prev?.agent ?? null,
+        agent: 'agent' in pane ? pane.agent ?? null : 'agentKind' in pane ? pane.agentKind ?? null : prev?.agent ?? null,
         // The live session: null once Claude exits (Kelpi clears it on session end).
         agentSessionID: 'agentSessionID' in pane ? (pane.agentSessionID ?? null) : (prev?.agentSessionID ?? null),
         type: pane.type ?? prev?.type ?? null,
@@ -361,6 +362,7 @@ export function currentWorkers(store, now) {
             agent: mw.agent === 'codex' ? 'codex' : 'claude',
             task: mw.task ?? '',
             state,
+            activity: pane?.status === 'idle' ? 'idle' : state,
             ...(exit && state === 'waiting' ? { stopped: { reason: exit.reason } } : {}),
             elapsedSeconds: Number.isNaN(first) ? 0 : Math.max(0, Math.floor((nowMs - first) / 1000)),
             lastLine: store.lastLines.get(mw.paneID) ?? '',
@@ -405,6 +407,34 @@ function otherSwarmSummaries(store, carded, waitingPanes) {
     });
 }
 
+/** Recognised agent terminals across workspaces. Completion needs a result file, never an idle prompt alone. */
+function agentDirectory(store, nowMs) {
+    const followed = currentWorkers(store, nowMs).filter(w => !w.archived).map(w => ({
+        ...w, directory: false, coordinator: false, workspaceName: store.workspaceName || 'Current swarm',
+        parent: w.parent || store.orchestrator?.paneID || null,
+        parentLabel: (w.parent ? store.manifestWorkers.find(p => p.paneID === w.parent)?.label : null) || store.workspaceName || 'Coordinator'
+    }));
+    const known = new Set(followed.map(w => w.paneID));
+    const extra = [...store.panes.values()].filter(p => (p.type ?? 'shell') === 'shell' && !known.has(p.id) && !store.archived.has(p.id)).flatMap(p => {
+        const membership = otherSwarmPane(store, p.id);
+        const worker = membership?.role === 'worker' ? membership.swarm.workers.find(w => w.paneID === p.id) : null;
+        const agent = worker?.agent ?? p.agent ?? (worker ? 'claude' : null);
+        if (!['claude', 'codex'].includes(agent)) return [];
+        const coordinator = membership?.role === 'orchestrator' || actionableOrchestrator(store, p.id);
+        const workspaceName = membership?.swarm.name || p.workspaceName || store.workspaceNames.get(p.workspaceID) || 'Workspace';
+        const state = worker ? deriveState(store, worker) : p.status === 'running' ? 'running' : 'waiting';
+        const exit = store.exits.get(p.id);
+        return [{ directory: true, paneID: p.id, label: (p.label && p.label !== 'coordinator' ? p.label : null) || workspaceName,
+            task: worker?.task || (p.title && !p.title.includes('@') ? p.title.replace(/^\[.*?\]\s*/, '') : workspaceName), agent, state,
+            activity: store.displayPrompts.has(p.id) ? 'waiting' : p.status === 'running' ? 'running' : 'idle',
+            ...(exit && state === 'waiting' ? { stopped: { reason: exit.reason } } : {}),
+            parent: worker ? worker.parent || membership.swarm.orchestrator.paneID : null,
+            parentLabel: worker ? membership.swarm.workers.find(w => w.paneID === worker.parent)?.label || membership.swarm.name : null, coordinator: !!coordinator,
+            workspaceName, elapsedSeconds: Math.max(0, Math.floor((nowMs - Date.parse(store.firstSeen[p.id] || new Date(nowMs).toISOString())) / 1000)) }];
+    });
+    return [...followed, ...extra].sort((a, b) => a.workspaceName.localeCompare(b.workspaceName) || Number(b.coordinator) - Number(a.coordinator) || a.label.localeCompare(b.label));
+}
+
 /** Build the SwarmSnapshot defined in contracts/state.d.ts. Increments the sequence. */
 export function buildSnapshot(store, now) {
     const nowMs = toMs(now);
@@ -437,6 +467,8 @@ export function buildSnapshot(store, now) {
         workspaceID: store.workspaceID,
         orchestrator: store.orchestrator,
         workers,
+        agents: store.settings.agentDirectoryEnabled === false ? undefined : agentDirectory(store, nowMs),
+        workspaceName: store.workspaceName,
         attention,
         snoozed: store.att ? inSwarm(snoozedItems(store.att, nowMs)) : [],
         waitingPanes,

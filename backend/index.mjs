@@ -29,7 +29,7 @@ export const COMMANDS = [
     'get-workspace-brief', 'edit-workspace-brief', 'open-workspace-brief', 'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
     'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
-    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff', 'fresh-session'
+    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff', 'fresh-session', 'agent-appearance'
 ].map(name => `${PLUGIN_ID}.${name}`);
 export const COUNTS_ITEM = `${PLUGIN_ID}.counts`;
 export const SNAPSHOT_EVENT = 'snapshot';
@@ -143,11 +143,12 @@ export function registerAll(api, deps = modules) {
 
     // Many cards can change in one pass (a swarm closing settles all of its cards): queue one publish, not one per card.
     let publishQueued = false;
-    att.onChange = () => {
+    const queuePublish = () => {
         if (publishQueued) return;
         publishQueued = true;
         serial(async () => { publishQueued = false; await publish(); });
     };
+    att.onChange = queuePublish;
 
     const setWarning = (key, message) => {
         st.warnings = st.warnings.filter(w => !w.startsWith(`${key}:`));
@@ -519,6 +520,8 @@ export function registerAll(api, deps = modules) {
             if (event.sequence <= seqFloor) return;
             seqFloor = event.sequence;
         }
+        const directoryKey = () => JSON.stringify([...st.panes.values()].filter(p => ['claude', 'codex'].includes(p.agent) || st.manifestWorkers.some(w => w.paneID === p.id) || S.otherSwarmPane(st, p.id)).map(p => [p.id, p.agent, p.status, p.workspaceID, p.workspaceName, p.label]));
+        const beforeDirectory = st.settings.agentDirectoryEnabled === false ? null : directoryKey();
         const changes = Array.isArray(event?.data) ? event.data : [];
         const touched = new Set();
         const removed = new Set();
@@ -536,7 +539,8 @@ export function registerAll(api, deps = modules) {
                 }
             }
         }
-        if (!touched.size) return;
+        const directoryChanged = beforeDirectory !== null && beforeDirectory !== directoryKey();
+        if (!touched.size) { if (directoryChanged) queuePublish(); return; }
         // A closed pane is remembered across reloads (store.gone is persisted) so its worker keeps reading as closed.
         // So is a pane's Claude session id: Kelpi forgets it when Claude exits, and send-to-worker resumes it.
         if (removed.size || st.sessionsDirty) { try { await S.persist(st); } catch { /* kept in memory */ } }
@@ -562,7 +566,7 @@ export function registerAll(api, deps = modules) {
         resolveOrchestrator();
         if (st.orchestrator?.paneID !== before) relevant = true;
         await settle();
-        if (relevant) await publish();
+        if (directoryChanged) queuePublish(); else if (relevant) await publish();
     }
 
     async function onNotification(event) {
@@ -579,6 +583,16 @@ export function registerAll(api, deps = modules) {
     // Workers of every live swarm are scanned, not only the followed one: a request blocks its worker until answered.
     async function scanPrompts() {
         let changed = false;
+        const displayRead = new Set();
+        const noteDisplayPrompt = (paneID, screen) => {
+            displayRead.add(paneID);
+            const tail = screen.split('\n').filter(line => line.trim()).slice(-5);
+            const waiting = !!(N.parseCodexPrompt(screen) || N.parsePrompt(screen))
+                || tail.some(line => /Enter to select.*Esc to cancel/i.test(line));
+            if (waiting === st.displayPrompts.has(paneID)) return;
+            if (waiting) st.displayPrompts.add(paneID); else st.displayPrompts.delete(paneID);
+            changed = true;
+        };
         // Focus belongs to the pane list, not the state-change DTO; hooks may never identify this Codex pane.
         try {
             for (const pane of await api.panes.list()) {
@@ -598,6 +612,7 @@ export function registerAll(api, deps = modules) {
             if (pane?.status === 'idle' && !knownCodex && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) return;
             let screen;
             try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
+            noteDisplayPrompt(paneID, screen);
             const codexPrompt = st.panes.get(paneID)?.agent === 'claude' ? null : N.parseCodexPrompt(screen);
             const codex = knownCodex || !!codexPrompt;
             const prompt = codex ? codexPrompt : N.parsePrompt(screen);
@@ -679,6 +694,14 @@ export function registerAll(api, deps = modules) {
             if (pane.status !== 'waitingForInput' && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) continue;
             await scanWorker(pane.id);
         }
+        // Display-only checks outside Auto never raise an approvable card or send a key.
+        // Claude reports waitingForInput at an ordinary idle composer too, so only a visible
+        // question or permission menu belongs in Needs you for an unlisted session.
+        if (st.settings.agentDirectoryEnabled !== false) for (const pane of st.panes.values()) {
+            if (pane.agent !== 'claude' || displayRead.has(pane.id) || (pane.type ?? 'shell') !== 'shell') continue;
+            try { noteDisplayPrompt(pane.id, await S.capturePane(api, pane.id, N.PROMPT_CAPTURE_LINES)); } catch { /* keep last verified display state */ }
+        }
+        for (const paneID of st.displayPrompts) if (!st.panes.has(paneID)) { st.displayPrompts.delete(paneID); changed = true; }
         for (const orch of orchestrators) {
             const orchOpen = orch && st.panes.has(orch) ? st.attention.filter(i => i.paneID === orch && i.type === 'Request' && !i.handledAt) : [];
             if (!orchOpen.length) continue;
@@ -795,6 +818,13 @@ export function registerAll(api, deps = modules) {
         } catch (error) { return fail(text(error), 'OPEN_FAILED'); }
     });
 
+    command('agent-appearance', async args => {
+        const size = args.size === undefined ? 17 : args.size;
+        if (!Number.isInteger(size) || size < 12 || size > 24) return fail('Choose terminal text between 12 and 24 pixels.', 'BAD_SIZE');
+        if (typeof api.appSettings?.setAppearance !== 'function') return fail('Set terminal text size in Kelpi Settings → Appearance.', 'APPEARANCE_UNAVAILABLE');
+        try { await withTimeout(api.appSettings.setAppearance('font-size', String(size)), READ_TIMEOUT_MS, 'changing terminal text'); return { ok: true, size }; }
+        catch (error) { return fail(text(error), 'APPEARANCE_FAILED'); }
+    });
     command('get-state', async args => {
         // A view that knows the workspace the user is in passes it, and the rail follows.
         const moved = await follow(args.workspaceID);

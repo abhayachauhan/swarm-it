@@ -12,6 +12,8 @@ export interface Worker {
     /** Task description from the manifest (may be empty). */
     task: string;
     state: WorkerState;
+    /** Native idle status for display; completion still requires a result. */
+    activity?: WorkerState | 'idle';
     /** Whole seconds since the worker was first seen (or since manifest spawn), computed by the backend at snapshot time. */
     elapsedSeconds: number;
     /** Last non-empty line of the pane output ('' when unknown). */
@@ -88,6 +90,8 @@ export interface SwarmState {
     hiddenWorkspaceID: string | null;
     orchestrator: OrchestratorInfo | null;
     workers: Worker[];
+    agents?: AgentDirectoryEntry[];
+    workspaceName?: string | null;
     attention: AttentionItem[];
     /** Manual pin, if any. */
     pinnedOrchestratorPaneID: string | null;
@@ -152,6 +156,13 @@ export interface CodexQuestionRequest {
     paneLabel?: string;
     questions: { id: string; header?: string; question: string; isSecret?: boolean;
         options?: { label: string; description?: string }[] | null }[];
+}
+
+export interface AgentDirectoryEntry {
+    paneID: string; label: string; task: string; agent: 'claude' | 'codex';
+    state: WorkerState; activity: WorkerState | 'idle'; directory: boolean;
+    parent: string | null; parentLabel?: string | null; coordinator: boolean; workspaceName: string; elapsedSeconds: number;
+    paneClosed?: boolean; resultPath?: string | null; stopped?: { reason: string };
 }
 
 export interface SwarmSnapshot {

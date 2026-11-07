@@ -17,7 +17,7 @@ The coordinator writes a task for each independent worker, starts workers in Kel
 
 ## Follow the work from one rail
 
-The rail groups active workers into **Needs you**, **Running**, and **Done**. A request card leads you to the exact pane. Claude's recognised permission menus can be approved or denied in the rail after the plugin rechecks the live prompt. Codex approval cards navigate to the Codex pane; Codex keeps control of its own approval menu. Timed **Auto** can answer eligible requests through the configured hooks. See [Permissions](permissions.md) for the boundary.
+The rail groups active workers into **Needs you**, **Running**, **Idle**, and **Done**. A request card leads you to the exact pane. Claude's recognised permission menus can be approved or denied in the rail after the plugin rechecks the live prompt. Codex approval cards navigate to the Codex pane; Codex keeps control of its own approval menu. Timed **Auto** can answer eligible requests through the configured hooks. See [Permissions](permissions.md) for the boundary.
 
 Workers live together in a shared **Workers** workspace inside a collapsed Group. The coordinator keeps its own pane. The rail also shows work from other live swarms when a permission request needs attention.
 
@@ -47,3 +47,9 @@ Conversational transfers use the source session ID when known. When no ID is ava
 - Exit records: `~/.kelpi-swarm/exits/` by default.
 
 The `manifestDir` plugin setting and `SWARM_MANIFEST_DIR` for CLI helpers can move the manifest root. The plugin checks result paths before reading them. It does not migrate a live conversation between Claude and Codex; handoff gives the receiving CLI a transcript or a summary so it can continue the goal.
+
+## Agents view
+
+A larger-text activity view for Claude and Codex. All agents spans recognised terminals across workspaces, while This swarm preserves the selected coordinator's worker actions and result history. Needs you stays first; Running, Idle and expandable Done keep active and completed work separate. Visible questions and permission menus outside Auto appear as navigation-only; an ordinary idle composer is not treated as a blocked question. Worker ownership remains scoped by the existing manifest checks.
+
+Click a global row to reach its terminal, or Focus / split to toggle native pane zoom. Closed completed workers open their validated saved result. J/K and Enter follow the visible list, including expanded completed work. Text sizing and directory scope persist through Kelpi view state; Terminal 17px changes only the native font-size setting. AgentDirectoryEnabled disables the global directory without deleting any tasks or terminals. Permission checks and Auto policy are unchanged.

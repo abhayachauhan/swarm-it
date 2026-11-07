@@ -116,3 +116,19 @@ The summary comes from the saved transcript, so a conversation at its compaction
 Disable this action with the **Allow the Fresh session and continue button** plugin setting.
 
 Use this on a coordinator or ordinary conversation. Manifest workers must finish or stop first, so their result tracking cannot accidentally attach to a new session.
+
+## Readable agent navigation
+
+The **Agents** view keeps the workspace sidebar and gives Claude and Codex terminals a shared activity list. **All agents** shows recognised agent terminals across workspaces and current swarm history; **This swarm** shows the current swarm and its saved worker results. **Needs you** stays first, followed by **Running**, **Idle** and an expandable **Done** group. Idle terminals are not treated as successful completed tasks. Failed workers are marked Failed.
+
+Larger task cards show the workspace, tool, coordinator or worker role, task and elapsed time. Workers are indented beneath their coordinator's workspace. Click a row to reach its native terminal. **Focus / split**, shown on hover or selection, toggles the native pane zoom without destroying the split layout. Double-clicking a global directory row does the same. Completed swarm workers offer **Open result**.
+
+Stopped workers and visible question or permission menus remain in Needs you. An ordinary idle Claude prompt stays Idle even when its native status says waiting for input. Closed workers from the current swarm retain their saved results.
+
+Agent text starts at 15px. **A− / A+** changes it between 13px and 20px and remembers the preference locally. **Terminal 17px** changes Kelpi's terminal font through its native appearance settings. Older hosts that cannot expose this setting direct you to Kelpi Settings instead. Permission decisions and Auto rules are unchanged.
+
+The **Show all workspaces in Agents** setting disables the global directory. This returns navigation to the focused swarm without deleting tasks, results or terminal sessions.
+
+![Agents view with larger text and separate activity groups, using sample tasks](docs/agents-view.png)
+
+Sample tasks shown above. Your sessions and worker results fill the same view.

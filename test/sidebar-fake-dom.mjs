@@ -12,8 +12,9 @@ export class FakeNode {
     set innerHTML(_) { throw new Error('innerHTML used'); }
     get innerHTML() { throw new Error('innerHTML used'); }
     insertAdjacentHTML() { throw new Error('insertAdjacentHTML used'); }
-    setAttribute(name, value) { this.attrs[name] = String(value); }
-    getAttribute(name) { return this.attrs[name] ?? null; }
+    setAttribute(name, value) { this.attrs[name] = String(value); if (name.startsWith('data-')) this.dataset[camel(name.slice(5))] = String(value); }
+    getAttribute(name) { return (name.startsWith('data-') ? this.dataset[camel(name.slice(5))] : this.attrs[name]) ?? null; }
+    closest(selector) { const test = matches(selector); for (let node = this; node; node = node.parent) if (test(node)) return node; return null; }
     classes() { return this.className.split(/\s+/).filter(Boolean); }
     get classList() {
         const self = this;

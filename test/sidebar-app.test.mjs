@@ -259,3 +259,51 @@ test('native worker choices send the exact card and option, without using the sh
  assert.deepEqual(sent(app,'answer-codex-question').map(c=>c.args),[{itemID:snap.attention[0].id,promptHash:snap.attention[0].promptHash,option:1}]);
  assert.equal(sent(app,'load-codex-questions').length,0);
 });
+
+test('Done expands actual results and collapses again without any backend mutation',async()=>{
+ const app=await bootApp();assert.equal(app.row('p-done'),null);
+ await app.pointerClick(app.button(app.refs.list,'Show'));assert.ok(app.row('p-done'));assert.ok(app.row('p-err'));
+ await app.pointerClick(app.button(app.refs.list,'Hide'));assert.equal(app.row('p-done'),null);assert.equal(sent(app,'close-worker').length,0);assert.equal(sent(app,'accept').length,0);
+});
+test('all-agent directory separates Idle, retains questions and navigates to native terminals',async()=>{
+ const snap=fixture();snap.agents=[{paneID:'session-1',label:'Schema sync',task:'Validate schema refresh before enabling the bot',agent:'codex',state:'running',activity:'running',directory:true,workspaceName:'Schema sync'}, {paneID:'session-2',label:'Release review',agent:'claude',state:'waiting',activity:'idle',directory:true,workspaceName:'Releases'}];
+ const app=await bootApp({snapshot:snap});assert.ok(app.row('session-1'));assert.ok(app.row('session-2'));
+ assert.match(app.refs.list.textContent,/Idle · 1/);assert.match(app.refs.list.textContent,/Validate schema refresh/);
+ assert.equal(labels(app.row('session-1')).includes('Stop'),false);
+ await app.pointerClick(app.row('session-2'));assert.ok(app.reveals.includes('session-2'));
+ await app.pointerClick(app.button(app.refs.head,'This swarm'));assert.equal(app.row('session-1'),null);assert.ok(app.row('p-run'));
+});
+test('agent text sizing stays bounded and changes the rendered interface',async()=>{
+ const app=await bootApp();for(let n=0;n<10;n++)await app.pointerClick(app.button(app.refs.head,'A+'));
+ assert.match(app.refs.app.getAttribute('style'),/20px/);for(let n=0;n<12;n++)await app.pointerClick(app.button(app.refs.head,'A−'));assert.match(app.refs.app.getAttribute('style'),/13px/);
+});
+
+
+test('global focus shortcut retains a selected agent from another workspace',async()=>{
+ const snap=fixture();snap.agents=[{paneID:'other-agent',label:'Release review',agent:'codex',state:'running',activity:'running',directory:true}];
+ const app=await bootApp({snapshot:snap});await app.pointerClick(app.row('other-agent'));app.emit('local.swarm-view.focus-rail',{});await app.flush();
+ assert.equal(app.row('other-agent').getAttribute('aria-current'),'true');
+});
+test('expanded completed rows remain keyboard selectable across snapshots',async()=>{
+ const app=await bootApp();await app.pointerClick(app.button(app.refs.list,'Show'));await app.pointerClick(app.row('p-done'));
+ app.emit('snapshot',{...fixture(),sequence:999});await app.flush();assert.equal(app.row('p-done').getAttribute('aria-current'),'true');
+ await app.press('Enter');assert.equal(sent(app,'open-thread').at(-1).args.paneID,'p-done');
+});
+test('view state restores and persists text size in sandboxed views',async()=>{
+ const app=await bootApp({viewState:{agentTextSize:18,directory:false}});assert.match(app.refs.app.getAttribute('style'),/18px/);
+ await app.pointerClick(app.button(app.refs.head,'A+'));assert.equal(app.getViewState().agentTextSize,19);assert.equal(app.getViewState().directory,false);
+});
+test('Focus restores another zoomed pane before focusing the chosen agent and ignores rapid duplicate clicks',async()=>{
+ const snap=fixture();snap.agents=[{paneID:'target-agent',label:'Release checks',agent:'codex',state:'running',directory:true}];let zoomed='old-agent';const zooms=[];
+ const app=await bootApp({snapshot:snap,hostSnapshot:{state:{workspaces:[{id:'ws1',zoomedPaneID:'old-agent',panes:[{id:'target-agent'},{id:'old-agent'}]}]}},layout:{zoom:async id=>{zooms.push(id);zoomed=zoomed?null:id;return {zoomedPaneID:zoomed};}}});
+ await app.pointerClick(app.button(app.row('target-agent'),'Focus / split'));await app.pointerClick(app.button(app.row('target-agent'),'Focus / split'));assert.deepEqual(zooms,['old-agent','target-agent']);assert.equal(zoomed,'target-agent');
+});
+test('refresh keeps keyboard focus on the same request Approve button, never another card',async()=>{
+ const snap=fixture();const second={...snap.attention[0],id:'Request:second:1',paneID:'second',promptHash:'b'.repeat(64)};snap.attention.push(second);const app=await bootApp({snapshot:snap});await app.advance(600);
+ app.button(app.card(1),'Approve').focus();app.emit('snapshot',{...snap,sequence:999});await app.flush();
+ assert.equal(app.refs.app.ownerDocument.activeElement,app.button(app.card(1),'Approve'));
+ app.refs.app.ownerDocument.activeElement.click();await app.flush();assert.equal(sent(app,'approve').at(-1).args.itemID,second.id);
+});
+test('hiding Done reconciles away from an invisible completed row',async()=>{
+ const app=await bootApp();await app.pointerClick(app.button(app.refs.list,'Show'));await app.pointerClick(app.row('p-done'));await app.pointerClick(app.button(app.refs.list,'Hide'));assert.equal(app.row('p-done'),null);assert.equal(app.card(0).getAttribute('aria-current'),'true');
+});

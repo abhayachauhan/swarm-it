@@ -67,6 +67,7 @@ function drawnClasses() {
     const other = { ...snap.attention[0], id: 'Request:x1:1', paneID: 'x1', swarmName: 'Kelpi UI', swarmWorkspaceID: 'ws2' };
     const stopped = { ...snap, workers: snap.workers.map(w => (w.paneID === 'p-run' ? { ...w, state: 'waiting', stopped: { reason: 'usage limit reached' } } : w)) };
     draw(stopped);
+    draw(snap, { doneOpen: true });
     draw({ ...snap, attention: [other], autoApprove: { ...auto, on: false },
         waitingPanes: [{ paneID: 'x2', label: 'narrow', swarmName: 'Kelpi UI', swarmWorkspaceID: 'ws2' }],
         otherSwarms: [{ workspaceID: 'ws2', name: 'Kelpi UI', orchestratorPaneID: 'o2', color: 'purple', running: 1, needYou: 2, done: 0 }] },
@@ -91,6 +92,8 @@ test('every class the rail draws has a style rule, and every styled class is dra
 });
 
 test('the 270 px layout: long names ellipsise, commands wrap and clamp to two lines, the header wraps, nothing widens the rail', () => {
+    assert.equal(declsOf('.last')['-webkit-line-clamp'], '2');
+    assert.equal(declsOf('.last')['overflow-wrap'], 'anywhere');
     const clamp = declsOf('.att-clamp');
     assert.equal(clamp['-webkit-line-clamp'], '2');
     assert.equal(clamp['line-clamp'], '2');
@@ -99,7 +102,7 @@ test('the 270 px layout: long names ellipsise, commands wrap and clamp to two li
     const command = declsOf('.att-command');
     assert.equal(command['overflow-wrap'], 'anywhere');
     assert.equal(command['white-space'], 'pre-wrap');
-    for (const sel of ['.att-pane', '.name', '.last', '.btn-auto']) {
+    for (const sel of ['.att-pane', '.name', '.btn-auto']) {
         const d = declsOf(sel);
         assert.equal(d.overflow, 'hidden', sel);
         assert.equal(d['text-overflow'], 'ellipsis', sel);

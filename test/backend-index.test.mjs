@@ -553,3 +553,28 @@ test('PR evidence reaches the model and assessments are bound to the revision ac
         assert.deepEqual(api.callsTo('terminal.send'), []);
     } finally { dispose(); }
 });
+
+test('terminal text size accepts the readable range without changing other appearance settings',async()=>{
+ const api=makeFakeApi();const changes=[];api.appSettings={setAppearance:async(...args)=>changes.push(args)};
+ const dispose=registerAll(api);
+ try{await dispose.ready;
+  assert.deepEqual(await api.command('agent-appearance',{size:17}),{ok:true,size:17});assert.deepEqual(changes,[['font-size','17']]);
+  assert.deepEqual(await api.command('agent-appearance',{size:80}),{ok:false,error:'Choose terminal text between 12 and 24 pixels.',code:'BAD_SIZE'});assert.equal(changes.length,1);
+ }finally{dispose();}
+});
+test('terminal appearance validates boundaries and refuses invalid explicit sizes without applying them',async()=>{
+ const api=makeFakeApi();const changes=[];api.appSettings={setAppearance:async(...args)=>changes.push(args)};const dispose=registerAll(api);
+ try{await dispose.ready;
+  for(const size of [12,24])assert.deepEqual(await api.command('agent-appearance',{size}),{ok:true,size});
+  for(const size of [11,25,12.5,'17',null])assert.deepEqual(await api.command('agent-appearance',{size}),{ok:false,error:'Choose terminal text between 12 and 24 pixels.',code:'BAD_SIZE'});
+  assert.deepEqual(changes,[['font-size','12'],['font-size','24']]);
+ }finally{dispose();}
+});
+test('global directory publishes status, label and removal changes for an ordinary non-swarm agent',async()=>{
+ const api=makeFakeApi({panes:[{id:'outside',agent:'codex',type:'shell',status:'idle',label:'Review',workspaceID:'ws1'}]});const dispose=registerAll(api);
+ try{await dispose.ready;
+  await api.upsert('outside',{status:'running'});await api.idle();assert.equal(lastSnapshot(api).agents.find(a=>a.paneID==='outside').state,'running');
+  await api.upsert('outside',{label:'Release checks'});await api.idle();assert.equal(lastSnapshot(api).agents.find(a=>a.paneID==='outside').label,'Release checks');
+  await api.fire('state.changed',{sequence:999,data:[{kind:'pane-removed',paneID:'outside',workspaceID:'ws1'}]});await api.idle();assert.equal(lastSnapshot(api).agents.some(a=>a.paneID==='outside'),false);
+ }finally{dispose();}
+});

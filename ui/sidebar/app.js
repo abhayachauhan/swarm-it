@@ -9,10 +9,17 @@
     // The ONLY focus signal: the backend emits it when the focus-rail command runs (contracts/commands.md).
     const FOCUS_EVENT = 'local.swarm-view.focus-rail';
 
+    let textSize = 15;
+    try { const saved = Number(window.localStorage?.getItem('swarm-agent-text-size')); if (saved >= 13 && saved <= 20) textSize = saved; } catch { /* storage can be unavailable */ }
+    function savePreferences() {
+        if (typeof api.setState === 'function') void api.setState({ ...(api.state || {}), agentTextSize: textSize, directory: ui.directory !== false }).catch(() => {});
+        else try { window.localStorage?.setItem('swarm-agent-text-size', String(textSize)); } catch { /* optional legacy storage */ }
+    }
     const questionDrafts = Object.create(null);
     let snapshot = null, receivedAtMs = Date.now();
     let ui = L.initialUI(false);
     let notice = '', noticeTimer = null, pointerActive = false, renderPending = false, busy = false, disposed = false;
+    let focusBusy = false, lastFocusPane = null, lastFocusAt = -Infinity;
     const disposers = [];
     const guard = L.createButtonGuard();
     let unlockTimer = null;
@@ -24,9 +31,11 @@
         renderPending = false;
         const nowMs = Date.now();
         const app = $('app');
+        const focusedControl = document.activeElement?.getAttribute?.('data-focus-key');
         const focusedQuestion = document.activeElement?.getAttribute?.('data-question-key');
         const selection = focusedQuestion ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
         const hadFocus = !!app && app.contains(document.activeElement);
+        if (app) app.setAttribute('style', `font-size: ${textSize}px`);
         L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog, questionDrafts }, handlers);
         markOverflow();
         if (focusedQuestion) {
@@ -34,6 +43,9 @@
                 input.focus();
                 try { input.setSelectionRange(...selection); } catch { /* unsupported input */ }
             }
+        }
+        if (focusedControl) {
+            for (const control of document.querySelectorAll('[data-focus-key]')) if (control.getAttribute('data-focus-key') === focusedControl) { control.focus({ preventScroll: true }); break; }
         }
         // render() replaces the rail's children: if the focused node went with them, keep the keyboard on #app.
         if (app && hadFocus && !app.contains(document.activeElement)) { try { app.focus({ preventScroll: true }); } catch { /* best effort */ } }
@@ -87,7 +99,7 @@
         const accepted = L.acceptSnapshot(snapshot, next);
         if (accepted === snapshot) return;
         snapshot = accepted; receivedAtMs = Date.now();
-        ui = L.reconcile(ui, snapshot);
+        ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui));
         // The duration menu belongs to the off state.
         if (ui.autoMenuOpen && snapshot.autoApprove && snapshot.autoApprove.on) ui = { ...ui, autoMenuOpen: false };
         const pendingDrafts = new Set((snapshot.codexQuestions || []).flatMap(r => r.questions.map(q => `${r.threadID}:${r.requestID}:${q.id}`)));
@@ -136,6 +148,11 @@
 
     /** Open a worker's thread. Opening a finished worker's result also marks it reviewed (accept), once. */
     async function openWorker(paneID) {
+        const row = snapshot?.workers.find(w => w.paneID === paneID);
+        if (row?.paneClosed) {
+            if (row.state !== 'done' || !row.resultPath) { setNotice('This worker closed without a saved result.'); return; }
+            await run('Open result', { command: `${L.CMD}open-result`, args: { paneID } }); return;
+        }
         const review = L.reviewEffect(snapshot, paneID);
         await run('Open', { command: `${L.CMD}open-thread`, args: { paneID } });
         if (review && !notice) await run('Accept', review);
@@ -147,6 +164,31 @@
     }
 
     const handlers = {
+        onTerminalSize: size => { void run('Terminal text', { command: `${L.CMD}agent-appearance`, args: { size } }); },
+        onFocusAgent: async paneID => {
+            if (focusBusy || (lastFocusPane === paneID && Date.now() - lastFocusAt < 400)) return;
+            focusBusy = true; lastFocusPane = paneID; lastFocusAt = Date.now();
+            try {
+                if (typeof api.ui?.reveal !== 'function') { setNotice('This Kelpi cannot reveal a terminal from Agents.'); return; }
+                ui = { ...ui, selectedPaneID: paneID }; draw();
+                await api.ui.reveal(paneID);
+                if (typeof api.layout?.zoom !== 'function') { setNotice('Use Kelpi’s pane zoom control to focus this terminal.'); return; }
+                let native;
+                try { native = await api.snapshot?.(); } catch { setNotice('Terminal opened; use its native zoom control because the layout could not be read.'); return; }
+                const workspace = (native?.state?.workspaces || native?.workspaces || []).find(w => [...(w.panes || []), ...(w.parkedPanes || [])].some(p => p.id === paneID));
+                if (!workspace) { setNotice('Terminal opened; use its native zoom control on this Kelpi version.'); return; }
+                const zoomed = workspace.zoomedPaneID ?? workspace.zoomed_pane_id;
+                if (workspace && workspace.panes.length <= 1) { setNotice('This workspace already has one terminal.'); return; }
+                if (zoomed && zoomed !== paneID) await api.layout.zoom(zoomed);
+                const result = await api.layout.zoom(paneID);
+                if (result?.zoomedPaneID === null) setNotice('Split layout restored.');
+            } catch (error) { setNotice(`Focus: ${error.message}`); }
+            finally { focusBusy = false; }
+        },
+        onDirectory: () => { ui = { ...ui, directory: ui.directory === false }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
+        onAgentSelect: paneID => { const row = snapshot?.agents?.find(w => w.paneID === paneID); if (row?.paneClosed) { void openWorker(paneID); return; } ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now()); draw(); reveal(paneID, 'Agent'); },
+        onToggleDone: () => { ui = { ...ui, doneOpen: !ui.doneOpen }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); draw(); },
+        onTextSize: delta => { textSize = Math.max(13, Math.min(20, textSize + delta)); savePreferences(); draw(); },
         onQuestionChoice: (item, option) => { void run('Answer Codex', { command: `${L.CMD}answer-codex-question`, args: { itemID: item.id, promptHash: item.promptHash, option } }); },
         onTrustFolder: item => { void run('Trust folder', { command: `${L.CMD}trust-folder`, args: { itemID: item.id, promptHash: item.promptHash, confirm: true } }); },
         onLoadQuestions: item => { void run('Codex questions', { command: `${L.CMD}load-codex-questions`, args: item?.paneID ? { paneID: item.paneID } : {} }); },
@@ -171,6 +213,7 @@
             ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now());
             draw();
         },
+        onOpenResult: paneID => { void run('Open result', { command: `${L.CMD}open-result`, args: { paneID } }); },
         onOpen: paneID => { void openWorker(paneID); },
         // Home: open-thread on the coordinator closes the thread view and gives the coordinator its space back; with no
         // coordinator known it is close-thread, so the button is never disabled.
@@ -223,7 +266,8 @@
         if (event.isComposing) return;
         const target = event.target;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
-        const out = L.reduceKey(ui, snapshot, { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, nowMs: Date.now() });
+        if (event.target?.closest?.('button, a, input, textarea, select')) return;
+        const out = L.reduceKey(ui, L.agentSnapshot(snapshot, ui), { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, nowMs: Date.now() });
         if (!out.handled) return;
         event.preventDefault();
         ui = out.ui;
@@ -254,7 +298,7 @@
     // The backend's focus-rail command asks this view to take the keyboard.
     function onFocusRequest() {
         try { window.focus(); $('app').focus({ preventScroll: true }); } catch { /* best effort */ }
-        ui = L.reconcile(L.setRailFocused(ui, true, Date.now()), snapshot);
+        ui = L.reconcile(L.setRailFocused(ui, true, Date.now()), L.agentSnapshot(snapshot, ui));
         draw();
     }
 
@@ -270,7 +314,7 @@
     function tick() {
         if (!snapshot || disposed) return;
         const now = Date.now();
-        for (const worker of snapshot.workers) {
+        for (const worker of L.agentSnapshot(snapshot, ui).workers) {
             const node = document.querySelector(`[data-elapsed-pane="${CSS.escape(worker.paneID)}"]`);
             if (node) node.textContent = L.formatElapsed(L.elapsedNow(worker, receivedAtMs, now));
         }
@@ -278,6 +322,8 @@
 
     async function boot() {
         await api.ready;
+        if (Number.isInteger(api.state?.agentTextSize) && api.state.agentTextSize >= 13 && api.state.agentTextSize <= 20) textSize = api.state.agentTextSize;
+        if (typeof api.state?.directory === 'boolean') ui = { ...ui, directory: api.state.directory };
         for (const name of SNAPSHOT_EVENTS) disposers.push(api.events.on(name, event => adopt(event.data)));
         disposers.push(api.events.on(FOCUS_EVENT, onFocusRequest));
         disposers.push(api.events.on('gap', () => { void loadState(); }));

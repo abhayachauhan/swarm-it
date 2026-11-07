@@ -127,3 +127,27 @@ test('lastLineOf ignores ANSI, blanks and box drawing', () => {
     assert.equal(lastLineOf(''), '');
     assert.equal(lastLineOf(null), '');
 });
+
+test('global agent directory distinguishes idle sessions from proven completion and retains worker relationships',()=>{
+ const {store}=setup();store.workspaceNames.set('ws1','Platform');
+ upsert(store,'orch','running',{agent:'claude',workspaceName:'Platform',title:'Schema sync rollout'});
+ upsert(store,'w1','idle',{agent:null,workspaceName:'Platform'});
+ upsert(store,'w2','idle',{agent:'claude',workspaceName:'Platform'});store.resultExists.set('w2',true);
+ upsert(store,'ordinary','idle',{agent:'codex',workspaceName:'Releases',title:'Release review'});
+ const agents=buildSnapshot(store).agents;
+ assert.equal(new Set(agents.map(a=>a.paneID)).size,agents.length);
+ assert.equal(agents.find(a=>a.paneID==='ordinary').state,'waiting');
+ assert.equal(agents.find(a=>a.paneID==='ordinary').activity,'idle');
+ assert.equal(agents.find(a=>a.paneID==='w2').state,'done');
+ assert.equal(agents.find(a=>a.paneID==='w1').parent,'orch');
+ assert.equal(agents.find(a=>a.paneID==='w1').agent,'claude');
+ assert.equal(agents.find(a=>a.paneID==='orch').coordinator,true);
+});
+
+test('global agent directory preserves stopped and closed current workers and ignores cleared ordinary agents',()=>{
+ const {store}=setup();upsert(store,'orch','idle',{agent:'claude'});upsert(store,'w1','waitingForInput',{agent:'claude'});store.exits.set('w1',{reason:'Usage limit reached'});store.resultExists.set('w2',true);store.gone.add('w2');
+ upsert(store,'ordinary','idle',{agent:'claude'});upsert(store,'ordinary','idle',{agent:null,agentSessionID:null});
+ const agents=buildSnapshot(store).agents;
+ assert.equal(agents.find(a=>a.paneID==='w1').stopped.reason,'Usage limit reached');assert.equal(agents.find(a=>a.paneID==='w1').directory,false);
+ assert.equal(agents.find(a=>a.paneID==='w2').paneClosed,true);assert.equal(agents.find(a=>a.paneID==='w2').state,'done');assert.equal(agents.some(a=>a.paneID==='ordinary'),false);
+});

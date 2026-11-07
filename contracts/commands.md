@@ -277,3 +277,9 @@ The compact brief now renders a single current-progress sentence with Details. G
 ### Fresh session and continue
 
 `local.swarm-view.fresh-session` accepts an optional `paneID`; pane-header actions use the current pane. The command saves a private tool-free Sonnet summary and starts a fresh conversation in the same pane and CLI, without native resume flags. Claude launches Opus; Codex uses its configured default. Original transcripts and handoff-plan references remain recoverable. Busy sessions, background agents, drafts and open questions are refused. Summary generation has a ten-second deadline; failures before exit keep the old session open. Failures after exit include the saved summary path. Duplicate in-flight requests are refused. The `freshSessionEnabled` plugin setting disables the button action. No cloud changes or approval decisions are authorised by this action.
+
+### Agent appearance
+
+`local.swarm-view.agent-appearance` accepts `{size: number}` for native terminal font size, an integer from 12 to 24. With no size it uses 17. Explicit null, fractions and strings are rejected. Only the `font-size` appearance setting changes, through Kelpi's supported application settings API. Unsupported hosts return `APPEARANCE_UNAVAILABLE`; a bounded provider failure returns `APPEARANCE_FAILED`. Agent card sizes and directory scope are view preferences persisted with `setState`. `agentDirectoryEnabled` disables global directory data and returns to the focused swarm view.
+
+Closed custom-worktree results that cannot satisfy the existing path policy remain refused; this interface change does not broaden filesystem trust. Default swarm results under the configured result directory remain accessible after their terminal closes.

@@ -62,7 +62,7 @@
     const isFinished = worker => worker.state === 'done' || worker.state === 'error';
 
     /**
-     * The three sections of the rail, in reading order. Each is { key, title, rows }; empty ones are not drawn.
+     * The four activity sections of the rail, in reading order. Each is { key, title, rows }; empty ones are not drawn.
      *   needs:   one 'request' row per permission card (a waiting worker with a card appears only here), then one
      *            'stopped' row per worker whose Claude exited with no result (worker.stopped), then one
      *            'waiting' row per worker waiting for input whose prompt the backend cannot read (snapshot.waitingPanes);
@@ -70,6 +70,7 @@
      *   done:    no rows, only `count`: how many workers finished (done or error).
      * Archived workers are omitted everywhere.
      */
+    const agentSnapshot = (snapshot, ui) => !snapshot ? snapshot : { ...snapshot, doneOpen: !!ui.doneOpen, ...(snapshot.agents && ui.directory !== false ? { workers: snapshot.agents.map(w => ({...w, nativeNavigation: !w.paneClosed})), orchestrator: null, otherSwarms: [] } : {}) };
     function sections(snapshot) {
         if (!snapshot) return [];
         const needs = [];
@@ -88,19 +89,29 @@
         for (const entry of Array.isArray(snapshot.waitingPanes) ? snapshot.waitingPanes : []) {
             if (!entry || carded.has(entry.paneID)) continue;
             carded.add(entry.paneID);
-            needs.push({ kind: 'waiting', paneID: entry.paneID, entry });
+            const worker = activeWorkers(snapshot).find(w => w.paneID === entry.paneID);
+            needs.push({ ...worker, kind: 'waiting', paneID: entry.paneID, entry });
+        }
+        for (const worker of activeWorkers(snapshot)) {
+            if (worker.activity !== 'waiting' || isFinished(worker) || carded.has(worker.paneID)) continue;
+            carded.add(worker.paneID);
+            needs.push({ ...worker, kind: 'waiting', paneID: worker.paneID, entry: { paneID: worker.paneID, label: worker.label } });
         }
         const workers = activeWorkers(snapshot).map(worker => ({ kind: 'worker', ...worker }));
-        const running = workers.filter(row => !isFinished(row) && !carded.has(row.paneID));
+        const available = workers.filter(row => !isFinished(row) && !carded.has(row.paneID));
+        const idle = available.filter(row => row.activity === 'idle' || row.state === 'waiting');
+        const running = available.filter(row => !idle.includes(row));
+        const finished = workers.filter(row => isFinished(row) && !carded.has(row.paneID));
         return [
             { key: 'needs', title: 'Needs you', rows: needs },
             { key: 'running', title: 'Running', rows: running },
-            { key: 'done', title: 'Done', rows: [], count: workers.filter(isFinished).length },
+            { key: 'idle', title: 'Idle', rows: idle },
+            { key: 'done', title: 'Done', rows: [], finished, count: finished.length },
         ];
     }
 
     /** The flat list J/K walk: every section's rows in order. The coordinator is not a row; it is the header's ⌂ button. */
-    const rowsOf = snapshot => sections(snapshot).flatMap(section => section.rows);
+    const rowsOf = snapshot => sections(snapshot).flatMap(section => section.key === 'done' && snapshot?.doneOpen ? section.finished : section.rows);
 
     /**
      * The header's home button target: open-thread on the orchestrator closes the thread view and gives the coordinator
@@ -328,14 +339,15 @@
                 // On a card, Enter shows or shortens the command; on a worker it opens the thread.
                 if (selected.kind === 'request') return other({ ui: toggleExpanded(disarm(active), selected.item.id, nowMs) });
                 // A worker waiting on a prompt the rail cannot read: Enter goes to its pane.
-                if (selected.kind === 'waiting' || selected.kind === 'stopped') return other({ reveal: selected.paneID });
+                if (selected.directory || selected.nativeNavigation || selected.kind === 'waiting' || selected.kind === 'stopped') return other({ reveal: selected.paneID });
                 return other({ effect: effect('open-thread', { paneID: selected.paneID }) });
             case 'e': {
-                if (!selected || selected.kind !== 'worker') return other({ notice: 'Select a worker to archive.' });
+                if (!selected || !['worker', 'waiting'].includes(selected.kind) || selected.directory || !selected.state) return other({ notice: 'Select a swarm worker to archive.' });
                 return other({ effect: effect('archive', { paneID: selected.paneID }) });
             }
             case 'x': {
-                if (!selected || selected.kind !== 'worker') return other({ notice: 'Select a worker to stop.' });
+                if (!selected || !['worker', 'waiting'].includes(selected.kind) || selected.directory || !selected.state) return other({ notice: 'Select a swarm worker to stop.' });
+                if (isFinished(selected)) return other({ label: 'Remove', effect: effect('close-worker', { paneID: selected.paneID }) });
                 if (ui.closeAsk && ui.closeAsk.paneID === selected.paneID && nowMs < ui.closeAsk.until) {
                     return handled({ ui: { ...disarm(active), closeAsk: null }, label: 'Stop', effect: effect('close-worker', { paneID: selected.paneID }) });
                 }
@@ -385,10 +397,15 @@
         if (text !== undefined && text !== null) node.textContent = String(text);
         return node;
     }
+    function scopeControls(root, owner) {
+        for (const control of root.querySelectorAll('button')) control.setAttribute('data-focus-key', `${owner}:${control.getAttribute('data-focus-key') || control.textContent}`);
+    }
     function button(doc, label, className, onClick, title) {
         const node = h(doc, 'button', className, label);
         node.setAttribute('type', 'button');
-        if (title) node.setAttribute('title', title);
+        if (title) { node.setAttribute('title', title); node.setAttribute('aria-label', title); }
+        node.setAttribute('data-focus-key', title || label);
+        node.addEventListener('dblclick', event => { event?.stopPropagation?.(); });
         node.addEventListener('click', event => { if (event && event.stopPropagation) event.stopPropagation(); onClick(); });
         return node;
     }
@@ -508,6 +525,7 @@
             const line = button(doc, swarmSummary(swarm), 'swarm-line', () => handlers.onReveal(swarm.orchestratorPaneID, 'Coordinator'), `Go to the ${swarm.name} coordinator`);
             line.dataset.color = groupColor(swarm.color);
             line.dataset.workspaceId = swarm.workspaceID;
+            line.setAttribute('data-focus-key', `swarm:${swarm.workspaceID}`);
             return line;
         })];
     }
@@ -522,7 +540,7 @@
         const worker = snapshot.workers.find(w => w.paneID === row.paneID);
         const label = (worker && worker.label) || entry.label || String(row.paneID).slice(0, 8);
         const node = h(doc, 'div', 'att att-waiting');
-        node.setAttribute('role', 'option');
+        node.setAttribute('role', 'group');
         node.setAttribute('tabindex', '-1');
         node.setAttribute('aria-current', selected ? 'true' : 'false');
         node.dataset.paneId = row.paneID;
@@ -531,8 +549,18 @@
         node.append(h(doc, 'div', 'att-text', `${label} is waiting for you`));
         const actions = h(doc, 'div', 'att-actions');
         actions.append(button(doc, 'Go to pane', 'btn btn-primary', () => handlers.onReveal(row.paneID, 'Go to pane'), 'Show the pane so you can answer it there (Enter)'));
+        if (!row.directory && row.state) {
+            const asked = view.ui?.closeAsk?.paneID === row.paneID;
+            if (asked) {
+                const stop = button(doc, 'Really stop?', 'btn btn-danger', () => handlers.onCloseConfirm(row.paneID), 'Ends this worker and closes its pane');
+                if (layoutLocked(view.ui, view.nowMs)) { stop.disabled = true; stop.setAttribute('disabled', ''); }
+                actions.append(stop);
+                actions.append(button(doc, 'Keep', 'btn', () => handlers.onCloseCancel(), 'Keep the worker running'));
+            } else actions.append(button(doc, 'Stop', 'btn', () => handlers.onCloseAsk(row.paneID), 'Stop this worker (X)'));
+        }
         node.append(actions);
         node.addEventListener('click', () => handlers.onSelect(row.paneID));
+        scopeControls(node, row.paneID);
         return node;
     }
 
@@ -540,7 +568,7 @@
     function buildStoppedRow(doc, row, selected, view, handlers) {
         const worker = row.worker;
         const node = h(doc, 'div', 'att att-stopped');
-        node.setAttribute('role', 'option');
+        node.setAttribute('role', 'group');
         node.setAttribute('tabindex', '-1');
         node.setAttribute('aria-current', selected ? 'true' : 'false');
         node.dataset.paneId = row.paneID;
@@ -549,6 +577,7 @@
         actions.append(button(doc, 'Go to pane', 'btn btn-primary', () => handlers.onReveal(row.paneID, 'Go to pane'), 'Show the pane to see why it stopped (Enter)'));
         node.append(actions);
         node.addEventListener('click', () => handlers.onSelect(row.paneID));
+        scopeControls(node, row.paneID);
         return node;
     }
 
@@ -622,6 +651,7 @@
             actions.append(yes, no);
         }
         root.append(actions);
+        scopeControls(root, item.id);
         return root;
     }
 
@@ -646,23 +676,29 @@
 
     /**
      * A worker row: dot, name, elapsed, then the one right verb. Running or waiting: a two-step Stop, shown only on the
-     * selected or hovered row (CSS, class row-hover). Finished workers have no row: the Done head counts them.
+     * selected or hovered row (CSS, class row-hover). Finished workers have result rows when Done is expanded.
      */
     function buildThreadRow(doc, row, selected, view, handlers) {
         const nowMs = Number.isFinite(view.nowMs) ? view.nowMs : Date.now();
         const node = h(doc, 'div', 'row');
-        node.setAttribute('role', 'option');
+        node.setAttribute('role', 'group');
         node.setAttribute('tabindex', '-1');
         node.setAttribute('aria-current', selected ? 'true' : 'false');
         node.dataset.paneId = row.paneID;
-        node.dataset.state = row.state;
+        node.dataset.state = row.activity === 'idle' && !isFinished(row) ? 'idle' : row.state;
+        if (row.parent) node.dataset.parent = row.parent;
         const top = h(doc, 'span', 'row-top');
-        top.append(h(doc, 'span', `dot dot-${row.state}`));
-        top.append(h(doc, 'span', 'name', `${row.label || row.paneID}${row.agent === 'codex' ? ' · Codex' : ''}`));
+        top.append(h(doc, 'span', `dot dot-${!isFinished(row) && (row.activity === 'idle' || row.state === 'waiting') ? 'idle' : row.state}`));
+        const name = h(doc, 'span', 'name', `${row.label || row.paneID}${row.agent === 'codex' && !row.directory ? ' · Codex' : ''}`);
+        name.setAttribute('title', row.label || row.paneID);
+        top.append(name);
         const time = h(doc, 'span', 'time', formatElapsed(elapsedNow(row, view.receivedAtMs, view.nowMs)));
         time.dataset.elapsedPane = row.paneID;
+        time.setAttribute('title', row.directory ? 'Time since this terminal was created' : 'Time since this worker first appeared');
         top.append(time);
-        {
+        if (isFinished(row) && !row.directory && (!row.paneClosed || row.state === 'done')) {
+            top.append(button(doc, 'Open result', 'btn', () => (handlers.onOpenResult || handlers.onOpen)(row.paneID)));
+        } else if (!row.directory) {
             const asked = view.ui && view.ui.closeAsk && view.ui.closeAsk.paneID === row.paneID;
             {
                 const actions = h(doc, 'span', 'row-actions row-hover');
@@ -680,10 +716,13 @@
                 top.append(actions);
             }
         }
+        if (row.directory || row.nativeNavigation) top.append(button(doc, 'Focus / split', 'btn row-hover', () => handlers.onFocusAgent?.(row.paneID), `Focus ${row.label || row.paneID} or restore its split layout`));
         node.append(top);
-        node.append(h(doc, 'span', 'last', statusLine(row)));
-        node.addEventListener('click', () => handlers.onSelect(row.paneID));
-        node.addEventListener('dblclick', () => handlers.onOpen(row.paneID));
+        node.append(h(doc, 'div', 'agent-meta', `${row.workspaceName ? row.workspaceName + ' · ' : ''}${row.coordinator ? 'Coordinator · ' : row.parent ? `Worker for ${row.parentLabel || 'coordinator'} · ` : ''}${row.agent === 'codex' ? 'Codex' : 'Claude'} · ${row.state === 'done' ? 'Done' : row.state === 'error' ? 'Failed' : row.activity === 'idle' || row.state === 'waiting' ? 'Idle' : 'Running'}`));
+        node.append(h(doc, 'span', 'last', row.task?.replace(/^#+\s*/, '') || statusLine(row)));
+        node.addEventListener('click', () => (row.directory || (!!view.snapshot?.agents && view.ui.directory !== false) ? handlers.onAgentSelect || handlers.onSelect : handlers.onSelect)(row.paneID));
+        node.addEventListener('dblclick', () => row.directory || row.nativeNavigation ? handlers.onFocusAgent?.(row.paneID) : handlers.onOpen(row.paneID));
+        scopeControls(node, row.paneID);
         return node;
     }
 
@@ -757,7 +796,7 @@
             locked: (view.guard || defaultGuard).locked(row.item.id, nowMs) || layoutLocked(ui, nowMs),
             armed: armed && armed.itemID === row.item.id ? armed.action : null
         });
-        node.setAttribute('role', 'option');
+        node.setAttribute('role', 'group');
         node.setAttribute('tabindex', '-1');
         node.setAttribute('aria-current', selected ? 'true' : 'false');
         node.dataset.paneId = row.paneID;
@@ -765,17 +804,21 @@
         return node;
     }
 
-    /** "Running · 2". The Done head is the whole Done section: a count, no rows. */
+    /** "Running · 2". Completed rows are revealed by the Done toggle. */
     const sectionSize = section => (Number.isFinite(section.count) ? section.count : section.rows.length);
-    function buildSectionHead(doc, section) {
+    function buildSectionHead(doc, section, view, handlers) {
         const node = h(doc, 'div', `sec-head sec-${section.key}`);
         node.setAttribute('role', 'presentation');
         node.append(h(doc, 'span', 'sec-title', `${section.title} · ${sectionSize(section)}`));
+        if (section.key === 'done' && handlers) {
+            const toggle = button(doc, view.ui.doneOpen ? 'Hide' : 'Show', 'btn', () => handlers.onToggleDone(), 'Toggle completed agents');
+            toggle.setAttribute('aria-expanded', view.ui.doneOpen ? 'true' : 'false'); node.append(toggle);
+        }
         return node;
     }
 
     /** The keyboard hint lives in the header's tooltip, not in a footer line. */
-    const KEY_HINT = 'Keys (Ctrl+Alt+J focuses the rail): J/K move, Enter open, E archive, X stop, Y/N twice to approve or deny';
+    const KEY_HINT = 'Ctrl+Alt+J focuses Agents. J/K choose, Enter opens a terminal or result. E archives a swarm worker; X stops or removes it. Y/N twice approves or denies the selected request.';
     const warningsOf = snapshot => (snapshot && Array.isArray(snapshot.warnings) ? snapshot.warnings.filter(w => typeof w === 'string' && w) : []);
 
     /**
@@ -834,7 +877,7 @@
      */
     function buildCodexQuestions(doc, snapshot, drafts, handlers) {
         const cards = [];
-        if (snapshot?.codexQuestions === undefined) return cards;
+        if (snapshot?.codexQuestions === undefined || (!snapshot.codexQuestions.length && snapshot.codexQuestionsConnected !== false)) return cards;
         const head = h(doc, 'div', 'att-actions');
         head.append(h(doc, 'span', 'dim', 'Codex questions'), button(doc, 'Refresh', 'btn', () => handlers.onLoadQuestions()));
         cards.push(head);
@@ -862,12 +905,12 @@
                     label.append(choose);
                     if (option.description) label.append(h(doc, 'div', 'dim', option.description));
                 }
-                label.append(input); card.append(label);
+                scopeControls(label, q.id); label.append(input); card.append(label);
             }
             const actions = h(doc, 'div', 'att-actions');
             actions.append(button(doc, 'Send answer', 'btn btn-primary', () => handlers.onQuestionAnswer(request)));
             actions.append(button(doc, 'Go to workspace', 'btn', () => handlers.onQuestionWorkspace(request)));
-            card.append(actions); cards.push(card);
+            card.append(actions); scopeControls(card, `${request.threadID}:${request.requestID}`); cards.push(card);
         }
         return cards;
     }
@@ -882,11 +925,28 @@
         const nowMs = Number.isFinite(view.nowMs) ? view.nowMs : Date.now();
         (view.guard || defaultGuard).observe(requests, requests.length ? nowMs : 0);
 
-        const list = buildCodexQuestions(doc, snapshot, view.questionDrafts || {}, handlers);
+        const directory = snapshot?.agents && view.ui.directory !== false;
+        const displaySnapshot = agentSnapshot(snapshot, view.ui);
+        const list = [];
+        if (snapshot) {
+            const fleet = h(doc, 'div', 'fleet');
+            fleet.append(h(doc, 'div', 'fleet-title', 'Agents'));
+            fleet.append(h(doc, 'div', 'fleet-context', directory ? 'Across all workspaces' : snapshot.workspaceName || 'Current workspace'));
+            const sizes = button(doc, 'A−', 'btn', () => handlers.onTextSize?.(-1), 'Smaller agent text');
+            const larger = button(doc, 'A+', 'btn', () => handlers.onTextSize?.(1), 'Larger agent text');
+            fleet.append(sizes, larger, button(doc, 'Terminal 17px', 'btn', () => handlers.onTerminalSize?.(17), 'Set terminal text to 17px'));
+            if (snapshot.agents) fleet.append(button(doc, directory ? 'This swarm' : 'All agents', 'btn', () => handlers.onDirectory?.(), 'Switch agent list scope'));
+            if (refs.head) refs.head.append(fleet); else list.push(fleet);
+            if (!directory && snapshot.orchestrator) {
+                const coordinator = button(doc, snapshot.orchestrator.label === 'coordinator' ? 'Coordinator' : snapshot.orchestrator.label || 'Coordinator', 'coordinator-card', () => handlers.onHome());
+                coordinator.setAttribute('title', 'Open the coordinator terminal'); list.push(coordinator);
+            }
+        }
+        list.push(...buildCodexQuestions(doc, snapshot, view.questionDrafts || {}, handlers));
         if (!snapshot) {
             list.push(h(doc, 'p', 'empty', 'Connecting...'));
         } else {
-            const secs = sections(snapshot);
+            const secs = sections(displaySnapshot);
             if (!secs.some(sectionSize)) list.push(h(doc, 'p', 'empty', 'No workers yet.'));
             const build = row => {
                 const selected = row.paneID === ui.selectedPaneID;
@@ -897,10 +957,11 @@
             };
             for (const section of secs) {
                 if (!sectionSize(section)) continue;
-                list.push(buildSectionHead(doc, section));
-                for (const row of section.rows) list.push(build(row));
+                list.push(buildSectionHead(doc, section, view, handlers));
+                const rows = section.key === 'done' ? (ui.doneOpen ? section.finished : []) : section.rows;
+                for (const row of rows) list.push(build(row));
             }
-            list.push(...buildOtherSwarms(doc, snapshot, handlers));
+            list.push(...buildOtherSwarms(doc, displaySnapshot, handlers));
         }
         refs.list.replaceChildren(...list);
         // Whether the rail holds the keyboard, readable from the DOM (the integration scenarios probe it).
@@ -915,7 +976,7 @@
     globalThis.SwarmLogic = {
         CMD,
         isSnapshot, acceptSnapshot, formatElapsed, elapsedNow,
-        sections, rows: rowsOf, requestItems, homeEffect,
+        agentSnapshot, sections, rows: rowsOf, requestItems, homeEffect,
         initialUI, reconcile, moveSelection, itemsForPane, requestForPane, cardTitle, fromOtherSwarm, isExpanded, toggleExpanded, pruneExpanded, cardCommand,
         ARM_MS, IDLE_MS, LOCK_MS, LAYOUT_LOCK_MS, BLUR_GRACE_MS, armedNow, expire, touch, setRailFocused, noteBlur, resolveBlur, createButtonGuard,
         markLayout, layoutLocked, layoutLockRemaining, askClose, cancelClose,

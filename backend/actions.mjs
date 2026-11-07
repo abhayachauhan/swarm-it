@@ -157,7 +157,10 @@ export async function sendToWorker(api, store, paneID, text) {
  */
 export async function openResult(api, store, paneID) {
     if (typeof paneID !== 'string' || !paneID) return fail('paneID is required', 'BAD_ARGS');
-    const w = worker(store, paneID);
+    // A closed worker can still expose its already-verified result, never terminal controls.
+    const closedResult = !store.panes.has(paneID) && store.resultExists.get(paneID) === true
+        && store.orchestrator?.source === 'manifest' && actionableOrchestrator(store, store.orchestrator?.paneID);
+    const w = worker(store, paneID) ?? (closedResult ? store.manifestWorkers.find(w => w.paneID === paneID) : null);
     if (!w) return fail(`pane ${paneID} is not a worker in the manifest`, 'NOT_WORKER');
     if (!w.resultPath) return fail('worker has no result path', 'NO_RESULT');
     const checked = await checkResultPath(w, store.settings, undefined, resultContext(store, paneID));

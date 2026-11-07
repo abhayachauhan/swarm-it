@@ -309,3 +309,9 @@ test('pinOrchestrator pins a known non-worker pane only', async () => {
     assert.equal(store.pinnedOrchestratorPaneID, 'stranger');
     assert.equal(api.storageMap.get('pins').orchestratorPaneID, 'stranger');
 });
+
+test('a closed worker result can be opened only under its live coordinator and existing path policy',async()=>{
+ const {api,store}=setup({files:{'/wt/w1/result.md':'# Goal\nValidated result'}});store.settings.resultRoot='/wt/w1';store.panes.delete('w1');store.resultExists.set('w1',true);
+ assert.deepEqual(await openResult(api,store,'w1'),{ok:true,path:'/wt/w1/result.md'});assert.equal(api.callsTo('files.open').length,1);
+ store.panes.delete('orch');assert.deepEqual(await openResult(api,store,'w1'),{ok:false,error:'pane w1 is not a worker in the manifest',code:'NOT_WORKER'});assert.equal(api.callsTo('files.open').length,1);assert.equal(api.callsTo('terminal.send').length,0);
+});

@@ -52,9 +52,10 @@ test('sections: Needs you holds one request row per card, Running the live worke
     assert.deepEqual(secs.map(s => [s.key, s.title, s.rows.map(r => r.paneID)]), [
         ['needs', 'Needs you', ['p-wait']],
         ['running', 'Running', ['p-run']],
+        ['idle', 'Idle', []],
         ['done', 'Done', []],
     ]);
-    assert.equal(secs[2].count, 3, 'done and error workers are counted; the archived one is not');
+    assert.equal(secs[3].count, 3, 'done and error workers are counted; the archived one is not');
     assert.equal(secs[0].rows[0].kind, 'request');
     assert.equal(secs[0].rows[0].item.type, 'Request');
     assert.equal(secs[1].rows[0].kind, 'worker');
@@ -62,12 +63,13 @@ test('sections: Needs you holds one request row per card, Running the live worke
     assert.equal(secs.flatMap(s => s.rows).some(r => r.paneID === 'p-arch'), false);
 });
 
-test('a waiting worker without a card is listed under Running; one with a card appears only as the card', () => {
+test('an uncarded idle worker is listed under Idle; one with a card appears only as the card', () => {
     const snap = fixture();
     snap.attention = snap.attention.filter(i => i.type !== 'Request');
     const secs = L.sections(snap);
     assert.deepEqual(secs[0].rows, []);
-    assert.deepEqual(secs[1].rows.map(r => r.paneID), ['p-wait', 'p-run']);
+    assert.deepEqual(secs[1].rows.map(r => r.paneID), ['p-run']);
+    assert.deepEqual(secs[2].rows.map(r => r.paneID), ['p-wait']);
     // Two cards for the same pane make one row.
     const twice = fixture();
     twice.attention.push({ ...twice.attention[0], id: 'Request:p-wait:later' });
@@ -457,7 +459,7 @@ test('displayCommand shows the raw lines unless every non-final line has the sam
 
 test('a Request card shows the raw lines, rejoined with ⏎ marks only for a real wrap, with no "Raw lines" fold', () => {
     const refs = () => ({ list: { nodes: [], replaceChildren(...n) { this.nodes = n; } }, footer: { replaceChildren() {} } });
-    const doc = { createElement: tag => ({ tag, children: [], dataset: {}, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, append(...n) { this.children.push(...n); }, addEventListener() {}, set className(v) { this.cls = v; }, get className() { return this.cls ?? ''; }, set textContent(v) { this.text = String(v); }, get textContent() { return this.text ?? ''; } }) };
+    const doc = { createElement: tag => ({ tag, children: [], dataset: {}, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; }, querySelectorAll(tag) { return this.children.flatMap(n => [...(n.tag === tag ? [n] : []), ...n.querySelectorAll(tag)]); }, append(...n) { this.children.push(...n); }, addEventListener() {}, set className(v) { this.cls = v; }, get className() { return this.cls ?? ''; }, set textContent(v) { this.text = String(v); }, get textContent() { return this.text ?? ''; } }) };
     const nodes = r => { const out = []; const walk = n => { out.push(n); (n.children ?? []).forEach(walk); }; r.list.nodes.forEach(walk); return out; };
     const draw = (command, ui = { selectedPaneID: null, railFocused: false }) => {
         const snap = fixture();
@@ -482,3 +484,17 @@ test('a Request card shows the raw lines, rejoined with ⏎ marks only for a rea
     const hidden = draw('echo ok\n#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nrm -rf ~/repos');
     assert.ok(texts(hidden).includes('echo ok\n#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nrm -rf ~/repos'), texts(hidden).join(' | '));
 });
+
+test('completed workers with attention appear once, and native waiting entries remain visible in Needs you',()=>{
+ const snap=fixture();snap.workers.find(w=>w.paneID==='p-wait').state='done';snap.workers.push({paneID:'native-wait',label:'Review question',state:'waiting',activity:'waiting',directory:true});
+ const sections=L.sections(snap);assert.ok(sections[0].rows.some(r=>r.paneID==='native-wait'));assert.equal(sections.find(s=>s.key==='done').finished.some(r=>r.paneID==='p-wait'),false);
+});
+
+ test('followed waiting workers retain stop and archive while ordinary agents stay navigation only',()=>{
+ const snap=fixture();snap.attention=[];snap.waitingPanes=[];snap.workers=[{paneID:'wait',label:'Worker',state:'waiting',activity:'waiting',directory:false}];
+ const ui={railFocused:true,selectedPaneID:'wait'};
+ assert.equal(L.reduceKey(ui,snap,{key:'e'}).effect.command,'local.swarm-view.archive');
+ const armed=L.reduceKey(ui,snap,{key:'x',nowMs:1000});assert.equal(armed.effect,null);
+ assert.equal(L.reduceKey(armed.ui,snap,{key:'x',nowMs:1100}).effect.command,'local.swarm-view.close-worker');
+ snap.workers[0].directory=true;assert.equal(L.reduceKey(ui,snap,{key:'x'}).effect,null);
+ });

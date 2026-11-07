@@ -60,6 +60,9 @@ export async function bootApp(options = {}) {
     let AppError = Error;
     const api = {
         ready: Promise.resolve(),
+        snapshot: async () => options.hostSnapshot || {state:{workspaces:[]}},
+        state: options.viewState || {},
+        setState: async value => { api.state = value; },
         events: { on(name, fn) { (events[name] ??= []).push(fn); return () => { events[name] = (events[name] ?? []).filter(f => f !== fn); }; } },
         commands: {
             execute: async (command, args) => {
@@ -71,7 +74,8 @@ export async function bootApp(options = {}) {
                 return { ok: true };
             },
         },
-        ui: { reveal: async paneID => { reveals.push(paneID); if (options.revealFails) throw new AppError(options.revealFails); } },
+        layout: options.layout,
+        ui: { getPaneChrome: async () => { throw new AppError('Presenter-only API'); }, reveal: async paneID => { reveals.push(paneID); if (options.revealFails) throw new AppError(options.revealFails); } },
     };
     const window = { kelpi: api, addEventListener(name, fn) { (listeners[name] ??= []).push(fn); }, focus() {} };
     const dispatch = (name, event = {}) => {
@@ -100,7 +104,7 @@ export async function bootApp(options = {}) {
     const list = byId.list, footer = byId.footer, head = byId.head;
     return {
         refs: { app, head, panel: byId.panel, list, footer },
-        L: context.SwarmLogic, calls, reveals, warned, clock, advance, flush, dispatch, observers,
+        L: context.SwarmLogic, getViewState: () => api.state, calls, reveals, warned, clock, advance, flush, dispatch, observers,
         /** Deliver a backend event (a snapshot, focus-rail, gap). */
         emit: (name, data) => { for (const fn of events[name] ?? []) fn({ data }); },
         /** Fire every ResizeObserver callback, as the browser does when #list changes size. */
