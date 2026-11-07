@@ -520,7 +520,7 @@ export function registerAll(api, deps = modules) {
             if (event.sequence <= seqFloor) return;
             seqFloor = event.sequence;
         }
-        const directoryKey = () => JSON.stringify([...st.panes.values()].filter(p => ['claude', 'codex'].includes(p.agent) || st.manifestWorkers.some(w => w.paneID === p.id) || S.otherSwarmPane(st, p.id)).map(p => [p.id, p.agent, p.status, p.workspaceID, p.workspaceName, p.label]));
+        const directoryKey = () => JSON.stringify([...st.panes.values()].filter(p => ['claude', 'codex'].includes(p.agent) || st.manifestWorkers.some(w => w.paneID === p.id) || S.otherSwarmPane(st, p.id)).map(p => [p.id, p.agent, p.status, p.workspaceID, S.agentWorkspaceName(st, p), p.label, S.agentTask(p), p.agentStartedAt]));
         const beforeDirectory = st.settings.agentDirectoryEnabled === false ? null : directoryKey();
         const changes = Array.isArray(event?.data) ? event.data : [];
         const touched = new Set();
@@ -582,9 +582,11 @@ export function registerAll(api, deps = modules) {
     // so read each live worker's screen on a timer too: raise a Request for a new prompt, settle one that is gone.
     // Workers of every live swarm are scanned, not only the followed one: a request blocks its worker until answered.
     async function scanPrompts() {
+        if (disposed) return;
         let changed = false;
         const displayRead = new Set();
         const noteDisplayPrompt = (paneID, screen) => {
+            if (disposed) return;
             displayRead.add(paneID);
             const tail = screen.split('\n').filter(line => line.trim()).slice(-5);
             const waiting = !!(N.parseCodexPrompt(screen) || N.parsePrompt(screen))
@@ -595,14 +597,20 @@ export function registerAll(api, deps = modules) {
         };
         // Focus belongs to the pane list, not the state-change DTO; hooks may never identify this Codex pane.
         try {
-            for (const pane of await api.panes.list()) {
+            for (const pane of await withTimeout(api.panes.list(), READ_TIMEOUT_MS, 'reading pane focus')) {
                 const known = st.panes.get(pane.id);
-                if (known) Object.assign(known, { isFocused: !!pane.isFocused, isActiveWorkspace: !!pane.isActiveWorkspace, title: pane.title ?? known.title });
+                if (known) {
+                    const title = S.agentTask(known);
+                    Object.assign(known, { isFocused: !!pane.isFocused, isActiveWorkspace: !!pane.isActiveWorkspace, title: 'title' in pane ? pane.title ?? null : known.title });
+                    if (title !== S.agentTask(known)) changed = true;
+                }
             }
         } catch { /* keep the last known focus */ }
+        if (disposed) return;
         /** Workers scanned this round; a waiting row for any other pane is dropped. */
         const scanned = new Set();
         const scanWorker = async (paneID, worker = null) => {
+            if (disposed) return;
             if (worker) scanned.add(paneID);
             const knownCodex = S.anyCodexPane(st, paneID) || worker?.worker?.agent === 'codex';
             // Codex can show folder trust before hooks or session metadata exist. Skip other idle shells
@@ -612,6 +620,7 @@ export function registerAll(api, deps = modules) {
             if (pane?.status === 'idle' && !knownCodex && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) return;
             let screen;
             try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
+            if (disposed) return;
             noteDisplayPrompt(paneID, screen);
             const codexPrompt = st.panes.get(paneID)?.agent === 'claude' ? null : N.parseCodexPrompt(screen);
             const codex = knownCodex || !!codexPrompt;
@@ -697,10 +706,15 @@ export function registerAll(api, deps = modules) {
         // Display-only checks outside Auto never raise an approvable card or send a key.
         // Claude reports waitingForInput at an ordinary idle composer too, so only a visible
         // question or permission menu belongs in Needs you for an unlisted session.
-        if (st.settings.agentDirectoryEnabled !== false) for (const pane of st.panes.values()) {
-            if (pane.agent !== 'claude' || displayRead.has(pane.id) || (pane.type ?? 'shell') !== 'shell') continue;
-            try { noteDisplayPrompt(pane.id, await S.capturePane(api, pane.id, N.PROMPT_CAPTURE_LINES)); } catch { /* keep last verified display state */ }
+        if (st.settings.agentDirectoryEnabled !== false) {
+            const panes = [...st.panes.values()].filter(pane => pane.agent === 'claude' && !displayRead.has(pane.id) && (pane.type ?? 'shell') === 'shell');
+            // These reads only update display state. Limit parallel captures without making every
+            // ordinary session wait behind every other session's individual timeout.
+            for (let i = 0; i < panes.length && !disposed; i += 3) await Promise.all(panes.slice(i, i + 3).map(async pane => {
+                try { noteDisplayPrompt(pane.id, await S.capturePane(api, pane.id, N.PROMPT_CAPTURE_LINES)); } catch { /* keep last verified display state */ }
+            }));
         }
+        if (disposed) return;
         for (const paneID of st.displayPrompts) if (!st.panes.has(paneID)) { st.displayPrompts.delete(paneID); changed = true; }
         for (const orch of orchestrators) {
             const orchOpen = orch && st.panes.has(orch) ? st.attention.filter(i => i.paneID === orch && i.type === 'Request' && !i.handledAt) : [];
@@ -717,6 +731,7 @@ export function registerAll(api, deps = modules) {
         if (st.auto.on || Date.now() - st.auto.provider.checkedAt >= PROVIDER_CHECK_MS) {
             if (await AA.checkProvider(api, st)) changed = true;
         }
+        if (disposed) return;
         // Auto-approve newly raised cards (and switch itself off when its time ran out) on this timer too.
         if (await AA.run(api, st, Date.now())) changed = true;
         // A due hide retry also runs through settle (autoHide), on this timer.
@@ -725,7 +740,7 @@ export function registerAll(api, deps = modules) {
     // One scan at a time: a tick while a scan is still queued or running is skipped, so slow captures never pile up.
     let scanQueued = false;
     const scanTimer = setInterval(() => {
-        if (scanQueued) return;
+        if (disposed || scanQueued) return;
         scanQueued = true;
         serial(scanPrompts).catch(() => {}).finally(() => { scanQueued = false; });
     }, PROMPT_SCAN_MS);

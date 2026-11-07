@@ -275,7 +275,7 @@ test('all-agent directory separates Idle, retains questions and navigates to nat
  await app.pointerClick(app.button(app.refs.head,'This swarm'));assert.equal(app.row('session-1'),null);assert.ok(app.row('p-run'));
 });
 test('agent text sizing stays bounded and changes the rendered interface',async()=>{
- const app=await bootApp();for(let n=0;n<10;n++)await app.pointerClick(app.button(app.refs.head,'A+'));
+ const app=await bootApp();await app.pointerClick(app.button(app.refs.head,'Display'));for(let n=0;n<10;n++)await app.pointerClick(app.button(app.refs.head,'A+'));
  assert.match(app.refs.app.getAttribute('style'),/20px/);for(let n=0;n<12;n++)await app.pointerClick(app.button(app.refs.head,'A−'));assert.match(app.refs.app.getAttribute('style'),/13px/);
 });
 
@@ -292,7 +292,7 @@ test('expanded completed rows remain keyboard selectable across snapshots',async
 });
 test('view state restores and persists text size in sandboxed views',async()=>{
  const app=await bootApp({viewState:{agentTextSize:18,directory:false}});assert.match(app.refs.app.getAttribute('style'),/18px/);
- await app.pointerClick(app.button(app.refs.head,'A+'));assert.equal(app.getViewState().agentTextSize,19);assert.equal(app.getViewState().directory,false);
+ await app.pointerClick(app.button(app.refs.head,'Display'));await app.pointerClick(app.button(app.refs.head,'A+'));assert.equal(app.getViewState().agentTextSize,19);assert.equal(app.getViewState().directory,false);
 });
 test('Focus restores another zoomed pane before focusing the chosen agent and ignores rapid duplicate clicks',async()=>{
  const snap=fixture();snap.agents=[{paneID:'target-agent',label:'Release checks',agent:'codex',state:'running',directory:true}];let zoomed='old-agent';const zooms=[];
@@ -323,7 +323,7 @@ test('hiding Done reconciles away from an invisible completed row',async()=>{
  });
  test('Open wide opens the actual Agents view in a resizable pane with the same display preferences',async()=>{
  const opened=[];const app=await bootApp({viewState:{collapsedSections:['idle'],agentTextSize:17},context:{workspaceID:'workspace'},openView:async(...args)=>{opened.push(args);return {paneID:'wide'};}});
- await app.pointerClick(app.button(app.refs.head,'Open wide'));
+ await app.pointerClick(app.button(app.refs.head,'Display'));await app.pointerClick(app.button(app.refs.head,'Open wide'));
  assert.equal(opened.length,1);assert.equal(opened[0][0],'local.swarm-view.rail');assert.equal(opened[0][1].workspaceID,'workspace');assert.equal(opened[0][1].focus,true);assert.equal(opened[0][1].state.agentTextSize,17);assert.deepEqual([...opened[0][1].state.collapsedSections],['idle']);
  assert.equal(sent(app,'close-worker').length,0);
  });
@@ -336,7 +336,38 @@ test('hiding Done reconciles away from an invisible completed row',async()=>{
  let stored=null;const storage={get:async()=>stored,set:async(key,value)=>{assert.equal(key,'agents.display-preferences');stored=JSON.parse(JSON.stringify(value));}};
  const snap=fixture();snap.attention=[];snap.agents=[{paneID:'r',label:'Working',state:'running',activity:'running',directory:true},{paneID:'i',label:'Idle',state:'waiting',activity:'idle',directory:true}];
  const app=await bootApp({context:{},snapshot:snap,storage,stateFails:'Sidebar has no pane ID'});
- await app.pointerClick(app.refs.list.querySelector('[data-focus-key="section:idle"]'));await app.pointerClick(app.button(app.refs.head,'A+'));
+ await app.pointerClick(app.refs.list.querySelector('[data-focus-key="section:idle"]'));await app.pointerClick(app.button(app.refs.head,'Display'));await app.pointerClick(app.button(app.refs.head,'A+'));
  assert.deepEqual(stored.collapsedSections,['idle']);assert.equal(stored.agentTextSize,16);
  const reopened=await bootApp({context:{},snapshot:snap,storage,stateFails:'Sidebar has no pane ID'});assert.equal(reopened.row('i'),null);assert.ok(reopened.row('r'));assert.match(reopened.refs.app.getAttribute('style'),/16px/);
  });
+
+for (const release of ['blur', 'lostpointercapture', 'released move', 'hidden document']) test(`pending redraw recovers after ${release} without a pointerup`, async () => {
+ const app=await bootApp();app.dispatch('pointerdown');const next=fixture();next.sequence=999;next.workers.find(w=>w.paneID==='p-run').task='Latest task after missed release';app.emit('snapshot',next);await app.flush();
+ assert.doesNotMatch(app.row('p-run').textContent,/Latest task/);
+ if(release==='hidden document') app.documentEvent('visibilitychange',{visibilityState:'hidden'});
+ else if(release==='released move') app.dispatch('pointermove',{buttons:0});
+ else app.dispatch(release);
+ await app.advance(0);assert.match(app.row('p-run').textContent,/Latest task after missed release/);assert.equal(sent(app,'approve').length,0);
+});
+test('disposed views ignore late boot and snapshot results',async()=>{
+ let ready;const app=await bootApp({ready:new Promise(resolve=>{ready=resolve;})});app.dispatch('pagehide');ready();await app.flush();assert.equal(sent(app,'get-state').length,0);
+ const late=await bootApp();const before=late.refs.list.textContent;late.dispatch('pagehide');const next=fixture();next.sequence=999;next.workers[0].label='Should not redraw';late.emit('snapshot',next);await late.advance(2000);assert.equal(late.refs.list.textContent,before);
+});
+test('unavailable optional preference storage does not leave Agents blank',async()=>{
+ const app=await bootApp({context:{},storage:{get:()=>new Promise(()=>{})}});assert.equal(sent(app,'get-state').length,0);await app.advance(1500);assert.equal(sent(app,'get-state').length,1);assert.ok(app.row('p-run'));
+});
+test('the compact header hides secondary controls until Display is opened',async()=>{
+ const snap=fixture();snap.agents=[];const app=await bootApp({snapshot:snap});assert.equal(app.button(app.refs.head,'A+'),null);assert.equal(app.button(app.refs.head,'Open wide'),null);assert.equal(app.button(app.refs.head,'All agents').getAttribute('aria-pressed'),'true');
+ await app.pointerClick(app.button(app.refs.head,'All agents'));assert.equal(app.button(app.refs.head,'All agents').getAttribute('aria-pressed'),'true');
+ await app.pointerClick(app.button(app.refs.head,'Display'));assert.ok(app.button(app.refs.head,'A+'));await app.pointerClick(app.button(app.refs.head,'Display'));assert.equal(app.button(app.refs.head,'A+'),null);
+});
+test('opening a wide view twice reuses the existing pane',async()=>{
+ let opens=0;const host={state:{workspaces:[{id:'ws',panes:[{id:'wide'}]}]}};const app=await bootApp({hostSnapshot:host,openView:async()=>{opens++;return {paneID:'wide'};}});await app.pointerClick(app.button(app.refs.head,'Display'));await app.pointerClick(app.button(app.refs.head,'Open wide'));await app.pointerClick(app.button(app.refs.head,'Open wide'));assert.equal(opens,1);assert.equal(app.reveals.at(-1),'wide');
+});
+
+for(const exists of [true,false]) test(`Open wide stops after disposal while checking a ${exists?'live':'closed'} pane`,async()=>{
+ let reads,opens=0;const app=await bootApp({readHostSnapshot:()=>new Promise(resolve=>{reads=resolve;}),openView:async()=>{opens++;return {paneID:'wide'};}});await app.pointerClick(app.button(app.refs.head,'Display'));await app.pointerClick(app.button(app.refs.head,'Open wide'));await app.pointerClick(app.button(app.refs.head,'Open wide'));app.dispatch('pagehide');reads({state:{workspaces:[{id:'ws',panes:exists?[{id:'wide'}]:[]}]}});await app.flush();assert.equal(opens,1);assert.deepEqual(app.reveals,[]);
+});
+test('Focus does not change layout after the source view closes during its snapshot read',async()=>{
+ let reads;const zooms=[];const snap=fixture();snap.agents=[{paneID:'agent',label:'Review',agent:'codex',directory:true,state:'running',activity:'running'}];const app=await bootApp({snapshot:snap,readHostSnapshot:()=>new Promise(resolve=>{reads=resolve;}),layout:{zoom:async id=>{zooms.push(id);}}});await app.pointerClick(app.button(app.row('agent'),'Focus / split'));app.dispatch('pagehide');reads({state:{workspaces:[{id:'ws',panes:[{id:'agent'},{id:'other'}]}]}});await app.flush();assert.deepEqual(zooms,[]);
+});

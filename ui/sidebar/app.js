@@ -11,21 +11,23 @@
 
     let textSize = 15;
     try { const saved = Number(window.localStorage?.getItem('swarm-agent-text-size')); if (saved >= 13 && saved <= 20) textSize = saved; } catch { /* storage can be unavailable */ }
+    const currentPreferences = () => L.displayPreferences({ agentTextSize: textSize, ...ui });
     const PREFERENCES_KEY = 'agents.display-preferences';
     let preferenceSave = Promise.resolve();
     function savePreferences() {
-        const prefs = { agentTextSize: textSize, directory: ui.directory !== false, collapsedSections: ui.collapsedSections || [], doneOpen: !!ui.doneOpen };
+        const prefs = currentPreferences();
         if (!api.context?.paneID && typeof api.storage?.set === 'function') {
             preferenceSave = preferenceSave.catch(() => {}).then(() => api.storage.set(PREFERENCES_KEY, prefs));
-            void preferenceSave.catch(() => {});
-        } else if (typeof api.setState === 'function') void api.setState({ ...(api.state || {}), ...prefs }).catch(() => {});
+            void preferenceSave.catch(() => setNotice('Display options apply here but could not be saved.'));
+        } else if (typeof api.setState === 'function') void api.setState({ ...(api.state || {}), ...prefs }).catch(() => setNotice('Display options apply here but could not be saved.'));
         else try { window.localStorage?.setItem('swarm-agent-text-size', String(textSize)); } catch { /* optional legacy storage */ }
     }
     const questionDrafts = Object.create(null);
     let snapshot = null, receivedAtMs = Date.now();
     let ui = L.initialUI(false);
     let notice = '', noticeTimer = null, pointerActive = false, renderPending = false, busy = false, disposed = false;
-    let wideBusy = false;
+    let wideBusy = false, widePaneID = null;
+    let releaseTimer = null;
     let focusBusy = false, lastFocusPane = null, lastFocusAt = -Infinity;
     const disposers = [];
     const guard = L.createButtonGuard();
@@ -34,6 +36,7 @@
     let autoLog = null, autoLogLoading = false;
 
     const draw = () => {
+        if (disposed) return;
         if (pointerActive) { renderPending = true; return; }
         renderPending = false;
         const nowMs = Date.now();
@@ -73,6 +76,7 @@
         }
     }
     const setNotice = text => {
+        if (disposed) return;
         notice = text;
         clearTimeout(noticeTimer);
         if (text) noticeTimer = setTimeout(() => { notice = ''; draw(); }, 8000);
@@ -103,6 +107,7 @@
     }
 
     function adopt(next) {
+        if (disposed) return;
         const accepted = L.acceptSnapshot(snapshot, next);
         if (accepted === snapshot) return;
         snapshot = accepted; receivedAtMs = Date.now();
@@ -135,7 +140,9 @@
     let activeWorkspaceID = null;
 
     async function loadState() {
+        if (disposed) return;
         const result = await api.commands.execute(`${L.CMD}get-state`, activeWorkspaceID ? { workspaceID: activeWorkspaceID } : {});
+        if (disposed) return;
         if (result && result.ok && result.snapshot) adopt(result.snapshot);
         else setNotice(L.describeResult('Load', result).message);
     }
@@ -173,32 +180,45 @@
     const handlers = {
         onTerminalSize: size => { void run('Terminal text', { command: `${L.CMD}agent-appearance`, args: { size } }); },
         onFocusAgent: async paneID => {
-            if (focusBusy || (lastFocusPane === paneID && Date.now() - lastFocusAt < 400)) return;
+            if (disposed || focusBusy || (lastFocusPane === paneID && Date.now() - lastFocusAt < 400)) return;
             focusBusy = true; lastFocusPane = paneID; lastFocusAt = Date.now();
             try {
                 if (typeof api.ui?.reveal !== 'function') { setNotice('This Kelpi cannot reveal a terminal from Agents.'); return; }
                 ui = { ...ui, selectedPaneID: paneID }; draw();
                 await api.ui.reveal(paneID);
+                if (disposed) return;
                 if (typeof api.layout?.zoom !== 'function') { setNotice('Use Kelpi’s pane zoom control to focus this terminal.'); return; }
                 let native;
                 try { native = await api.snapshot?.(); } catch { setNotice('Terminal opened; use its native zoom control because the layout could not be read.'); return; }
+                if (disposed) return;
                 const workspace = (native?.state?.workspaces || native?.workspaces || []).find(w => [...(w.panes || []), ...(w.parkedPanes || [])].some(p => p.id === paneID));
                 if (!workspace) { setNotice('Terminal opened; use its native zoom control on this Kelpi version.'); return; }
                 const zoomed = workspace.zoomedPaneID ?? workspace.zoomed_pane_id;
                 if (workspace && workspace.panes.length <= 1) { setNotice('This workspace already has one terminal.'); return; }
                 if (zoomed && zoomed !== paneID) await api.layout.zoom(zoomed);
+                if (disposed) return;
                 const result = await api.layout.zoom(paneID);
                 if (result?.zoomedPaneID === null) setNotice('Split layout restored.');
             } catch (error) { setNotice(`Focus: ${error.message}`); }
             finally { focusBusy = false; }
         },
-        onDirectory: () => { ui = { ...ui, directory: ui.directory === false }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
+        onScope: all => { if ((ui.directory !== false) === all) return; ui = { ...ui, directory: all }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
+        onDisplay: () => { ui = L.markLayout({ ...ui, displayOpen: !ui.displayOpen }, Date.now()); draw(); },
         onAgentSelect: paneID => { const row = snapshot?.agents?.find(w => w.paneID === paneID); if (row?.paneClosed) { void openWorker(paneID); return; } ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now()); draw(); reveal(paneID, 'Agent'); },
         onOpenWide: async () => {
-            if (wideBusy) return;
+            if (wideBusy || disposed) return;
             if (typeof api.openView !== 'function') { setNotice('Open Agents from the pane view picker for a wider view.'); return; }
             wideBusy = true;
-            try { await api.openView('local.swarm-view.rail', { ...(api.context?.workspaceID ? { workspaceID: api.context.workspaceID } : {}), focus: true, state: { agentTextSize: textSize, directory: ui.directory !== false, collapsedSections: ui.collapsedSections || [], doneOpen: !!ui.doneOpen } }); }
+            try {
+                if (widePaneID) {
+                    const host = await api.snapshot();
+                    if (disposed) return;
+                    if ((host?.state?.workspaces || []).some(workspace => [...(workspace.panes || []), ...(workspace.parkedPanes || [])].some(pane => pane.id === widePaneID))) { await api.ui.reveal(widePaneID); return; }
+                    widePaneID = null;
+                }
+                const opened = await api.openView('local.swarm-view.rail', { ...(api.context?.workspaceID ? { workspaceID: api.context.workspaceID } : {}), focus: true, state: currentPreferences() });
+                widePaneID = opened?.paneID || null;
+            }
             catch (error) { setNotice(`Open wide: ${error.message}`); }
             finally { wideBusy = false; }
         },
@@ -257,7 +277,6 @@
             ui = { ...ui, closeAsk: null }; draw(); void run('Stop', { command: `${L.CMD}close-worker`, args: { paneID } });
         },
         // ✕ "Remove": a done worker is closed in one click (nothing is running); a closed pane just leaves the rail.
-        onClose: paneID => { void run('Remove', { command: `${L.CMD}close-worker`, args: { paneID } }); },
         onAttention: (kind, item) => { if (L.layoutLocked(ui, Date.now())) return; void run(kind, L.attentionEffect(kind, item)); },
         // A card's command: click (or Enter) shows the whole thing, click again shortens it. Everything below moves, so
         // Approve and Deny are locked for a moment (the second click of a double-click lands on nothing).
@@ -313,6 +332,7 @@
         if (changed && !ui.railFocused) draw();
     }
     function onWindowBlur() {
+        releasePointer();
         ui = L.noteBlur(ui, Date.now());
         if (Number.isFinite(ui.blurAt)) { clearTimeout(blurTimer); blurTimer = setTimeout(checkBlur, L.BLUR_GRACE_MS + 10); }
     }
@@ -344,14 +364,20 @@
 
     async function boot() {
         await api.ready;
+        if (disposed) return;
         let preferences = api.state || {};
         if (!api.context?.paneID && typeof api.storage?.get === 'function') {
-            try { const saved = await api.storage.get(PREFERENCES_KEY); if (saved && typeof saved === 'object' && !Array.isArray(saved)) preferences = { ...saved, ...preferences }; } catch { /* Optional preference storage. */ }
+            let deadline;
+            try {
+                const saved = await Promise.race([api.storage.get(PREFERENCES_KEY), new Promise(resolve => { deadline = setTimeout(() => resolve(null), 1500); })]);
+                if (saved && typeof saved === 'object' && !Array.isArray(saved)) preferences = { ...saved, ...preferences };
+            } catch { /* Optional preference storage must not block the agent list. */ }
+            finally { clearTimeout(deadline); }
         }
-        if (Number.isInteger(preferences.agentTextSize) && preferences.agentTextSize >= 13 && preferences.agentTextSize <= 20) textSize = preferences.agentTextSize;
-        if (Array.isArray(preferences.collapsedSections)) ui = { ...ui, collapsedSections: preferences.collapsedSections.filter(k => ['needs', 'running', 'idle'].includes(k)) };
-        if (typeof preferences.doneOpen === 'boolean') ui = { ...ui, doneOpen: preferences.doneOpen };
-        if (typeof preferences.directory === 'boolean') ui = { ...ui, directory: preferences.directory };
+        if (disposed) return;
+        const display = L.displayPreferences({ agentTextSize: textSize, ...preferences });
+        textSize = display.agentTextSize;
+        ui = { ...ui, directory: display.directory, collapsedSections: display.collapsedSections, doneOpen: display.doneOpen };
         for (const name of SNAPSHOT_EVENTS) disposers.push(api.events.on(name, event => adopt(event.data)));
         disposers.push(api.events.on(FOCUS_EVENT, onFocusRequest));
         disposers.push(api.events.on('gap', () => { void loadState(); }));
@@ -378,12 +404,15 @@
     window.addEventListener('keydown', onKeydown);
     window.addEventListener('blur', e => { if (e.target === window) onWindowBlur(); });
     window.addEventListener('pointerdown', () => { pointerActive = true; ui = L.touch(ui, Date.now()); }, true);
-    window.addEventListener('pointermove', () => { if (ui.railFocused) ui = L.touch(ui, Date.now()); }, true);
-    const release = () => setTimeout(() => { pointerActive = false; if (renderPending) draw(); }, 0);
-    window.addEventListener('pointerup', release, true);
-    window.addEventListener('pointercancel', release, true);
+    function releasePointer() {
+        if (disposed || releaseTimer !== null) return;
+        releaseTimer = setTimeout(() => { releaseTimer = null; pointerActive = false; if (renderPending) draw(); }, 0);
+    }
+    window.addEventListener('pointermove', event => { if (pointerActive && event.buttons === 0) releasePointer(); if (ui.railFocused) ui = L.touch(ui, Date.now()); }, true);
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) window.addEventListener(name, releasePointer, true);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') releasePointer(); });
     const timer = setInterval(tick, 5000);
     const expiry = setInterval(expireTimers, 500);
-    window.addEventListener('pagehide', () => { disposed = true; clearInterval(timer); clearInterval(expiry); clearTimeout(unlockTimer); clearTimeout(noticeTimer); for (const off of disposers) off(); }, { once: true });
+    window.addEventListener('pagehide', () => { disposed = true; clearInterval(timer); clearInterval(expiry); clearTimeout(unlockTimer); clearTimeout(noticeTimer); clearTimeout(blurTimer); clearTimeout(releaseTimer); for (const off of disposers) off(); }, { once: true });
     void boot().catch(cause => setNotice(cause instanceof Error ? cause.message : String(cause)));
 })();

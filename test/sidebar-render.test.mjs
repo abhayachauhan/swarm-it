@@ -462,11 +462,11 @@ test('the status line is clean: no box drawing, no git status, a prompt line bec
     const set = (id, lastLine) => { const row = snap.workers.find(w => w.paneID === id); row.lastLine = lastLine; row.task = ''; };
     set('p-run', '│ Reading files ─── main ↑16 !10 ?3');
     L.render(fakeDoc, refs, view(snap), handlers());
-    const last = id => find(find(refs.list, n => n.dataset.paneId === id)[0], n => n.className === 'last')[0].text;
+    const last = id => find(find(refs.list, n => n.dataset.paneId === id)[0], n => n.className === 'last')[0]?.text || '';
     assert.equal(last('p-run'), 'Reading files main');
     set('p-run', '╭──────────────────────╮');
     L.render(fakeDoc, refs, view(snap), handlers());
-    assert.equal(last('p-run'), 'running');
+    assert.equal(last('p-run'), '', 'the section already tells the user this worker is running');
 });
 
 // ---- auto-approve ---------------------------------------------------------------------------------------------
@@ -494,7 +494,7 @@ test('auto-approve off: the header says "Auto: off"; a click opens a menu of 4 h
     toggle.click();
     assert.deepEqual(calls, [['auto-menu']], 'the click opens the menu; nothing is turned on yet');
     const texts = find(refs.head, n => n.tag === 'button').map(b => b.text);
-    assert.deepEqual(texts, ['⌂ Coordinator', 'Auto: off', 'Open wide', 'A−', 'A+', 'Terminal 17px'], 'no log link while the log is empty');
+    assert.deepEqual(texts, ['⌂ Coordinator', 'Auto: off', 'Display'], 'no log link while the log is empty');
     assert.equal(find(refs.panel, n => n.tag === 'button').length, 0, 'the menu is closed until opened');
     // Open (ui.autoMenuOpen): four choices, each sending its key.
     const morning = new Date(2026, 9, 11, 7, 30).getTime();

@@ -578,3 +578,11 @@ test('global directory publishes status, label and removal changes for an ordina
   await api.fire('state.changed',{sequence:999,data:[{kind:'pane-removed',paneID:'outside',workspaceID:'ws1'}]});await api.idle();assert.equal(lastSnapshot(api).agents.some(a=>a.paneID==='outside'),false);
  }finally{dispose();}
 });
+
+test('ordinary agent task and workspace changes publish without waiting for status changes',async()=>{
+ const api=makeFakeApi({panes:[{id:'ordinary',agent:'codex',type:'shell',status:'idle',label:'Old label',title:'Old task',workspaceID:'ws1'}]});const dispose=registerAll(api);
+ try{await dispose.ready;await api.upsert('ordinary',{title:'Review schema rollout'});await api.idle();assert.equal(lastSnapshot(api).agents.find(a=>a.paneID==='ordinary').task,'Review schema rollout');
+ await api.fire('state.changed',{sequence:1001,data:[{kind:'workspace-upserted',workspace:{id:'ws1',name:'Renamed workspace'}}]});await api.idle();assert.equal(lastSnapshot(api).agents.find(a=>a.paneID==='ordinary').workspaceName,'Renamed workspace');
+ await api.fire('state.changed',{sequence:1002,data:[{kind:'pane-upserted',workspaceID:'ws1',paneID:'ordinary',pane:{id:'ordinary',label:null,title:null}}]});await api.idle();const row=lastSnapshot(api).agents.find(a=>a.paneID==='ordinary');assert.equal(row.label,'Renamed workspace');assert.equal(row.task,'');
+ }finally{dispose();}
+});

@@ -125,7 +125,7 @@ Larger task cards show the workspace, tool, coordinator or worker role, task and
 
 Stopped workers and visible question or permission menus remain in Needs you. An ordinary idle Claude prompt stays Idle even when its native status says waiting for input. Closed workers from the current swarm retain their saved results.
 
-Agent text starts at 15px. **A− / A+** changes it between 13px and 20px and remembers the preference locally. **Terminal 17px** changes Kelpi's terminal font through its native appearance settings. Older hosts that cannot expose this setting direct you to Kelpi Settings instead. Permission decisions and Auto rules are unchanged.
+The header shows **All agents**, **This swarm** and **Display**. Text sizing and **Open wide** live under Display. Agent text starts at 15px. **A− / A+** changes it between 13px and 20px and remembers the preference locally. **Terminal 17px** changes Kelpi's terminal font through its native appearance settings. Older hosts that cannot expose this setting direct you to Kelpi Settings instead. Permission decisions and Auto rules are unchanged.
 
 The **Show all workspaces in Agents** setting disables the global directory. This returns navigation to the focused swarm without deleting tasks, results or terminal sessions.
 
@@ -133,4 +133,6 @@ The **Show all workspaces in Agents** setting disables the global directory. Thi
 
 Sample tasks shown above. Your sessions and worker results fill the same view.
 
-Activity headings collapse and expand independently, remember your choices, and keep their live counts visible. **Open wide** opens Agents in a resizable workspace pane. The generated top description strip has been removed; workspace brief details remain available on demand.
+Activity headings collapse and expand independently, remember your choices, and keep their live counts visible. **Display → Open wide** opens Agents in a resizable workspace pane and reuses that pane on repeated clicks. The generated top description strip has been removed; workspace brief details remain available on demand.
+
+Cards omit repeated workspace names, section states and generic session-resume banners. Ordinary sessions show a timer only while running and when Kelpi supplies a real run start time. Panel redraws recover when a pointer release is missed, and slow display-preference storage cannot leave Agents stuck at Connecting.

@@ -171,3 +171,19 @@ test('unlisted Claude questions appear in the global directory with Auto off, wh
   api.captureStore.outside='Done.\n────────────────────────\n❯\n────────────────────────';await sleep(80);snapshot=lastSnapshot(api);assert.equal(snapshot.agents.find(a=>a.paneID==='outside').activity,'idle');assert.equal(api.callsTo('terminal.sendKey').length,0);
  }finally{dispose();}
 });
+
+test('ordinary display captures use bounded parallel reads and never send permission keys',async()=>{
+ const panes=Array.from({length:7},(_,i)=>({id:`plain-${i}`,agent:'claude',type:'shell',status:'idle',workspaceID:'ws1'}));const api=makeFakeApi({panes});const dispose=registerAll(api);
+ try{await dispose.ready;let active=0,peak=0;const read=new Set();api.terminal.capture=async id=>{read.add(id);active++;peak=Math.max(peak,active);await sleep(5);active--;return '❯';};await sleep(150);assert.equal(peak,3);assert.equal(read.size,7);assert.equal(api.callsTo('terminal.sendKey').length,0);assert.equal(lastSnapshot(api).attention.length,0);
+ }finally{dispose();}
+});
+test('a hung focus-list read releases the command queue after its deadline',async()=>{
+ const api=makeFakeApi();const dispose=registerAll(api);let deadline;
+ try{await dispose.ready;let reading=false;api.panes.list=()=>{reading=true;return new Promise(()=>{});};while(!reading)await sleep(10);
+ const result=await Promise.race([api.command('get-state'),new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('The pane-list read blocked the command queue')),6000);})]);assert.equal(result.ok,true);assert.equal(api.callsTo('terminal.sendKey').length,0);
+ }finally{clearTimeout(deadline);dispose();}
+});
+
+test('disposing during display capture starts no further batches or prompt actions',async()=>{
+ const panes=Array.from({length:7},(_,i)=>({id:`closing-${i}`,agent:'claude',type:'shell',status:'idle',workspaceID:'ws1'}));const api=makeFakeApi({panes});const dispose=registerAll(api);await dispose.ready;const pending=[];api.terminal.capture=()=>new Promise(resolve=>pending.push(resolve));await sleep(40);assert.equal(pending.length,3);dispose();for(const resolve of pending)resolve(PROMPT_TEXT);await sleep(40);assert.equal(pending.length,3);assert.equal(api.callsTo('terminal.sendKey').length,0);assert.equal(lastSnapshot(api).attention.length,0);
+});

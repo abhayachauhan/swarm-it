@@ -130,10 +130,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 .question-answer { box-sizing: border-box; width: 100%; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 7px; font: inherit; }
 
 /* Agent navigation: a coordinator above its workers, with readable state groups. */
-.fleet { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 18px 14px 12px; }
-.fleet-title { font-size: 1.35em; font-weight: 650; flex: 1; letter-spacing: -.03em; }
-.fleet-context { width: 100%; color: var(--dim); overflow-wrap: anywhere; order: 2; }
-.coordinator-card { display: block; width: calc(100% - 24px); margin: 2px 12px 14px; padding: 12px 14px; text-align: left; font: inherit; font-weight: 600; background: var(--hover); color: var(--fg); border: 1px solid var(--accent); border-radius: 10px; cursor: pointer; }
+.fleet { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 10px 12px; }
 .agent-meta { overflow-wrap: anywhere; padding-left: 16px; color: var(--dim); font-size: .85em; }
 .sec-head { justify-content: space-between; padding-top: 18px; font-weight: 600; letter-spacing: .04em; }
 .att { border-radius: 10px; padding: 12px; gap: 8px; }
@@ -150,7 +147,6 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 .shell, .head, .list { min-width: 0; width: 100%; }
 .row { min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .fleet { min-width: 0; max-width: 100%; }
-.fleet-title { flex-basis: 100%; min-width: 0; }
 .dot-idle { background: var(--dim); box-shadow: none; }
 
 .dot-done { background: var(--dim); }
@@ -167,3 +163,5 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 .row-top { flex-wrap: wrap; }
 .row-top .name { flex-basis: 55%; white-space: normal; overflow-wrap: anywhere; }
 .row-top .row-hover { margin-left: auto; }
+.display-controls { display: flex; flex-wrap: wrap; gap: 7px; width: 100%; padding-top: 4px; }
+.btn[aria-pressed="true"] { background: var(--hover); color: var(--fg); }

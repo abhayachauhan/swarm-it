@@ -43,7 +43,8 @@ export async function bootApp(options = {}) {
     };
 
     // ---- document: the containers index.html declares, nested under #app ----
-    const document = { activeElement: null, hasFocus: () => true };
+    const documentListeners = {};
+    const document = { activeElement: null, visibilityState: 'visible', hasFocus: () => true, addEventListener(name, fn) { (documentListeners[name] ??= []).push(fn); } };
     const byId = {};
     const make = (tag, id) => { const node = new FakeNode(tag); node.ownerDocument = document; if (id) { node.attrs.id = id; byId[id] = node; } return node; };
     for (const [, tag, id] of INDEX.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) make(tag, id);
@@ -59,8 +60,8 @@ export async function bootApp(options = {}) {
     // Errors the fake API throws come from the app's own realm, as in a browser (instanceof Error holds there).
     let AppError = Error;
     const api = {
-        ready: Promise.resolve(),
-        snapshot: async () => options.hostSnapshot || {state:{workspaces:[]}},
+        ready: options.ready || Promise.resolve(),
+        snapshot: options.readHostSnapshot || (async () => options.hostSnapshot || {state:{workspaces:[]}}),
         state: options.viewState || {},
         setState: async value => { if(options.stateFails) throw new Error(options.stateFails); api.state = value; },
         storage: options.storage,
@@ -107,6 +108,7 @@ export async function bootApp(options = {}) {
     const list = byId.list, footer = byId.footer, head = byId.head;
     return {
         refs: { app, head, panel: byId.panel, list, footer },
+        documentEvent: (name, value) => { if (value) Object.assign(document, value); for (const fn of documentListeners[name] ?? []) fn({target:document}); },
         L: context.SwarmLogic, getViewState: () => api.state, calls, reveals, warned, clock, advance, flush, dispatch, observers,
         /** Deliver a backend event (a snapshot, focus-rail, gap). */
         emit: (name, data) => { for (const fn of events[name] ?? []) fn({ data }); },

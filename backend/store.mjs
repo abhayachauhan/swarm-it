@@ -182,7 +182,7 @@ export function applyStateChange(store, change, now) {
     if (change.kind === 'workspace-upserted') {
         const id = change.workspace?.id ?? change.workspaceID ?? change.id;
         const name = change.workspace?.name ?? change.name;
-        if (id && typeof name === 'string') store.workspaceNames.set(id, name);
+        if (id && typeof name === 'string') { store.workspaceNames.set(id, name); if (store.workspaceID === id) store.workspaceName = name; }
         return [];
     }
     if (change.kind === 'workspace-removed') {
@@ -205,9 +205,10 @@ export function applyStateChange(store, change, now) {
     const prev = store.panes.get(paneID);
     const record = {
         id: paneID,
-        label: pane.label ?? prev?.label ?? null,
-        title: pane.title ?? prev?.title ?? null,
+        label: 'label' in pane ? pane.label ?? null : prev?.label ?? null,
+        title: 'title' in pane ? pane.title ?? null : prev?.title ?? null,
         status: pane.status ?? prev?.status ?? 'idle',
+        agentStartedAt: 'agentStartedAt' in pane ? (Number.isFinite(pane.agentStartedAt) && pane.agentStartedAt > 0 ? pane.agentStartedAt : null) : prev?.agentStartedAt ?? null,
         isFocused: pane.isFocused ?? prev?.isFocused ?? false,
         isActiveWorkspace: pane.isActiveWorkspace ?? prev?.isActiveWorkspace ?? false,
         workspaceID: change.workspaceID ?? pane.workspaceID ?? prev?.workspaceID ?? null,
@@ -407,6 +408,21 @@ function otherSwarmSummaries(store, carded, waitingPanes) {
     });
 }
 
+/** Resume banners and session identifiers are not task descriptions. */
+export function agentTask(pane) {
+    const title = String(pane.title || '').replace(/^\[.*?\]\s*/, '').replace(/^[\s*✻✳✶✽◐◑◒◓•]+/u, '').trim();
+    if (/^(?:continue|resume|find|open|read|restart)\s+(?:(?:claude|codex)\s+)?session(?:\s|$)/i.test(title)
+        || /^(?:claude|codex)\s+session(?:\s|$)/i.test(title)
+        || /^(?:claude|codex)\s+rollout\s+[\d-]+\s+session$/i.test(title)
+        || /^[0-9a-f]{8}(?:-[0-9a-f]+)*$/i.test(title)
+        || /^[^\s@]+@[^\s:]+:/.test(title)) return '';
+    return title;
+}
+export function agentWorkspaceName(store, pane, membership = otherSwarmPane(store, pane.id)) {
+    if (membership) return store.workspaceNames.get(membership.swarm.workspaceID) || membership.swarm.name;
+    return store.workspaceNames.get(pane.workspaceID) || pane.workspaceName || 'Workspace';
+}
+
 /** Recognised agent terminals across workspaces. Completion needs a result file, never an idle prompt alone. */
 function agentDirectory(store, nowMs) {
     const followed = currentWorkers(store, nowMs).filter(w => !w.archived).map(w => ({
@@ -421,16 +437,16 @@ function agentDirectory(store, nowMs) {
         const agent = worker?.agent ?? p.agent ?? (worker ? 'claude' : null);
         if (!['claude', 'codex'].includes(agent)) return [];
         const coordinator = membership?.role === 'orchestrator' || actionableOrchestrator(store, p.id);
-        const workspaceName = membership?.swarm.name || p.workspaceName || store.workspaceNames.get(p.workspaceID) || 'Workspace';
+        const workspaceName = agentWorkspaceName(store, p, membership);
         const state = worker ? deriveState(store, worker) : p.status === 'running' ? 'running' : 'waiting';
         const exit = store.exits.get(p.id);
         return [{ directory: true, paneID: p.id, label: (p.label && p.label !== 'coordinator' ? p.label : null) || workspaceName,
-            task: worker?.task || (p.title && !p.title.includes('@') ? p.title.replace(/^\[.*?\]\s*/, '') : workspaceName), agent, state,
+            task: worker?.task || agentTask(p), agent, state,
             activity: store.displayPrompts.has(p.id) ? 'waiting' : p.status === 'running' ? 'running' : 'idle',
             ...(exit && state === 'waiting' ? { stopped: { reason: exit.reason } } : {}),
             parent: worker ? worker.parent || membership.swarm.orchestrator.paneID : null,
             parentLabel: worker ? membership.swarm.workers.find(w => w.paneID === worker.parent)?.label || membership.swarm.name : null, coordinator: !!coordinator,
-            workspaceName, elapsedSeconds: Math.max(0, Math.floor((nowMs - Date.parse(store.firstSeen[p.id] || new Date(nowMs).toISOString())) / 1000)) }];
+            workspaceName, elapsedSeconds: p.status === 'running' && Number.isFinite(p.agentStartedAt) ? Math.max(0, Math.floor((nowMs - p.agentStartedAt) / 1000)) : null }];
     });
     return [...followed, ...extra].sort((a, b) => a.workspaceName.localeCompare(b.workspaceName) || Number(b.coordinator) - Number(a.coordinator) || a.label.localeCompare(b.label));
 }

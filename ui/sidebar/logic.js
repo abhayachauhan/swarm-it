@@ -53,6 +53,28 @@
         return base + extra;
     }
 
+    /** Only display settings belong in persisted view preferences. */
+    function displayPreferences(value = {}) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
+        return {
+            agentTextSize: Number.isInteger(value.agentTextSize) && value.agentTextSize >= 13 && value.agentTextSize <= 20 ? value.agentTextSize : 15,
+            directory: value.directory !== false,
+            collapsedSections: [...new Set((Array.isArray(value.collapsedSections) ? value.collapsedSections : []).filter(key => ['needs', 'running', 'idle'].includes(key)))],
+            doneOpen: value.doneOpen === true,
+        };
+    }
+    function agentDetails(row) {
+        const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+        const parts = [row.agent === 'codex' ? 'Codex' : 'Claude'];
+        if (row.workspaceName && !same(row.workspaceName, row.label)) parts.push(row.workspaceName);
+        if (row.parent) parts.push(row.parentLabel && !same(row.parentLabel, row.workspaceName) ? `Worker for ${row.parentLabel}` : 'Worker');
+        else if (row.coordinator) parts.push('Coordinator');
+        if (row.state === 'error') parts.push('Failed');
+        const task = String(row.task || '').replace(/^#+\s*/, '').trim();
+        const detail = task && !same(task, row.label) && !same(task, row.workspaceName) ? task : !row.directory ? statusLine(row) : '';
+        return { meta: parts.join(' · '), task: detail && detail !== STATE_LABEL[row.state] ? detail : '' };
+    }
+
     // ---- grouping / lists ---------------------------------------------------------------
     const activeWorkers = snapshot => snapshot.workers.filter(worker => !worker.archived);
 
@@ -689,13 +711,15 @@
         if (row.parent) node.dataset.parent = row.parent;
         const top = h(doc, 'span', 'row-top');
         top.append(h(doc, 'span', `dot dot-${!isFinished(row) && (row.activity === 'idle' || row.state === 'waiting') ? 'idle' : row.state}`));
-        const name = h(doc, 'span', 'name', `${row.label || row.paneID}${row.agent === 'codex' && !row.directory ? ' · Codex' : ''}`);
+        const name = h(doc, 'span', 'name', row.label || row.paneID);
         name.setAttribute('title', row.label || row.paneID);
         top.append(name);
-        const time = h(doc, 'span', 'time', formatElapsed(elapsedNow(row, view.receivedAtMs, view.nowMs)));
-        time.dataset.elapsedPane = row.paneID;
-        time.setAttribute('title', row.directory ? 'Time since this terminal was created' : 'Time since this worker first appeared');
-        top.append(time);
+        if (!row.directory || (row.activity === 'running' && !isFinished(row) && Number.isFinite(row.elapsedSeconds))) {
+            const time = h(doc, 'span', 'time', formatElapsed(elapsedNow(row, view.receivedAtMs, view.nowMs)));
+            time.dataset.elapsedPane = row.paneID;
+            time.setAttribute('title', row.directory ? 'Time in the current run' : 'Time since this worker started');
+            top.append(time);
+        }
         if (isFinished(row) && !row.directory && (!row.paneClosed || row.state === 'done')) {
             top.append(button(doc, 'Open result', 'btn', () => (handlers.onOpenResult || handlers.onOpen)(row.paneID)));
         } else if (!row.directory) {
@@ -718,8 +742,9 @@
         }
         if (row.directory || row.nativeNavigation) top.append(button(doc, 'Focus / split', 'btn row-hover', () => handlers.onFocusAgent?.(row.paneID), `Focus ${row.label || row.paneID} or restore its split layout`));
         node.append(top);
-        node.append(h(doc, 'div', 'agent-meta', `${row.workspaceName ? row.workspaceName + ' · ' : ''}${row.coordinator ? 'Coordinator · ' : row.parent ? `Worker for ${row.parentLabel || 'coordinator'} · ` : ''}${row.agent === 'codex' ? 'Codex' : 'Claude'} · ${row.state === 'done' ? 'Done' : row.state === 'error' ? 'Failed' : row.activity === 'idle' || row.state === 'waiting' ? 'Idle' : 'Running'}`));
-        node.append(h(doc, 'span', 'last', row.task?.replace(/^#+\s*/, '') || statusLine(row)));
+        const details = agentDetails(row);
+        node.append(h(doc, 'div', 'agent-meta', details.meta));
+        if (details.task) node.append(h(doc, 'span', 'last', details.task));
         node.addEventListener('click', () => (row.directory || (!!view.snapshot?.agents && view.ui.directory !== false) ? handlers.onAgentSelect || handlers.onSelect : handlers.onSelect)(row.paneID));
         node.addEventListener('dblclick', () => row.directory || row.nativeNavigation ? handlers.onFocusAgent?.(row.paneID) : handlers.onOpen(row.paneID));
         scopeControls(node, row.paneID);
@@ -936,18 +961,23 @@
         const list = [];
         if (snapshot) {
             const fleet = h(doc, 'div', 'fleet');
-            fleet.append(h(doc, 'div', 'fleet-title', 'Agents'));
-            fleet.append(h(doc, 'div', 'fleet-context', directory ? 'Across all workspaces' : snapshot.workspaceName || 'Current workspace'));
-            const sizes = button(doc, 'A−', 'btn', () => handlers.onTextSize?.(-1), 'Smaller agent text');
-            const larger = button(doc, 'A+', 'btn', () => handlers.onTextSize?.(1), 'Larger agent text');
-            fleet.append(button(doc, 'Open wide', 'btn', () => handlers.onOpenWide?.(), 'Open Agents in a resizable workspace pane'));
-            fleet.append(sizes, larger, button(doc, 'Terminal 17px', 'btn', () => handlers.onTerminalSize?.(17), 'Set terminal text to 17px'));
-            if (snapshot.agents) fleet.append(button(doc, directory ? 'This swarm' : 'All agents', 'btn', () => handlers.onDirectory?.(), 'Switch agent list scope'));
-            if (refs.head) refs.head.append(fleet); else list.push(fleet);
-            if (!directory && snapshot.orchestrator) {
-                const coordinator = button(doc, snapshot.orchestrator.label === 'coordinator' ? 'Coordinator' : snapshot.orchestrator.label || 'Coordinator', 'coordinator-card', () => handlers.onHome());
-                coordinator.setAttribute('title', 'Open the coordinator terminal'); list.push(coordinator);
+            if (snapshot.agents) {
+                for (const [label, all] of [['All agents', true], ['This swarm', false]]) {
+                    const scope = button(doc, label, 'btn', () => handlers.onScope?.(all), all ? 'Show agents across all workspaces' : 'Show the current swarm');
+                    scope.setAttribute('aria-pressed', directory === all ? 'true' : 'false');
+                    fleet.append(scope);
+                }
             }
+            const display = button(doc, 'Display', 'btn', () => handlers.onDisplay?.(), 'Text size and view options');
+            display.setAttribute('aria-expanded', view.ui.displayOpen ? 'true' : 'false');
+            fleet.append(display);
+            if (view.ui.displayOpen) {
+                const options = h(doc, 'div', 'display-controls');
+                options.append(button(doc, 'A−', 'btn', () => handlers.onTextSize?.(-1), 'Smaller agent text'), button(doc, 'A+', 'btn', () => handlers.onTextSize?.(1), 'Larger agent text'), button(doc, 'Terminal 17px', 'btn', () => handlers.onTerminalSize?.(17), 'Set terminal text to 17px'), button(doc, 'Open wide', 'btn', () => handlers.onOpenWide?.(), 'Open Agents in a resizable workspace pane'));
+                fleet.append(options);
+            }
+            if (refs.head) refs.head.append(fleet); else list.push(fleet);
+
         }
         list.push(...buildCodexQuestions(doc, snapshot, view.questionDrafts || {}, handlers));
         if (!snapshot) {
@@ -983,7 +1013,7 @@
     globalThis.SwarmLogic = {
         CMD,
         isSnapshot, acceptSnapshot, formatElapsed, elapsedNow,
-        agentSnapshot, sections, rows: rowsOf, requestItems, homeEffect,
+        displayPreferences, agentDetails, agentSnapshot, sections, rows: rowsOf, requestItems, homeEffect,
         initialUI, reconcile, moveSelection, itemsForPane, requestForPane, cardTitle, fromOtherSwarm, isExpanded, toggleExpanded, pruneExpanded, cardCommand,
         ARM_MS, IDLE_MS, LOCK_MS, LAYOUT_LOCK_MS, BLUR_GRACE_MS, armedNow, expire, touch, setRailFocused, noteBlur, resolveBlur, createButtonGuard,
         markLayout, layoutLocked, layoutLockRemaining, askClose, cancelClose,

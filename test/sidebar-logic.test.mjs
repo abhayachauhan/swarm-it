@@ -498,3 +498,8 @@ test('completed workers with attention appear once, and native waiting entries r
  assert.equal(L.reduceKey(armed.ui,snap,{key:'x',nowMs:1100}).effect.command,'local.swarm-view.close-worker');
  snap.workers[0].directory=true;assert.equal(L.reduceKey(ui,snap,{key:'x'}).effect,null);
  });
+
+test('agent cards remove repeated workspace and state text without hiding real tasks',()=>{
+ assert.deepEqual(L.agentDetails({label:'Schema rollout',workspaceName:'Schema rollout',agent:'codex',state:'waiting',directory:true,task:'Schema rollout'}),{meta:'Codex',task:''});
+ assert.deepEqual(L.agentDetails({label:'Check schemas',workspaceName:'Platform',agent:'codex',state:'running',parent:'p',parentLabel:'Platform',task:'Compare database schemas'}),{meta:'Codex · Platform · Worker',task:'Compare database schemas'});
+});

@@ -151,3 +151,14 @@ test('global agent directory preserves stopped and closed current workers and ig
  assert.equal(agents.find(a=>a.paneID==='w1').stopped.reason,'Usage limit reached');assert.equal(agents.find(a=>a.paneID==='w1').directory,false);
  assert.equal(agents.find(a=>a.paneID==='w2').paneClosed,true);assert.equal(agents.find(a=>a.paneID==='w2').state,'done');assert.equal(agents.some(a=>a.paneID==='ordinary'),false);
 });
+
+test('directory hides session-resume banners and shows current run time rather than terminal age',()=>{
+ const {store}=setup();const now=Date.parse('2026-01-01T00:05:00Z');upsert(store,'plain','running',{agent:'codex',title:'✻ Codex session 01a16308 continuation',createdAt:'2025-01-01T00:00:00Z',agentStartedAt:now-60000});
+ let agent=buildSnapshot(store,now).agents.find(a=>a.paneID==='plain');assert.equal(agent.task,'');assert.equal(agent.elapsedSeconds,60);
+ upsert(store,'plain','idle',{title:'Continue Claude session | repos'});agent=buildSnapshot(store,now).agents.find(a=>a.paneID==='plain');assert.equal(agent.task,'');assert.equal(agent.elapsedSeconds,null);
+ upsert(store,'plain','running',{title:'Review the schema rollout',agentStartedAt:null});agent=buildSnapshot(store,now).agents.find(a=>a.paneID==='plain');assert.equal(agent.task,'Review the schema rollout');assert.equal(agent.elapsedSeconds,null);
+});
+test('workspace renames and explicitly cleared labels are reflected by the agent directory',()=>{
+ const {store}=setup();upsert(store,'plain','idle',{agent:'claude',label:'Old label',workspaceName:'Old name',title:'Old task'});applyStateChange(store,{kind:'workspace-upserted',workspace:{id:'ws1',name:'New name'}});upsert(store,'plain','idle',{label:null,title:null});
+ const agent=buildSnapshot(store).agents.find(a=>a.paneID==='plain');assert.equal(agent.workspaceName,'New name');assert.equal(agent.label,'New name');assert.equal(agent.task,'');assert.equal(store.workspaceName,'New name');
+});

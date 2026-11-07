@@ -161,7 +161,7 @@ export interface CodexQuestionRequest {
 export interface AgentDirectoryEntry {
     paneID: string; label: string; task: string; agent: 'claude' | 'codex';
     state: WorkerState; activity: WorkerState | 'idle'; directory: boolean;
-    parent: string | null; parentLabel?: string | null; coordinator: boolean; workspaceName: string; elapsedSeconds: number;
+    parent: string | null; parentLabel?: string | null; coordinator: boolean; workspaceName: string; elapsedSeconds: number | null;
     paneClosed?: boolean; resultPath?: string | null; stopped?: { reason: string };
 }
 

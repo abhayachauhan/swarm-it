@@ -63,7 +63,7 @@ export function makeFakeApi(opts = {}) {
             const byWs = new Map(workspaces.map(w => [w.id, { id: w.id, name: w.name, panes: [], parkedPanes: [] }]));
             for (const p of panes) {
                 if (!byWs.has(p.workspaceID)) byWs.set(p.workspaceID, { id: p.workspaceID, name: p.workspaceID, panes: [], parkedPanes: [] });
-                byWs.get(p.workspaceID).panes.push({ id: p.id, label: p.label ?? null, title: null, status: p.status, type: 'shell', agentKind: p.agent ?? null, agentSessionID: p.agentSessionID ?? null, workingDirectory: p.workingDirectory ?? `/wt/${p.id}` });
+                byWs.get(p.workspaceID).panes.push({ id: p.id, label: p.label ?? null, title: p.title ?? null, agentStartedAt: p.agentStartedAt ?? null, status: p.status, type: 'shell', agentKind: p.agent ?? null, agentSessionID: p.agentSessionID ?? null, workingDirectory: p.workingDirectory ?? `/wt/${p.id}` });
             }
             return { epoch: 'e', sequence, state: { workspaces: [...byWs.values()] } };
         },
@@ -229,7 +229,7 @@ export function makeFakeApi(opts = {}) {
             sequence += 1;
             await api.fire('state.changed', {
                 sequence, name: 'state.changed',
-                data: [{ kind: 'pane-upserted', workspaceID: pane.workspaceID, paneID, pane: { id: paneID, label: pane.label, status: pane.status, ...('agentSessionID' in pane ? { agentSessionID: pane.agentSessionID } : {}) } }]
+                data: [{ kind: 'pane-upserted', workspaceID: pane.workspaceID, paneID, pane: { id: paneID, label: pane.label, status: pane.status, ...('title' in pane ? { title: pane.title } : {}), ...('agentStartedAt' in pane ? { agentStartedAt: pane.agentStartedAt } : {}), ...('agentSessionID' in pane ? { agentSessionID: pane.agentSessionID } : {}) } }]
             });
         },
         async idle() { for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve)); },
