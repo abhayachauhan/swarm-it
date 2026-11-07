@@ -11,14 +11,21 @@
 
     let textSize = 15;
     try { const saved = Number(window.localStorage?.getItem('swarm-agent-text-size')); if (saved >= 13 && saved <= 20) textSize = saved; } catch { /* storage can be unavailable */ }
+    const PREFERENCES_KEY = 'agents.display-preferences';
+    let preferenceSave = Promise.resolve();
     function savePreferences() {
-        if (typeof api.setState === 'function') void api.setState({ ...(api.state || {}), agentTextSize: textSize, directory: ui.directory !== false }).catch(() => {});
+        const prefs = { agentTextSize: textSize, directory: ui.directory !== false, collapsedSections: ui.collapsedSections || [], doneOpen: !!ui.doneOpen };
+        if (!api.context?.paneID && typeof api.storage?.set === 'function') {
+            preferenceSave = preferenceSave.catch(() => {}).then(() => api.storage.set(PREFERENCES_KEY, prefs));
+            void preferenceSave.catch(() => {});
+        } else if (typeof api.setState === 'function') void api.setState({ ...(api.state || {}), ...prefs }).catch(() => {});
         else try { window.localStorage?.setItem('swarm-agent-text-size', String(textSize)); } catch { /* optional legacy storage */ }
     }
     const questionDrafts = Object.create(null);
     let snapshot = null, receivedAtMs = Date.now();
     let ui = L.initialUI(false);
     let notice = '', noticeTimer = null, pointerActive = false, renderPending = false, busy = false, disposed = false;
+    let wideBusy = false;
     let focusBusy = false, lastFocusPane = null, lastFocusAt = -Infinity;
     const disposers = [];
     const guard = L.createButtonGuard();
@@ -187,7 +194,22 @@
         },
         onDirectory: () => { ui = { ...ui, directory: ui.directory === false }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
         onAgentSelect: paneID => { const row = snapshot?.agents?.find(w => w.paneID === paneID); if (row?.paneClosed) { void openWorker(paneID); return; } ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now()); draw(); reveal(paneID, 'Agent'); },
-        onToggleDone: () => { ui = { ...ui, doneOpen: !ui.doneOpen }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); draw(); },
+        onOpenWide: async () => {
+            if (wideBusy) return;
+            if (typeof api.openView !== 'function') { setNotice('Open Agents from the pane view picker for a wider view.'); return; }
+            wideBusy = true;
+            try { await api.openView('local.swarm-view.rail', { ...(api.context?.workspaceID ? { workspaceID: api.context.workspaceID } : {}), focus: true, state: { agentTextSize: textSize, directory: ui.directory !== false, collapsedSections: ui.collapsedSections || [], doneOpen: !!ui.doneOpen } }); }
+            catch (error) { setNotice(`Open wide: ${error.message}`); }
+            finally { wideBusy = false; }
+        },
+        onToggleSection: key => {
+            if (!['needs', 'running', 'idle'].includes(key)) return;
+            const closed = new Set(ui.collapsedSections || []);
+            if (closed.has(key)) closed.delete(key); else closed.add(key);
+            ui = { ...ui, collapsedSections: [...closed] };
+            ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw();
+        },
+        onToggleDone: () => { ui = { ...ui, doneOpen: !ui.doneOpen }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
         onTextSize: delta => { textSize = Math.max(13, Math.min(20, textSize + delta)); savePreferences(); draw(); },
         onQuestionChoice: (item, option) => { void run('Answer Codex', { command: `${L.CMD}answer-codex-question`, args: { itemID: item.id, promptHash: item.promptHash, option } }); },
         onTrustFolder: item => { void run('Trust folder', { command: `${L.CMD}trust-folder`, args: { itemID: item.id, promptHash: item.promptHash, confirm: true } }); },
@@ -322,8 +344,14 @@
 
     async function boot() {
         await api.ready;
-        if (Number.isInteger(api.state?.agentTextSize) && api.state.agentTextSize >= 13 && api.state.agentTextSize <= 20) textSize = api.state.agentTextSize;
-        if (typeof api.state?.directory === 'boolean') ui = { ...ui, directory: api.state.directory };
+        let preferences = api.state || {};
+        if (!api.context?.paneID && typeof api.storage?.get === 'function') {
+            try { const saved = await api.storage.get(PREFERENCES_KEY); if (saved && typeof saved === 'object' && !Array.isArray(saved)) preferences = { ...saved, ...preferences }; } catch { /* Optional preference storage. */ }
+        }
+        if (Number.isInteger(preferences.agentTextSize) && preferences.agentTextSize >= 13 && preferences.agentTextSize <= 20) textSize = preferences.agentTextSize;
+        if (Array.isArray(preferences.collapsedSections)) ui = { ...ui, collapsedSections: preferences.collapsedSections.filter(k => ['needs', 'running', 'idle'].includes(k)) };
+        if (typeof preferences.doneOpen === 'boolean') ui = { ...ui, doneOpen: preferences.doneOpen };
+        if (typeof preferences.directory === 'boolean') ui = { ...ui, directory: preferences.directory };
         for (const name of SNAPSHOT_EVENTS) disposers.push(api.events.on(name, event => adopt(event.data)));
         disposers.push(api.events.on(FOCUS_EVENT, onFocusRequest));
         disposers.push(api.events.on('gap', () => { void loadState(); }));

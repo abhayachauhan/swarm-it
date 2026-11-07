@@ -160,3 +160,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 
 .btn { max-width: 100%; overflow-wrap: anywhere; }
 .att { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+
+/* Section disclosure fills the heading, including its count. */
+.section-toggle { display: block; width: 100%; padding: 6px 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; cursor: pointer; }
+.section-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.row-top { flex-wrap: wrap; }
+.row-top .name { flex-basis: 55%; white-space: normal; overflow-wrap: anywhere; }
+.row-top .row-hover { margin-left: auto; }

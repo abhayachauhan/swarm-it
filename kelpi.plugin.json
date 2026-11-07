@@ -14,9 +14,8 @@
       { "id": "local.swarm-view.run", "title": "Run suggested command", "entry": "ui/run/index.html", "stateVersion": 1, "placements": ["pane"] }
     ],
     "containers": [
-      { "id": "local.swarm-view.brief-toolbar", "title": "Toolbar with session status", "placements": ["topbar"], "bandHeights": { "topbar": 64 }, "layout": "column", "slots": [
-        { "id": "local.swarm-view.brief-toolbar-main", "title": "Toolbar", "defaultView": "kelpi.topbar", "weight": 1 },
-        { "id": "local.swarm-view.brief-status-slot", "title": "Session status", "defaultView": "local.swarm-view.brief", "weight": 1 }
+      { "id": "local.swarm-view.brief-toolbar", "title": "Toolbar", "placements": ["topbar"], "bandHeights": { "topbar": 32 }, "layout": "column", "slots": [
+        { "id": "local.swarm-view.brief-toolbar-main", "title": "Toolbar", "defaultView": "kelpi.topbar", "weight": 1 }
       ] },
       { "id": "local.swarm-view.brief-layout", "title": "Workspace with brief (legacy)", "placements": ["workspace"], "layout": "column", "slots": [
         { "id": "local.swarm-view.brief-slot", "title": "Workspace brief", "defaultView": "local.swarm-view.brief", "weight": 1 },

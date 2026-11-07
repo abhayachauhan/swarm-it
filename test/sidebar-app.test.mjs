@@ -2,6 +2,7 @@
 // types, lets the app's own timers run, and checks what reached the backend and what the footer says.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import { bootApp, fixture } from './sidebar-app-harness.mjs';
 
 const REQUEST_ID = 'Request:p-wait:2026-10-08T00:58:00.000Z';
@@ -307,3 +308,35 @@ test('refresh keeps keyboard focus on the same request Approve button, never ano
 test('hiding Done reconciles away from an invisible completed row',async()=>{
  const app=await bootApp();await app.pointerClick(app.button(app.refs.list,'Show'));await app.pointerClick(app.row('p-done'));await app.pointerClick(app.button(app.refs.list,'Hide'));assert.equal(app.row('p-done'),null);assert.equal(app.card(0).getAttribute('aria-current'),'true');
 });
+
+ test('activity sections collapse independently, persist and remove hidden agents from keyboard navigation', async()=>{
+ const snap=fixture();snap.attention=[];snap.agents=[{paneID:'run',label:'Running work',state:'running',activity:'running',directory:true},{paneID:'idle',label:'Idle work',state:'waiting',activity:'idle',directory:true}];
+ const app=await bootApp({snapshot:snap});
+ await app.pointerClick(app.row('run'));
+ await app.pointerClick(app.refs.list.querySelector('[data-focus-key="section:running"]'));
+ assert.equal(app.row('run'),null);assert.ok(app.row('idle'));assert.deepEqual([...app.getViewState().collapsedSections],['running']);
+ await app.press('Enter');assert.equal(app.reveals.at(-1),'idle');
+ await app.pointerClick(app.refs.list.querySelector('[data-focus-key="section:idle"]'));assert.equal(app.row('idle'),null);
+ await app.pointerClick(app.refs.list.querySelector('[data-focus-key="section:running"]'));assert.ok(app.row('run'));assert.equal(app.row('idle'),null);
+ const reopened=await bootApp({snapshot:snap,viewState:app.getViewState()});assert.ok(reopened.row('run'));assert.equal(reopened.row('idle'),null);
+ assert.equal(sent(app,'close-worker').length,0);assert.equal(sent(app,'approve').length,0);
+ });
+ test('Open wide opens the actual Agents view in a resizable pane with the same display preferences',async()=>{
+ const opened=[];const app=await bootApp({viewState:{collapsedSections:['idle'],agentTextSize:17},context:{workspaceID:'workspace'},openView:async(...args)=>{opened.push(args);return {paneID:'wide'};}});
+ await app.pointerClick(app.button(app.refs.head,'Open wide'));
+ assert.equal(opened.length,1);assert.equal(opened[0][0],'local.swarm-view.rail');assert.equal(opened[0][1].workspaceID,'workspace');assert.equal(opened[0][1].focus,true);assert.equal(opened[0][1].state.agentTextSize,17);assert.deepEqual([...opened[0][1].state.collapsedSections],['idle']);
+ assert.equal(sent(app,'close-worker').length,0);
+ });
+ test('legacy topbar contributes only native toolbar, without a generated description slot',()=>{
+ const manifest=JSON.parse(readFileSync(new URL('../kelpi.plugin.json',import.meta.url),'utf8'));
+ const top=manifest.contributes.containers.find(c=>c.id==='local.swarm-view.brief-toolbar');assert.equal(top.bandHeights.topbar,32);assert.deepEqual(top.slots.map(s=>s.defaultView),['kelpi.topbar']);
+ });
+
+ test('secondary sidebar preferences survive remount even though pane setState is unavailable',async()=>{
+ let stored=null;const storage={get:async()=>stored,set:async(key,value)=>{assert.equal(key,'agents.display-preferences');stored=JSON.parse(JSON.stringify(value));}};
+ const snap=fixture();snap.attention=[];snap.agents=[{paneID:'r',label:'Working',state:'running',activity:'running',directory:true},{paneID:'i',label:'Idle',state:'waiting',activity:'idle',directory:true}];
+ const app=await bootApp({context:{},snapshot:snap,storage,stateFails:'Sidebar has no pane ID'});
+ await app.pointerClick(app.refs.list.querySelector('[data-focus-key="section:idle"]'));await app.pointerClick(app.button(app.refs.head,'A+'));
+ assert.deepEqual(stored.collapsedSections,['idle']);assert.equal(stored.agentTextSize,16);
+ const reopened=await bootApp({context:{},snapshot:snap,storage,stateFails:'Sidebar has no pane ID'});assert.equal(reopened.row('i'),null);assert.ok(reopened.row('r'));assert.match(reopened.refs.app.getAttribute('style'),/16px/);
+ });

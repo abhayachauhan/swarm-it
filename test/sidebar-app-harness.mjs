@@ -62,7 +62,8 @@ export async function bootApp(options = {}) {
         ready: Promise.resolve(),
         snapshot: async () => options.hostSnapshot || {state:{workspaces:[]}},
         state: options.viewState || {},
-        setState: async value => { api.state = value; },
+        setState: async value => { if(options.stateFails) throw new Error(options.stateFails); api.state = value; },
+        storage: options.storage,
         events: { on(name, fn) { (events[name] ??= []).push(fn); return () => { events[name] = (events[name] ?? []).filter(f => f !== fn); }; } },
         commands: {
             execute: async (command, args) => {
@@ -75,6 +76,8 @@ export async function bootApp(options = {}) {
             },
         },
         layout: options.layout,
+        openView: options.openView,
+        context: options.context || {paneID:'test-pane'},
         ui: { getPaneChrome: async () => { throw new AppError('Presenter-only API'); }, reveal: async paneID => { reveals.push(paneID); if (options.revealFails) throw new AppError(options.revealFails); } },
     };
     const window = { kelpi: api, addEventListener(name, fn) { (listeners[name] ??= []).push(fn); }, focus() {} };

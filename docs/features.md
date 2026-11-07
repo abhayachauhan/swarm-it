@@ -53,3 +53,7 @@ The `manifestDir` plugin setting and `SWARM_MANIFEST_DIR` for CLI helpers can mo
 A larger-text activity view for Claude and Codex. All agents spans recognised terminals across workspaces, while This swarm preserves the selected coordinator's worker actions and result history. Needs you stays first; Running, Idle and expandable Done keep active and completed work separate. Visible questions and permission menus outside Auto appear as navigation-only; an ordinary idle composer is not treated as a blocked question. Worker ownership remains scoped by the existing manifest checks.
 
 Click a global row to reach its terminal, or Focus / split to toggle native pane zoom. Closed completed workers open their validated saved result. J/K and Enter follow the visible list, including expanded completed work. Text sizing and directory scope persist through Kelpi view state; Terminal 17px changes only the native font-size setting. AgentDirectoryEnabled disables the global directory without deleting any tasks or terminals. Permission checks and Auto policy are unchanged.
+
+### Fold activity groups and make room
+
+Click a Needs you, Running or Idle heading to fold that group. Done uses Show/Hide. Folded groups keep updating their counts, and preferences survive reopening the view. Hidden rows are skipped by keyboard navigation. Open wide puts the same Agents list in a native resizable pane without stopping any sessions. Agent names and actions wrap instead of competing for a single narrow line. The toolbar no longer shows an automatic description strip.

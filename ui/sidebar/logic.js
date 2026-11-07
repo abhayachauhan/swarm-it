@@ -70,7 +70,7 @@
      *   done:    no rows, only `count`: how many workers finished (done or error).
      * Archived workers are omitted everywhere.
      */
-    const agentSnapshot = (snapshot, ui) => !snapshot ? snapshot : { ...snapshot, doneOpen: !!ui.doneOpen, ...(snapshot.agents && ui.directory !== false ? { workers: snapshot.agents.map(w => ({...w, nativeNavigation: !w.paneClosed})), orchestrator: null, otherSwarms: [] } : {}) };
+    const agentSnapshot = (snapshot, ui) => !snapshot ? snapshot : { ...snapshot, doneOpen: !!ui.doneOpen, collapsedSections: ui.collapsedSections || [], ...(snapshot.agents && ui.directory !== false ? { workers: snapshot.agents.map(w => ({...w, nativeNavigation: !w.paneClosed})), orchestrator: null, otherSwarms: [] } : {}) };
     function sections(snapshot) {
         if (!snapshot) return [];
         const needs = [];
@@ -111,7 +111,7 @@
     }
 
     /** The flat list J/K walk: every section's rows in order. The coordinator is not a row; it is the header's ⌂ button. */
-    const rowsOf = snapshot => sections(snapshot).flatMap(section => section.key === 'done' && snapshot?.doneOpen ? section.finished : section.rows);
+    const rowsOf = snapshot => sections(snapshot).filter(section => !snapshot?.collapsedSections?.includes(section.key)).flatMap(section => section.key === 'done' && snapshot?.doneOpen ? section.finished : section.rows);
 
     /**
      * The header's home button target: open-thread on the orchestrator closes the thread view and gives the coordinator
@@ -809,7 +809,13 @@
     function buildSectionHead(doc, section, view, handlers) {
         const node = h(doc, 'div', `sec-head sec-${section.key}`);
         node.setAttribute('role', 'presentation');
-        node.append(h(doc, 'span', 'sec-title', `${section.title} · ${sectionSize(section)}`));
+        const collapsed = view.ui.collapsedSections?.includes(section.key);
+        if (section.key !== 'done' && handlers?.onToggleSection) {
+            const toggle = button(doc, `${collapsed ? '▸' : '▾'} ${section.title} · ${sectionSize(section)}`, 'section-toggle', () => handlers.onToggleSection(section.key), `Toggle ${section.title}`);
+            toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            toggle.setAttribute('data-focus-key', `section:${section.key}`);
+            node.append(toggle);
+        } else node.append(h(doc, 'span', 'sec-title', `${section.title} · ${sectionSize(section)}`));
         if (section.key === 'done' && handlers) {
             const toggle = button(doc, view.ui.doneOpen ? 'Hide' : 'Show', 'btn', () => handlers.onToggleDone(), 'Toggle completed agents');
             toggle.setAttribute('aria-expanded', view.ui.doneOpen ? 'true' : 'false'); node.append(toggle);
@@ -934,6 +940,7 @@
             fleet.append(h(doc, 'div', 'fleet-context', directory ? 'Across all workspaces' : snapshot.workspaceName || 'Current workspace'));
             const sizes = button(doc, 'A−', 'btn', () => handlers.onTextSize?.(-1), 'Smaller agent text');
             const larger = button(doc, 'A+', 'btn', () => handlers.onTextSize?.(1), 'Larger agent text');
+            fleet.append(button(doc, 'Open wide', 'btn', () => handlers.onOpenWide?.(), 'Open Agents in a resizable workspace pane'));
             fleet.append(sizes, larger, button(doc, 'Terminal 17px', 'btn', () => handlers.onTerminalSize?.(17), 'Set terminal text to 17px'));
             if (snapshot.agents) fleet.append(button(doc, directory ? 'This swarm' : 'All agents', 'btn', () => handlers.onDirectory?.(), 'Switch agent list scope'));
             if (refs.head) refs.head.append(fleet); else list.push(fleet);
@@ -958,7 +965,7 @@
             for (const section of secs) {
                 if (!sectionSize(section)) continue;
                 list.push(buildSectionHead(doc, section, view, handlers));
-                const rows = section.key === 'done' ? (ui.doneOpen ? section.finished : []) : section.rows;
+                const rows = ui.collapsedSections?.includes(section.key) ? [] : section.key === 'done' ? (ui.doneOpen ? section.finished : []) : section.rows;
                 for (const row of rows) list.push(build(row));
             }
             list.push(...buildOtherSwarms(doc, displaySnapshot, handlers));

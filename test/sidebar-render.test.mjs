@@ -494,7 +494,7 @@ test('auto-approve off: the header says "Auto: off"; a click opens a menu of 4 h
     toggle.click();
     assert.deepEqual(calls, [['auto-menu']], 'the click opens the menu; nothing is turned on yet');
     const texts = find(refs.head, n => n.tag === 'button').map(b => b.text);
-    assert.deepEqual(texts, ['⌂ Coordinator', 'Auto: off', 'A−', 'A+', 'Terminal 17px'], 'no log link while the log is empty');
+    assert.deepEqual(texts, ['⌂ Coordinator', 'Auto: off', 'Open wide', 'A−', 'A+', 'Terminal 17px'], 'no log link while the log is empty');
     assert.equal(find(refs.panel, n => n.tag === 'button').length, 0, 'the menu is closed until opened');
     // Open (ui.autoMenuOpen): four choices, each sending its key.
     const morning = new Date(2026, 9, 11, 7, 30).getTime();

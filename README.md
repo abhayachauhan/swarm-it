@@ -132,3 +132,5 @@ The **Show all workspaces in Agents** setting disables the global directory. Thi
 ![Agents view with larger text and separate activity groups, using sample tasks](docs/agents-view.png)
 
 Sample tasks shown above. Your sessions and worker results fill the same view.
+
+Activity headings collapse and expand independently, remember your choices, and keep their live counts visible. **Open wide** opens Agents in a resizable workspace pane. The generated top description strip has been removed; workspace brief details remain available on demand.
