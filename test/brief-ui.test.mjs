@@ -158,16 +158,14 @@ test('late initial chrome cannot undo a newer selection and details stays bound 
     assert.deepEqual(JSON.parse(JSON.stringify(details.calls.at(-1))), { command: 'edit-workspace-brief', args: { workspaceID: 'fixed', goal: 'Edited goal', goalPinned: true } });
 });
 
-test('bootstrap enables the status toolbar only in Details, reports failure and Hide restores the native toolbar', async () => {
-    const h = await boot({ state: { workspaceID: 'fixed', details: true, enableLayout: true }, selectView: () => { throw new Error('Layout unavailable'); } });
+test('opening the brief never changes the toolbar, Hide restores the native toolbar and reports failure', async () => {
+    const h = await boot({ state: { workspaceID: 'fixed', details: true }, selectView: () => { throw new Error('Layout unavailable'); } });
     await h.started; await flush();
-    assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0])), { command: 'selectView', args: ['topbar', 'local.swarm-view.brief-toolbar'] });
-    assert.equal(h.$('status').textContent.includes('Could not enable status line: Layout unavailable'), true);
+    assert.equal(h.calls.filter(x => x.command === 'selectView').length, 0, 'no toolbar change on open');
     await h.fire('hide'); assert.equal(h.$('status').textContent, 'Could not hide brief: Layout unavailable');
-    const ok = await boot({ state: { workspaceID: 'fixed', details: true, enableLayout: true } }); await ok.started; await flush(); await ok.fire('hide');
+    const ok = await boot({ state: { workspaceID: 'fixed', details: true } }); await ok.started; await flush(); await ok.fire('hide');
     assert.deepEqual(JSON.parse(JSON.stringify(ok.calls.at(-1))), { command: 'selectView', args: ['topbar', 'kelpi.topbar'] });
-    const header = await boot({ state: { enableLayout: true } }); await header.started; await flush();
-    assert.equal(header.calls.filter(x => x.command === 'selectView').length, 0);
+    assert.equal(ok.$('status').textContent, 'Status line hidden');
 });
 
 
@@ -228,20 +226,6 @@ test('the compact header shows only current progress, without a title, plan or P
     assert.doesNotMatch(readFileSync(new URL('../ui/brief/index.html', import.meta.url), 'utf8'), /<strong>Workspace brief/);
 });
 
-
-test('legacy headers migrate in order without replacing a custom workspace view', async () => {
-    const legacy = await boot({ workbench: { slots: [{ id: 'workspace', viewID: 'local.swarm-view.brief-layout' }] } });
-    await legacy.started; await flush();
-    assert.deepEqual(JSON.parse(JSON.stringify(legacy.calls.filter(c => c.command === 'selectView'))), [
-        { command: 'selectView', args: ['topbar', 'local.swarm-view.brief-toolbar'] },
-        { command: 'selectView', args: ['workspace', 'kelpi.workspace'] }
-    ]);
-    const custom = await boot({ state: { details: true, workspaceID: 'a', enableLayout: true },
-        workbench: { slots: [{ id: 'workspace', viewID: 'another.custom-view' }] } });
-    await custom.started; await flush();
-    assert.deepEqual(JSON.parse(JSON.stringify(custom.calls.filter(c => c.command === 'selectView'))),
-        [{ command: 'selectView', args: ['topbar', 'local.swarm-view.brief-toolbar'] }]);
-});
 
 test('one-line status falls back to a question or active step, never the goal title', () => {
     assert.equal(logic.currentStatus({ goal: 'A title', now: '', needsYou: 'Choose a release date' }), 'Choose a release date');

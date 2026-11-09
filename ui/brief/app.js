@@ -6,15 +6,6 @@ await api.ready;
 const $ = id => document.getElementById(id);
 const details = api.state?.details === true;
 let layoutError = '';
-try {
-    const workbench = typeof api.ui.getWorkbench === 'function' ? await api.ui.getWorkbench() : null;
-    const legacy = workbench?.slots?.some(slot => slot.id === 'workspace' && slot.viewID === 'local.swarm-view.brief-layout');
-    if (legacy || (details && api.state?.enableLayout === true)) {
-        // Select the new header first: restoring the old workspace unmounts this legacy view.
-        await api.ui.selectView('topbar', 'local.swarm-view.brief-toolbar');
-        if (legacy) await api.ui.selectView('workspace', 'kelpi.workspace');
-    }
-} catch (cause) { layoutError = `Could not enable status line: ${cause.message || String(cause)}`; }
 let disposed = false, selected = null;
 const render = createBriefRenderer(document, { details, onLink: async (url, workspaceID) => {
     if (disposed || selected !== workspaceID || !pullLink(url)) return;

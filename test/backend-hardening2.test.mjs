@@ -93,7 +93,7 @@ test('a worker pane in a foreign workspace is ignored and surfaced as a warning'
     const { snapshot } = await api.command('get-state');
     assert.deepEqual(snapshot.workers.map(w => w.paneID), ['w1']);
     assert.ok(snapshot.warnings.some(w => /ignored 1 manifest worker.*tests/.test(w)), snapshot.warnings.join('|'));
-    for (const name of ['send-to-worker', 'capture-worker', 'open-result']) {
+    for (const name of ['send-to-worker', 'read-result', 'open-result']) {
         assert.equal((await api.command(name, { paneID: 'w2', text: 'hi' })).code, 'NOT_WORKER', name);
     }
     assert.equal(api.callsTo('terminal.send').length, 0);
@@ -146,7 +146,7 @@ test('a valid worktree inside an allowed root scopes results to itself', async (
 });
 
 // ---- fail-closed actions: unknown pane or missing workspaceID --------------------------------
-import { sendToWorker, captureWorker, approve, deny, archive, accept } from '../backend/actions.mjs';
+import { sendToWorker, approve, deny, archive, accept } from '../backend/actions.mjs';
 import { hideWorker } from '../backend/collapse.mjs';
 import { addItem } from '../backend/attention.mjs';
 import { PROMPT_TEXT } from './backend-fake-api.mjs';
@@ -166,7 +166,6 @@ for (const [name, panePatch] of [['unknown pane', null], ['pane without workspac
         const { item } = await addItem(store.att, { type: 'Request', paneID: 'w1', text: 'asks', command: p.command, promptHash: promptHash(p.block) });
         const results = {
             send: await sendToWorker(api, store, 'w1', 'hi'),
-            capture: await captureWorker(api, store, 'w1'),
             open: await openResult(api, store, 'w1'),
             read: await readResult(api, store, 'w1'),
             approve: await approve(api, store, item.id, item.promptHash),
@@ -189,7 +188,7 @@ test('a pane in a workspace that is not allowed is refused by every action', asy
     store.allowedWorkspace = id => id === 'ws1';
     applyStateChange(store, { kind: 'pane-upserted', workspaceID: 'other', paneID: 'w1', pane: { id: 'w1', status: 'idle' } });
     assert.equal((await sendToWorker(api, store, 'w1', 'hi')).code, 'NOT_WORKER');
-    assert.equal((await captureWorker(api, store, 'w1')).code, 'NOT_WORKER');
+    assert.equal((await readResult(api, store, 'w1')).code, 'NOT_WORKER');
 });
 
 // ---- worktreeRoots trust model (home injected so nothing touches the real home directory) ------

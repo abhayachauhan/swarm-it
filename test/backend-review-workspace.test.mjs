@@ -20,7 +20,7 @@ test('a manifest whose orchestrator pane is in another workspace than the manife
     const { snapshot } = await api.command('get-state');
     assert.deepEqual(snapshot.workers.map(w => w.paneID), [], 'no worker is accepted');
     assert.ok(snapshot.warnings.some(w => /ignored manifest .*orchestrator pane is not in workspace/.test(w)), snapshot.warnings.join('|'));
-    for (const name of ['send-to-worker', 'capture-worker', 'open-result']) {
+    for (const name of ['send-to-worker', 'read-result', 'open-result']) {
         assert.equal((await api.command(name, { paneID: 'w1', text: 'hi' })).code, 'NOT_WORKER', name);
     }
     assert.equal(api.callsTo('terminal.send').length, 0);

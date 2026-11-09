@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, applyStateChange } from '../backend/store.mjs';
 import { createAttention, addItem } from '../backend/attention.mjs';
-import { approve, deny, archive, closeWorker, accept, captureWorker, readResult, sendToOrchestrator, pinOrchestrator, sendToWorker, openResult, openWebLink, sendText } from '../backend/actions.mjs';
+import { approve, deny, archive, closeWorker, accept, readResult, sendToOrchestrator, sendToWorker, openResult, openWebLink, sendText } from '../backend/actions.mjs';
 import { promptHash, parsePrompt } from '../backend/notify.mjs';
 import { makeFakeApi, MANIFEST, PROMPT_TEXT } from './backend-fake-api.mjs';
 
@@ -242,19 +242,11 @@ test('sendToOrchestrator fails cleanly with no orchestrator; accept still record
     assert.deepEqual(await accept(api, store, 'w1'), { ok: true, paneID: 'w1', notified: false });
 });
 
-test('captureWorker returns text, defaults to 60 lines, and reports failures', async () => {
-    const { api, store } = setup({ captures: { w1: 'hello' } });
-    assert.deepEqual(await captureWorker(api, store, 'w1'), { ok: true, text: 'hello' });
-    assert.equal(api.callsTo('terminal.capture')[0].args[1].lines, 60);
-    assert.equal((await captureWorker(api, store, '')).code, 'BAD_ARGS');
-    const broken = setup({ captures: {} });
-    assert.equal((await captureWorker(broken.api, broken.store, 'w1', 5)).code, 'CAPTURE_FAILED');
-});
-
-test('captureWorker refuses any pane that is not a manifest worker and never captures it', async () => {
+test('readResult refuses any pane that is not a manifest worker and never reads a file or captures it', async () => {
     const { api, store } = setup({ captures: { w1: 'hello', stranger: 'secret', orch: 'o' } });
-    for (const id of ['stranger', 'orch', 'nope']) assert.equal((await captureWorker(api, store, id)).code, 'NOT_WORKER', id);
+    for (const id of ['stranger', 'orch', 'nope']) assert.equal((await readResult(api, store, id)).code, 'NOT_WORKER', id);
     assert.equal(api.callsTo('terminal.capture').length, 0);
+    assert.equal(api.callsTo('files.read').length, 0);
 });
 
 test('sendToWorker sends to a manifest worker only, with validated text', async () => {
@@ -298,16 +290,6 @@ test('readResult returns the text and Goal, Done, Next summary; NO_RESULT when a
     assert.equal((await readResult(api, store, 'stranger')).code, 'NOT_WORKER');
     const bold = setup({ files: { '/wt/w1/result.md': '**Goal**\nA\n**Done**\nB\n' } });
     assert.deepEqual((await readResult(bold.api, bold.store, 'w1')).summary, { goal: 'A', done: 'B', next: '' });
-});
-
-test('pinOrchestrator pins a known non-worker pane only', async () => {
-    const { api, store } = setup();
-    applyStateChange(store, { kind: 'pane-upserted', workspaceID: 'ws1', paneID: 'stranger', pane: { id: 'stranger', status: 'idle' } });
-    assert.equal((await pinOrchestrator(api, store, 'ghost')).code, 'NO_PANE');
-    assert.equal((await pinOrchestrator(api, store, 'w1')).code, 'IS_WORKER');
-    assert.deepEqual(await pinOrchestrator(api, store, 'stranger'), { ok: true });
-    assert.equal(store.pinnedOrchestratorPaneID, 'stranger');
-    assert.equal(api.storageMap.get('pins').orchestratorPaneID, 'stranger');
 });
 
 test('a closed worker result can be opened only under its live coordinator and existing path policy',async()=>{

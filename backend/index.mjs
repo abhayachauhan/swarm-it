@@ -26,8 +26,8 @@ import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 
 export const PLUGIN_ID = 'local.swarm-view';
 export const COMMANDS = [
-    'get-workspace-brief', 'edit-workspace-brief', 'open-workspace-brief', 'focus-rail', 'get-state', 'open-thread', 'read-result', 'capture-worker', 'approve', 'deny',
-    'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'snooze', 'archive', 'close-worker', 'accept', 'pin-orchestrator', 'clear-attention', 'send-to-worker', 'open-result', 'open-web-link',
+    'get-workspace-brief', 'edit-workspace-brief', 'open-workspace-brief', 'focus-rail', 'get-state', 'open-thread', 'read-result', 'approve', 'deny',
+    'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'archive', 'close-worker', 'accept', 'send-to-worker', 'open-result', 'open-web-link',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
     'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff', 'fresh-session', 'agent-appearance'
 ].map(name => `${PLUGIN_ID}.${name}`);
@@ -228,7 +228,6 @@ export function registerAll(api, deps = modules) {
         add(st.workspaceID);
         const label = st.settings.coordinatorLabel || 'coordinator';
         for (const p of st.panes.values()) if (p.label === label) add(p.workspaceID);
-        add(st.panes.get(st.pinnedOrchestratorPaneID)?.workspaceID);
         for (const p of st.panes.values()) add(p.workspaceID);
         return ids;
     }
@@ -331,7 +330,7 @@ export function registerAll(api, deps = modules) {
             st.manifestWorkers = [];
         } else if (st.manifest) setWarning('manifest-owner', null);
         const all = st.manifestAll ?? st.manifestWorkers;
-        const home = st.followWorkspaceID ?? (st.manifest ? st.workspaceID : (st.panes.get(st.pinnedOrchestratorPaneID)?.workspaceID ?? st.workspaceID));
+        const home = st.followWorkspaceID ?? st.workspaceID;
         const homeName = home ? wsName(home) : null;
         const allowed = id => !!home && (id === home || W.isWorkersWorkspaceOf(st, id, homeName));
         st.allowedWorkspace = allowed;
@@ -352,7 +351,7 @@ export function registerAll(api, deps = modules) {
         const workerIDs = new Set(st.manifestWorkers.map(w => w.paneID));
         const panes = [...st.panes.values()].filter(p => !workerIDs.has(p.id) && (!st.followWorkspaceID || (p.workspaceID && st.allowedWorkspace(p.workspaceID))));
         const model = { panes, workspaceID: st.workspaceID };
-        st.orchestrator = M.resolveOrchestrator(model, st.manifest, st.settings, st.pinnedOrchestratorPaneID);
+        st.orchestrator = M.resolveOrchestrator(model, st.manifest, st.settings);
         if (!st.workspaceID && st.orchestrator) {
             st.workspaceID = st.panes.get(st.orchestrator.paneID)?.workspaceID ?? null;
             st.workspaceName = st.workspaceID ? wsName(st.workspaceID) : null;
@@ -503,7 +502,6 @@ export function registerAll(api, deps = modules) {
         // Workers whose pane closed while the plugin was down would otherwise read as running forever.
         S.markMissingWorkers(st);
         for (const w of st.manifestWorkers) await S.refreshWorker(st, w.paneID);
-        A.rearm(att, Date.now());
         // A reload may find cards whose pane closed while the plugin was down.
         await settleOrphans();
         await settle({ publishAlways: true });
@@ -844,7 +842,7 @@ export function registerAll(api, deps = modules) {
             return fail('Choose an open workspace for its brief', 'NO_WORKSPACE');
         try {
             const opened = await api.openView('local.swarm-view.brief', { workspaceID,
-                state: { workspaceID, details: true, ...(args.enableLayout === true ? { enableLayout: true } : {}) } });
+                state: { workspaceID, details: true } });
             return { ok: true, paneID: opened.paneID, workspaceID };
         } catch (error) { return fail(text(error), 'OPEN_FAILED'); }
     });
@@ -933,7 +931,6 @@ export function registerAll(api, deps = modules) {
         return result;
     };
     command('read-result', async args => opensResult(args, () => X.readResult(api, st, args.paneID)));
-    command('capture-worker', async args => needPane(args) ?? X.captureWorker(api, st, args.paneID, args.lines));
     command('send-to-worker', async args => needPane(args) ?? X.sendToWorker(api, st, args.paneID, args.text));
     command('handoff', async args => H.handoff(api, st, args));
     // Header/menu/keyboard commands must reject on refusal: Kelpi ignores an ok:false reply.
@@ -956,16 +953,6 @@ export function registerAll(api, deps = modules) {
     command('trust-folder', async args => needItem(args) ?? after(await X.trustFolder(api, st, args)));
     command('approve', async args => needItem(args) ?? after(await X.approve(api, st, args.itemID, args.promptHash)));
     command('deny', async args => needItem(args) ?? after(await X.deny(api, st, args.itemID)));
-    command('snooze', async args => {
-        const bad = needItem(args);
-        if (bad) return bad;
-        const minutes = args.minutes === undefined ? Number(st.settings.snoozeMinutes) : Number(args.minutes);
-        if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 60 * 24 * 14) return fail('minutes must be between 0 and 20160', 'BAD_ARGS');
-        const item = await A.snoozeItem(att, args.itemID, minutes, Date.now());
-        if (!item) return fail(`no open attention item ${args.itemID}`, 'NOT_FOUND');
-        await publish();
-        return { ok: true, itemID: item.id, snoozedUntil: item.snoozedUntil };
-    });
     command('archive', async args => needPane(args) ?? after(await X.archive(api, st, args.paneID)));
     command('close-worker', async args => needPane(args) ?? after(await X.closeWorker(api, st, args.paneID)));
     // A partial clear still changed the rail, so it publishes whenever anything was cleared.
@@ -975,23 +962,6 @@ export function registerAll(api, deps = modules) {
         return result;
     });
     command('accept', async args => needPane(args) ?? after(await X.accept(api, st, args.paneID)));
-    command('pin-orchestrator', async args => {
-        const bad = needPane(args);
-        if (bad) return bad;
-        const result = await X.pinOrchestrator(api, st, args.paneID);
-        if (!result.ok) return result;
-        resolveOrchestrator();
-        await publish();
-        return { ok: true, orchestrator: st.orchestrator };
-    });
-    command('clear-attention', async args => {
-        const bad = needItem(args);
-        if (bad) return bad;
-        const item = await A.handleItem(att, args.itemID, Date.now());
-        if (!item) return fail(`no attention item ${args.itemID}`, 'NOT_FOUND');
-        await publish();
-        return { ok: true, itemID: item.id };
-    });
     // `{ on: true, hours?: number | null }` (default 12 h; null or 0: until turned off), `{ on: true, until: ISO }`
     // (in the future, at most 7 days away) or `{ on: false }`.
     command('auto-approve', async args => {
@@ -1094,7 +1064,6 @@ export function registerAll(api, deps = modules) {
         briefs.dispose();
         briefPulls.dispose();
         for (const off of disposers.splice(0)) { try { off(); } catch { /* already gone */ } }
-        A.stop(att);
     };
     dispose.ready = ready;
     dispose.store = st;

@@ -17,9 +17,6 @@
     { "id": "Error:p-err:2026-10-08T00:59:00.000Z", "type": "Error", "paneID": "p-err", "text": "db-migrate failed", "createdAt": "2026-10-08T00:59:00.000Z" },
     { "id": "Complete:p-done:2026-10-08T00:59:30.000Z", "type": "Complete", "paneID": "p-done", "text": "ui-polish finished", "createdAt": "2026-10-08T00:59:30.000Z" }
   ],
-  "snoozed": [
-    { "id": "Complete:p-acc:2026-10-08T00:50:00.000Z", "type": "Complete", "paneID": "p-acc", "text": "lint-fix finished", "createdAt": "2026-10-08T00:50:00.000Z", "snoozedUntil": "2026-10-08T01:30:00.000Z" }
-  ],
   "counts": { "waiting": 1, "running": 1, "finished": 3 },
   "warnings": []
 }

@@ -83,7 +83,7 @@ export function findWorker(snapshot, paneID) {
     return snapshot.workers.find(worker => worker.paneID === paneID) ?? null;
 }
 
-/** Latest unhandled Request item for a pane, or null. Snapshot.attention is already unhandled and not snoozed. */
+/** Latest unhandled Request item for a pane, or null. Snapshot.attention is already unhandled. */
 export function pendingRequest(snapshot, paneID) {
     if (!snapshot || !Array.isArray(snapshot.attention)) return null;
     const items = snapshot.attention.filter(item => item.paneID === paneID && item.type === 'Request' && !item.handledAt);

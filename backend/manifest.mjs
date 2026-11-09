@@ -146,11 +146,11 @@ function paneList(model) {
 }
 
 /**
- * Orchestrator precedence: manifest, then the pane labelled `settings.coordinatorLabel`, then the manual pin.
+ * Orchestrator precedence: manifest, then the pane labelled `settings.coordinatorLabel`.
  * A candidate only counts when its pane exists in the model.
- * @returns {{ paneID: string, label: string, source: 'manifest' | 'label' | 'pin' } | null}
+ * @returns {{ paneID: string, label: string, source: 'manifest' | 'label' } | null}
  */
-export function resolveOrchestrator(model, manifest, settings, pin) {
+export function resolveOrchestrator(model, manifest, settings) {
     const panes = paneList(model);
     const byID = new Map(panes.map(pane => [pane.id, pane]));
     if (manifest?.orchestrator && byID.has(manifest.orchestrator.paneID)) {
@@ -159,10 +159,5 @@ export function resolveOrchestrator(model, manifest, settings, pin) {
     const wanted = settings?.coordinatorLabel || 'coordinator';
     const labelled = panes.filter(pane => pane.label === wanted);
     const pick = labelled.find(pane => model.workspaceID && pane.workspaceID === model.workspaceID) ?? labelled[0];
-    if (pick) return { paneID: pick.id, label: pick.label, source: 'label' };
-    if (typeof pin === 'string' && byID.has(pin)) {
-        const pane = byID.get(pin);
-        return { paneID: pin, label: pane.label || pane.title || pin, source: 'pin' };
-    }
-    return null;
+    return pick ? { paneID: pick.id, label: pick.label, source: 'label' } : null;
 }

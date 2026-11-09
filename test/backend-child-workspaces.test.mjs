@@ -37,7 +37,7 @@ test('following a worker child shows its coordinator swarm; a foreign child is r
     const { snapshot } = await api.command('get-state', { workspaceID: 'child' });
     assert.equal(snapshot.workspaceID, 'ws1');
     assert.deepEqual(snapshot.workers.map(w => w.paneID), ['w1']);
-    assert.equal((await api.command('capture-worker', { paneID: 'w2' })).code, 'NOT_WORKER');
+    assert.equal((await api.command('read-result', { paneID: 'w2' })).code, 'NOT_WORKER');
     assert.equal(childOf(api, 'w2').id, 'foreign');
     assert.deepEqual(api.callsTo('panes.moveToWorkspace'), []);
     assert.deepEqual(api.callsTo('workspaces.create'), []);

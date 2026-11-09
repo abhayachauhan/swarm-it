@@ -23,21 +23,19 @@ Each worker gets its own child workspace under the coordinator, with a full-size
 
 ## Remember each workspace
 
-![A single plain-language session status line with a Details button](docs/workspace-brief.png)
-
-**Toolbar with session status** shows one sentence below the normal toolbar, such as “The changes are ready; waiting for your review.” There is no brief title or large header panel. **Details** opens the goal, plan, pull request changes, risk and validation evidence. User-pinned goals stay in Details.
+The brief opens on demand. Run the command **Workspace brief: details and plan** and it opens as a **Details** pane for the selected workspace. It shows the goal, plan, pull request changes, risk and validation evidence. A goal you pin stays put. There is no status line under the toolbar.
 
 The plugin reads a bounded slice of the selected workspace’s Claude or Codex conversation. A separate, tool-free Sonnet call uses your installed Claude login. This uses Claude usage and does not send prompts into your working session. Changed context is checked while visible, with one summary process and a two-minute automatic refresh limit per workspace.
 
 Pull request assessments use the GitHub description, changed files, checks and a bounded diff excerpt. Risk is preliminary; live checks and reported runtime validation stay separate. Missing evidence stays Unknown, and a changed revision invalidates the old assessment.
 
-Automatic briefs are off on a fresh install. Enable them in plugin settings, then choose **Toolbar with session status** for the toolbar view:
+Briefs are generated only when `briefEnabled` is on, and it is off on a fresh install. Turn it on in plugin settings:
 
 ```sh
 kelpi plugin settings local.swarm-view --key briefEnabled --value true
 ```
 
-Existing brief layouts migrate automatically. **Hide status line** restores the native toolbar. Summaries survive restarts and handoffs; when shared plugin storage is full, private files under ~/.kelpi-swarm/briefs/ preserve them without pruning Swarm history.
+Summaries survive restarts and handoffs; when shared plugin storage is full, private files under ~/.kelpi-swarm/briefs/ preserve them without pruning Swarm history.
 
 ## One rail for the whole run
 

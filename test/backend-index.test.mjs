@@ -40,7 +40,7 @@ test('orchestrator from the manifest is first-class and workers exclude it (acce
     dispose();
 });
 
-test('no manifest: orchestrator falls back to the coordinator label, then to the pin', async () => {
+test('no manifest: orchestrator falls back to the coordinator label, and is none without one', async () => {
     const byLabel = makeFakeApi({
         workspaces: [{ id: 'ws1', name: 'S' }],
         panes: [{ id: 'c', label: 'coordinator', workspaceID: 'ws1' }, { id: 'p', label: 'x', workspaceID: 'ws1' }]
@@ -53,18 +53,11 @@ test('no manifest: orchestrator falls back to the coordinator label, then to the
     assert.ok(state.warnings.some(w => /no swarm manifest/.test(w)));
     d1();
 
-    const byPin = makeFakeApi({ workspaces: [{ id: 'ws1', name: 'S' }], panes: [{ id: 'p', label: 'x', workspaceID: 'ws1' }] });
-    const d2 = registerAll(byPin);
+    const none = makeFakeApi({ workspaces: [{ id: 'ws1', name: 'S' }], panes: [{ id: 'p', label: 'x', workspaceID: 'ws1' }] });
+    const d2 = registerAll(none);
     await d2.ready;
-    assert.equal((await byPin.command('get-state')).snapshot.orchestrator, null);
-    const pinned = await byPin.command('pin-orchestrator', { paneID: 'p' });
-    assert.deepEqual(pinned, { ok: true, orchestrator: { paneID: 'p', label: 'x', source: 'pin' } });
+    assert.equal((await none.command('get-state')).snapshot.orchestrator, null);
     d2();
-    // the pin survives a reload
-    const again = registerAll(makeFakeApi({ workspaces: [{ id: 'ws1', name: 'S' }], panes: [{ id: 'p', label: 'x', workspaceID: 'ws1' }], storage: byPin.storageMap }));
-    await again.ready;
-    assert.equal(again.store.orchestrator.source, 'pin');
-    again();
 });
 
 test('an invalid manifest becomes a warning and the label fallback still works', async () => {
@@ -155,8 +148,10 @@ test('a worker that writes its result becomes done and raises a Complete item th
     assert.ok(item);
     await api.upsert('w2', { status: 'running' });
     assert.ok(lastSnapshot(api).attention.some(i => i.id === item.id), 'still there after unrelated events');
-    assert.deepEqual(await api.command('clear-attention', { itemID: item.id }), { ok: true, itemID: item.id });
-    assert.equal(lastSnapshot(api).attention.length, 0);
+    const accepted = await api.command('accept', { paneID: 'w1' });
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.paneID, 'w1');
+    assert.equal(lastSnapshot(api).attention.length, 0, 'accepting the finished worker handles its Complete item');
     dispose();
 });
 
@@ -207,46 +202,6 @@ test('a Request is settled when the worker is answered in its own terminal', asy
     dispose();
 });
 
-test('snooze via command hides the item, and a reload re-arms it (acceptance 3, 4)', async () => {
-    const storage = new Map();
-    const first = await start({ storage, captures: { w1: PROMPT_TEXT } });
-    await first.api.upsert('w1', { status: 'waitingForInput' });
-    await first.api.fire('daemon.notification', { data: { kind: 'agent-notification', paneID: 'w1', body: 'x' } });
-    const item = lastSnapshot(first.api).attention[0];
-    const res = await first.api.command('snooze', { itemID: item.id, minutes: 15 });
-    assert.equal(res.ok, true);
-    assert.ok(Date.parse(res.snoozedUntil) > Date.now() + 14 * 60000);
-    assert.equal(lastSnapshot(first.api).attention.length, 0);
-    assert.equal(lastSnapshot(first.api).snoozed.length, 1);
-    first.dispose();
-
-    // reload with a snooze that is due very soon: rewrite the stored due time, then re-activate
-    const stored = storage.get('attention');
-    stored[0].snoozedUntil = new Date(Date.now() + 100).toISOString();
-    storage.set('attention', stored);
-    const second = await start({ storage, captures: { w1: PROMPT_TEXT }, w1Status: 'waitingForInput' });
-    assert.equal(lastSnapshot(second.api).snoozed.length, 1, 'still snoozed straight after reload');
-    await sleep(250);
-    const snap = lastSnapshot(second.api);
-    assert.equal(snap.attention.length, 1, 'item returned on time and a snapshot was pushed');
-    assert.equal(snap.snoozed.length, 0);
-    second.dispose();
-});
-
-test('snooze defaults to the snoozeMinutes setting and validates input', async () => {
-    const { api, dispose } = await start({ settings: { snoozeMinutes: 5 }, captures: { w1: PROMPT_TEXT } });
-    await api.upsert('w1', { status: 'waitingForInput' });
-    await api.fire('daemon.notification', { data: { kind: 'agent-notification', paneID: 'w1', body: 'x' } });
-    const id = lastSnapshot(api).attention[0].id;
-    assert.equal((await api.command('snooze', { itemID: id, minutes: -1 })).code, 'BAD_ARGS');
-    assert.equal((await api.command('snooze', {})).code, 'BAD_ARGS');
-    assert.equal((await api.command('snooze', { itemID: 'nope' })).code, 'NOT_FOUND');
-    const ok = await api.command('snooze', { itemID: id });
-    const minutes = (Date.parse(ok.snoozedUntil) - Date.now()) / 60000;
-    assert.ok(minutes > 4.9 && minutes <= 5.01);
-    dispose();
-});
-
 test('collapse via index: only manifest workers move; orchestrator and unknown panes stay (acceptance 9)', async () => {
     const { api, dispose } = await start();
     const moves = api.callsTo('panes.moveToWorkspace').map(c => c.args[0]).sort();
@@ -290,12 +245,11 @@ test('archive and accept via commands report refusals and never call destructive
     dispose();
 });
 
-test('read-result, capture-worker and open-thread', async () => {
+test('read-result and open-thread', async () => {
     const { api, dispose } = await start({ files: { '/wt/w1/result.md': '## Goal\nG\n## Done\nD\n## Next\nN\n' } });
     const result = await api.command('read-result', { paneID: 'w1' });
     assert.deepEqual(result.summary, { goal: 'G', done: 'D', next: 'N' });
     assert.equal((await api.command('read-result', { paneID: 'w2' })).code, 'NO_RESULT');
-    assert.deepEqual(await api.command('capture-worker', { paneID: 'w2' }), { ok: true, text: 'writing tests' });
     const opened = await api.command('open-thread', { paneID: 'w1' });
     assert.equal(opened.ok, true);
     assert.equal(opened.viewPaneID, 'view-pane');
@@ -404,10 +358,9 @@ test('focus-rail emits the single focus-rail event', async () => {
     dispose();
 });
 
-test('capture-worker, send-to-worker and open-result refuse panes that are not manifest workers', async () => {
+test('send-to-worker, open-result and read-result refuse panes that are not manifest workers', async () => {
     const { api, dispose } = await start();
     for (const paneID of ['stranger', 'orch', 'nope']) {
-        assert.equal((await api.command('capture-worker', { paneID })).code, 'NOT_WORKER', paneID);
         assert.equal((await api.command('send-to-worker', { paneID, text: 'hi' })).code, 'NOT_WORKER', paneID);
         assert.equal((await api.command('open-result', { paneID })).code, 'NOT_WORKER', paneID);
         assert.equal((await api.command('read-result', { paneID })).code, 'NOT_WORKER', paneID);

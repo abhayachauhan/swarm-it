@@ -68,25 +68,23 @@ test('readManifest: ok, missing, invalid json, invalid schema', async () => {
 const panes = [
     { id: 'm-orch', label: 'coordinator', workspaceID: 'ws1' },
     { id: 'lab', label: 'coordinator', workspaceID: 'ws2' },
-    { id: 'pinned', label: 'whatever', workspaceID: 'ws1' }
+    { id: 'other', label: 'whatever', workspaceID: 'ws1' }
 ];
 
-test('resolveOrchestrator: manifest first, then label, then pin (acceptance 1)', () => {
+test('resolveOrchestrator: manifest first, then label (acceptance 1)', () => {
     const manifest = { orchestrator: { paneID: 'm-orch', label: 'boss' } };
     const model = { panes, workspaceID: 'ws2' };
-    assert.deepEqual(resolveOrchestrator(model, manifest, {}, 'pinned'), { paneID: 'm-orch', label: 'boss', source: 'manifest' });
+    assert.deepEqual(resolveOrchestrator(model, manifest, {}), { paneID: 'm-orch', label: 'boss', source: 'manifest' });
     // manifest names a pane that no longer exists: fall back to the label, preferring the swarm workspace
     const stale = { orchestrator: { paneID: 'gone', label: 'x' } };
-    assert.deepEqual(resolveOrchestrator(model, stale, {}, 'pinned'), { paneID: 'lab', label: 'coordinator', source: 'label' });
-    assert.deepEqual(resolveOrchestrator(model, null, { coordinatorLabel: 'coordinator' }, 'pinned').source, 'label');
-    // no manifest and no labelled pane: the pin
+    assert.deepEqual(resolveOrchestrator(model, stale, {}), { paneID: 'lab', label: 'coordinator', source: 'label' });
+    assert.deepEqual(resolveOrchestrator(model, null, { coordinatorLabel: 'coordinator' }).source, 'label');
+    // no manifest and no labelled pane: no orchestrator
     const noLabel = { panes: [panes[2]], workspaceID: 'ws1' };
-    assert.deepEqual(resolveOrchestrator(noLabel, null, {}, 'pinned'), { paneID: 'pinned', label: 'whatever', source: 'pin' });
-    assert.equal(resolveOrchestrator(noLabel, null, {}, 'missing-pane'), null);
-    assert.equal(resolveOrchestrator(noLabel, null, {}, null), null);
+    assert.equal(resolveOrchestrator(noLabel, null, {}), null);
 });
 
 test('resolveOrchestrator honours a custom coordinatorLabel and accepts a Map', () => {
     const map = new Map([['a', { id: 'a', label: 'boss', workspaceID: 'w' }], ['b', { id: 'b', label: 'coordinator', workspaceID: 'w' }]]);
-    assert.equal(resolveOrchestrator({ panes: map }, null, { coordinatorLabel: 'boss' }, null).paneID, 'a');
+    assert.equal(resolveOrchestrator({ panes: map }, null, { coordinatorLabel: 'boss' }).paneID, 'a');
 });

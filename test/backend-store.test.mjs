@@ -87,15 +87,16 @@ test('archived workers stay in the snapshot but leave the counts', () => {
     assert.equal(snap.counts.running, 1);
 });
 
-test('snapshot splits attention into visible and snoozed', async () => {
+test('snapshot attention lists unhandled items only, oldest first', async () => {
     const { store } = setup();
     const att = store.att;
     const a = (await addItem(att, { type: 'Error', paneID: 'w1', text: 'boom', createdAt: '2026-01-01T00:00:00.000Z' })).item;
     const b = (await addItem(att, { type: 'Complete', paneID: 'w2', text: 'done', createdAt: '2026-01-01T00:00:01.000Z' })).item;
-    b.snoozedUntil = new Date(Date.now() + 60000).toISOString();
+    const c = (await addItem(att, { type: 'Complete', paneID: 'w1', text: 'again', createdAt: '2026-01-01T00:00:02.000Z' })).item;
+    c.handledAt = '2026-01-01T00:00:03.000Z';
     const snap = buildSnapshot(store, Date.now());
-    assert.deepEqual(snap.attention.map(i => i.id), [a.id]);
-    assert.deepEqual(snap.snoozed.map(i => i.id), [b.id]);
+    assert.deepEqual(snap.attention.map(i => i.id), [a.id, b.id]);
+    assert.equal('snoozed' in snap, false);
 });
 
 test('persist and load round-trip, and malformed storage falls back to empty', async () => {
@@ -103,7 +104,6 @@ test('persist and load round-trip, and malformed storage falls back to empty', a
     store.attention.push({ id: 'Error:w1:t', type: 'Error', paneID: 'w1', text: 't', createdAt: 't' });
     store.accepted.add('w1');
     store.archived.add('w2');
-    store.pinnedOrchestratorPaneID = 'orch';
     store.hiddenWorkspaceID = 'hid';
     store.firstSeen = { w1: '2026-01-01T00:00:00.000Z' };
     await persist(store);
@@ -111,15 +111,14 @@ test('persist and load round-trip, and malformed storage falls back to empty', a
     await load(fresh);
     assert.equal(fresh.attention.length, 1);
     assert.ok(fresh.accepted.has('w1') && fresh.archived.has('w2'));
-    assert.equal(fresh.pinnedOrchestratorPaneID, 'orch');
     assert.equal(fresh.hiddenWorkspaceID, 'hid');
     assert.equal(fresh.firstSeen.w1, '2026-01-01T00:00:00.000Z');
     api.storageMap.set('attention', 'garbage');
-    api.storageMap.set('pins', 7);
+    api.storageMap.set('accepted', 7);
     const broken = createStore(api);
     await load(broken);
     assert.deepEqual(broken.attention, []);
-    assert.equal(broken.pinnedOrchestratorPaneID, null);
+    assert.equal(broken.accepted.size, 0);
 });
 
 test('lastLineOf ignores ANSI, blanks and box drawing', () => {

@@ -63,8 +63,6 @@ export interface AttentionItem {
     paneLabel?: string;
     /** ISO-8601 UTC. */
     createdAt: string;
-    /** ISO-8601 UTC absolute due time. Item is hidden from the strip until then. */
-    snoozedUntil?: string;
     /** ISO-8601 UTC. Set when approved, denied, accepted or cleared; the item then leaves the strip. */
     handledAt?: string;
 }
@@ -73,7 +71,7 @@ export interface OrchestratorInfo {
     paneID: string;
     label: string;
     /** How it was identified. */
-    source: 'manifest' | 'label' | 'pin';
+    source: 'manifest' | 'label';
 }
 
 export interface SwarmCounts {
@@ -83,7 +81,7 @@ export interface SwarmCounts {
     finished: number;
 }
 
-/** Full model held by backend/store.mjs and persisted (attention + pins + accepted) in plugin storage. */
+/** Full model held by backend/store.mjs and persisted (attention + accepted) in plugin storage. */
 export interface SwarmState {
     workspaceID: string | null;
     /** Hidden sibling workspace id once created, else null. */
@@ -93,8 +91,6 @@ export interface SwarmState {
     agents?: AgentDirectoryEntry[];
     workspaceName?: string | null;
     attention: AttentionItem[];
-    /** Manual pin, if any. */
-    pinnedOrchestratorPaneID: string | null;
 }
 
 /** ADDITIVE (auto-approve). Off by default and after every reload; never persisted as on. */
@@ -178,11 +174,9 @@ export interface SwarmSnapshot {
     orchestrator: OrchestratorInfo | null;
     /** Orchestrator is NOT in this list. Order: waiting, error, running, done. */
     workers: Worker[];
-    /** Unhandled, not currently snoozed, oldest first. The followed swarm's items, plus Request items from every other
+    /** Unhandled, oldest first. The followed swarm's items, plus Request items from every other
      *  live swarm (tagged with swarmName and swarmWorkspaceID). */
     attention: AttentionItem[];
-    /** Unhandled but snoozed. */
-    snoozed: AttentionItem[];
     counts: SwarmCounts;
     /** Non-fatal problems (e.g. manifest invalid). The rail logs each new set to the console once and shows a small
      *  "⚠ N" in its header whose click expands them; the footer carries only transient notices. */

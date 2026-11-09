@@ -1,5 +1,5 @@
 // Pane snapshot plus swarm model. buildSnapshot is synchronous and uses caches filled by refreshWorker.
-import { visibleItems, snoozedItems, toMs } from './attention.mjs';
+import { visibleItems, toMs } from './attention.mjs';
 import { checkResultPath, readResultSafely, withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { createHash } from 'node:crypto';
 import { isWorkersWorkspaceOf, claimedElsewhere } from './workers.mjs';
@@ -12,7 +12,7 @@ const STATE_ORDER = { waiting: 0, error: 1, running: 2, done: 3 };
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 const DECOR_ONLY = /^[\s─━│┃┌┐└┘├┤┬┴┼╭╮╯╰═║╔╗╚╝▀▄█▌▐░▒▓·•>❯]*$/u;
 
-export const DEFAULT_SETTINGS = { autoHide: true, autoCleanMinutes: 10, snoozeMinutes: 15, coordinatorLabel: 'coordinator', manifestDir: '', worktreeRoots: '' };
+export const DEFAULT_SETTINGS = { autoHide: true, autoCleanMinutes: 10, coordinatorLabel: 'coordinator', manifestDir: '', worktreeRoots: '' };
 
 /** A pane capture that has not answered by then counts as failed: one hung pane must never stall the serial queue. */
 export const CAPTURE_TIMEOUT_MS = Number(process.env.SWARM_CAPTURE_TIMEOUT_MS) || 2000;
@@ -147,7 +147,6 @@ export function createStore(api) {
         /** Restarted panes whose new Claude has been seen running (in memory): its exit ends the restart. */
         restartRan: new Set(),
         attention: [],
-        pinnedOrchestratorPaneID: null,
         warnings: [],
         /** Auto-approve state (backend/autoapprove.mjs createState); index.mjs fills it. */
         auto: null,
@@ -508,7 +507,6 @@ export function buildSnapshot(store, now) {
         agents: store.settings.agentDirectoryEnabled === false ? undefined : agentDirectory(store, nowMs),
         workspaceName: store.workspaceName,
         attention,
-        snoozed: store.att ? inSwarm(snoozedItems(store.att, nowMs)) : [],
         waitingPanes,
         otherSwarms: otherSwarmSummaries(store, carded, waitingPanes),
         counts: {
@@ -596,7 +594,6 @@ export async function persist(store) {
         }
     };
     await set('attention', store.attention);
-    await set('pins', { orchestratorPaneID: store.pinnedOrchestratorPaneID });
     await set('accepted', [...store.accepted]);
     await set('archived', [...store.archived]);
     await set('restored', [...store.restored]);
@@ -619,8 +616,8 @@ const stringMap = value => new Map(value && typeof value === 'object' && !Array.
 /** Load persisted state. Missing or malformed values fall back to empty. */
 export async function load(store) {
     const { storage } = store.api;
-    const [attention, pins, accepted, archived, restored, firstSeen, hidden, gone, results, sessions, restarts, exits, workerWorkspaces, workerSeeds] = await Promise.all(
-        ['attention', 'pins', 'accepted', 'archived', 'restored', 'firstSeen', 'hiddenWorkspaceID', 'gone', 'results', 'sessions', 'restarts', 'exits', 'workerWorkspaces', 'workerSeeds'].map(key => storage.get(key))
+    const [attention, accepted, archived, restored, firstSeen, hidden, gone, results, sessions, restarts, exits, workerWorkspaces, workerSeeds] = await Promise.all(
+        ['attention', 'accepted', 'archived', 'restored', 'firstSeen', 'hiddenWorkspaceID', 'gone', 'results', 'sessions', 'restarts', 'exits', 'workerWorkspaces', 'workerSeeds'].map(key => storage.get(key))
     );
     for (const [id, exit] of Object.entries(exits && typeof exits === 'object' && !Array.isArray(exits) ? exits : {})) {
         if (typeof exit?.reason === 'string' && typeof exit.at === 'string') store.exits.set(id, { reason: exit.reason, at: exit.at });
@@ -631,7 +628,6 @@ export async function load(store) {
     for (const id of asArray(gone).filter(x => typeof x === 'string')) store.gone.add(id);
     for (const id of asArray(results).filter(x => typeof x === 'string')) store.resultExists.set(id, true);
     store.attention = asArray(attention).filter(i => i && typeof i.id === 'string' && typeof i.paneID === 'string' && typeof i.createdAt === 'string');
-    store.pinnedOrchestratorPaneID = typeof pins?.orchestratorPaneID === 'string' ? pins.orchestratorPaneID : null;
     store.accepted = new Set(asArray(accepted).filter(x => typeof x === 'string'));
     store.archived = new Set(asArray(archived).filter(x => typeof x === 'string'));
     store.restored = new Set(asArray(restored).filter(x => typeof x === 'string'));

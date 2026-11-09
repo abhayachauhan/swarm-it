@@ -286,18 +286,6 @@ test('the log is capped at 500, newest first, and Clear empties it', async () =>
     dispose();
 });
 
-test('a snoozed card is left alone', async () => {
-    const { api, dispose } = await start();
-    api.captureStore.w1 = prompt('npm test');
-    await sleep(80);
-    const [card] = openRequests(dispose, 'w1');
-    await api.command('snooze', { itemID: card.id, minutes: 30 });
-    await api.command('auto-approve', { on: true });
-    await sleep(60);
-    assert.equal(api.callsTo('terminal.sendKey').length, 0);
-    dispose();
-});
-
 test('a prompt that changes between the first and the second live check gets no key', async () => {
     const { api, dispose } = await start();
     await api.command('auto-approve', { on: true });

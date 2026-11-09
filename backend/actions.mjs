@@ -190,17 +190,6 @@ export async function openWebLink(api, store, paneID, url) {
     } catch (error) { return fail(`Kelpi could not open the link: ${message(error)}`, 'OPEN_FAILED'); }
 }
 
-export async function captureWorker(api, store, paneID, lines = 60) {
-    if (typeof paneID !== 'string' || !paneID) return fail('paneID is required', 'BAD_ARGS');
-    if (!worker(store, paneID)) return fail(`pane ${paneID} is not a worker in the manifest`, 'NOT_WORKER');
-    const count = Number.isFinite(lines) && lines > 0 ? Math.min(Math.floor(lines), 2000) : 60;
-    try {
-        return { ok: true, text: await capturePane(api, paneID, count) };
-    } catch (error) {
-        return fail(`capture failed: ${message(error)}`, 'CAPTURE_FAILED');
-    }
-}
-
 function sectionOf(text, name) {
     const lines = text.split('\n');
     const start = new RegExp(`^\\s{0,3}(?:#{1,6}\\s*${name}\\b.*|\\*\\*${name}\\*\\*\\s*[:\\-]?\\s*)$`, 'i');
@@ -407,15 +396,6 @@ export async function settleComplete(store, paneID) {
         if (item.paneID === paneID && item.type === 'Complete' && !item.handledAt) { await handleItem(store.att, item.id); settled = true; }
     }
     return settled;
-}
-
-/** Manual orchestrator pin. The manifest and the label still take precedence when present. */
-export async function pinOrchestrator(api, store, paneID) {
-    if (typeof paneID !== 'string' || !store.panes.has(paneID)) return fail(`unknown pane ${paneID}`, 'NO_PANE');
-    if (store.manifestWorkers.some(w => w.paneID === paneID)) return fail('a manifest worker cannot be the orchestrator', 'IS_WORKER');
-    store.pinnedOrchestratorPaneID = paneID;
-    await persist(store);
-    return { ok: true };
 }
 
 

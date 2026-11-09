@@ -264,7 +264,7 @@ test('"Really stop?" is disabled for 400 ms after Stop is armed; Keep is the las
 
 test('empty states: one line when there is nothing at all, Connecting before the first snapshot', () => {
     const refs = makeRefs();
-    const empty = { ...fixture(), orchestrator: null, workers: [], attention: [], snoozed: [] };
+    const empty = { ...fixture(), orchestrator: null, workers: [], attention: [] };
     L.render(fakeDoc, refs, view(empty), handlers());
     assert.ok(refs.list.children.some(n => n.text === 'No workers yet.'));
     L.render(fakeDoc, refs, view(null), handlers());
