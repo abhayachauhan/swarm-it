@@ -121,6 +121,20 @@ test('persist and load round-trip, and malformed storage falls back to empty', a
     assert.equal(broken.accepted.size, 0);
 });
 
+test('state saved before snooze and the pin were removed loads cleanly, and old snooze marks are dropped', async () => {
+    const { api } = setup();
+    api.storageMap.set('attention', [
+        { id: 'Request:w1:a', type: 'Request', paneID: 'w1', text: 'a', createdAt: '2026-01-01T00:00:00.000Z', snoozedUntil: '2999-01-01T00:00:00.000Z' },
+        { id: 'Request:w2:b', type: 'Request', paneID: 'w2', text: 'b', createdAt: '2026-01-01T00:01:00.000Z', snoozedUntil: '2000-01-01T00:00:00.000Z' }
+    ]);
+    api.storageMap.set('pins', { orchestratorPaneID: 'p' });
+    const store = createStore(api);
+    createAttention(api, store);
+    await load(store);
+    assert.deepEqual(store.attention.map(i => [i.id, 'snoozedUntil' in i]), [['Request:w1:a', false], ['Request:w2:b', false]]);
+    assert.equal('pinnedOrchestratorPaneID' in store, false);
+});
+
 test('lastLineOf ignores ANSI, blanks and box drawing', () => {
     assert.equal(lastLineOf('one\n\u001b[32mtwo\u001b[0m\n   \n╭────╮\n'), 'two');
     assert.equal(lastLineOf(''), '');

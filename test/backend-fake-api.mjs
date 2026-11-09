@@ -52,7 +52,7 @@ export function makeFakeApi(opts = {}) {
 
     const api = {
         calls, destructive, storageMap: storage, fileStore: files, captureStore: captures, paneList: panes, workspaceList: workspaces,
-        settingsValue: { autoHide: true,coordinatorLabel: 'coordinator', manifestDir: '/m', worktreeRoots: ['/wt'], ...(opts.settings ?? {}) },
+        settingsValue: { autoHide: true, coordinatorLabel: 'coordinator', manifestDir: '/m', worktreeRoots: ['/wt'], ...(opts.settings ?? {}) },
         gitStatus: { ...(opts.gitStatus ?? {}) },
         /** Tests flip this to make workspaces.create fail, then succeed. */
         createFails: opts.createFails ?? false,

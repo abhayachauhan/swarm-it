@@ -276,7 +276,7 @@ export function registerAll(api, deps = modules) {
         return colors;
     }
 
-    /** Find and read the manifest. Fallbacks (label, pin) are applied by resolveOrchestrator. */
+    /** Find and read the manifest. The label fallback is applied by resolveOrchestrator. */
     async function loadManifest() {
         manifestReadAt = Date.now();
         // Always search every candidate workspace (the remembered one first): the swarm may live in another
@@ -299,7 +299,7 @@ export function registerAll(api, deps = modules) {
             if (!result.missing) sawProblem = `${result.path}: ${result.error}`;
         }
         if (st.manifest && sawProblem === null && ids.length) {
-            // Manifest removed everywhere: drop it so the orchestrator falls back to the label, then the pin.
+            // Manifest removed everywhere: drop it so the orchestrator falls back to the label.
             st.manifest = null;
             st.manifestPath = null;
             st.manifestAll = [];
@@ -320,7 +320,7 @@ export function registerAll(api, deps = modules) {
      */
     function scopeWorkers() {
         // The home workspace is anchored to something a rogue process cannot choose: the workspace the manifest FILE is named
-        // after (manifest id = workspace id), or the user's pin when there is no manifest. The manifest's own orchestrator pane
+        // after (manifest id = workspace id), or the current workspace when there is no manifest. The manifest's own orchestrator pane
         // must live in that workspace, otherwise the whole manifest is ignored.
         const orchPane = st.manifest?.orchestrator ? st.panes.get(st.manifest.orchestrator.paneID) : null;
         if (st.manifest && orchPane && orchPane.workspaceID !== st.workspaceID) {
@@ -881,7 +881,7 @@ export function registerAll(api, deps = modules) {
         return locateCodexPane(api, st, args.threadID, question?.name ?? (typeof args.name === 'string' ? args.name : undefined));
     });
     command('answer-codex-question', async args => {
-        if (args.itemID) return A.answerNativeQuestion(api, st, args);
+        if (args.itemID) return X.answerNativeQuestion(api, st, args);
         if (!codexQuestions) return fail('Load questions first.', 'CODEX_UNAVAILABLE');
         try { const result = await codexQuestions.answer(args); await publish(); return result; }
         catch (error) { return fail(text(error), 'QUESTION_CHANGED'); }

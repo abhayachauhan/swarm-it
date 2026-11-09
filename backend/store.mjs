@@ -574,7 +574,7 @@ export function pruneHistory(store, cap = HISTORY_CAP) {
     if (kept) store.firstSeen = Object.fromEntries(kept.map(id => [id, store.firstSeen[id]]));
 }
 
-/** Persist attention, pins, accepted, archived, firstSeen, hiddenWorkspaceID (and `restored`) to plugin storage. */
+/** Persist attention, accepted, archived, firstSeen, hiddenWorkspaceID (and `restored`) to plugin storage. */
 export async function persist(store) {
     const { storage } = store.api;
     compactAttention(store);
@@ -628,6 +628,8 @@ export async function load(store) {
     for (const id of asArray(gone).filter(x => typeof x === 'string')) store.gone.add(id);
     for (const id of asArray(results).filter(x => typeof x === 'string')) store.resultExists.set(id, true);
     store.attention = asArray(attention).filter(i => i && typeof i.id === 'string' && typeof i.paneID === 'string' && typeof i.createdAt === 'string');
+    // Snooze was removed. A card saved while snoozed would show in the rail yet be skipped by Auto, so the mark is dropped.
+    for (const item of store.attention) delete item.snoozedUntil;
     store.accepted = new Set(asArray(accepted).filter(x => typeof x === 'string'));
     store.archived = new Set(asArray(archived).filter(x => typeof x === 'string'));
     store.restored = new Set(asArray(restored).filter(x => typeof x === 'string'));

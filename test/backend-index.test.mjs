@@ -40,6 +40,16 @@ test('orchestrator from the manifest is first-class and workers exclude it (acce
     dispose();
 });
 
+test('answer-codex-question with a card id reaches the native answer action, not the attention module', async () => {
+    const { api, dispose } = await start();
+    try {
+        // An unknown card is refused by the action itself; before the fix the command threw a TypeError (INTERNAL).
+        const result = await api.command('answer-codex-question', { itemID: 'Request:nope:t', promptHash: 'x', option: 0 });
+        assert.deepEqual(result, { ok: false, error: 'This question changed. Review the current card.', code: 'STALE' });
+        assert.equal(api.callsTo('terminal.sendKey').length, 0);
+    } finally { dispose(); }
+});
+
 test('no manifest: orchestrator falls back to the coordinator label, and is none without one', async () => {
     const byLabel = makeFakeApi({
         workspaces: [{ id: 'ws1', name: 'S' }],
