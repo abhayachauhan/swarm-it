@@ -19,7 +19,7 @@ The coordinator writes a task for each independent worker, starts workers in Kel
 
 The rail groups active workers into **Needs you**, **Running**, **Idle**, and **Done**. A request card leads you to the exact pane. Claude's recognised permission menus can be approved or denied in the rail after the plugin rechecks the live prompt. Codex approval cards navigate to the Codex pane; Codex keeps control of its own approval menu. Timed **Auto** can answer eligible requests through the configured hooks. See [Permissions](permissions.md) for the boundary.
 
-Workers live together in a shared **Workers** workspace inside a collapsed Group. The coordinator keeps its own pane. The rail also shows work from other live swarms when a permission request needs attention.
+Each worker lives in its own child workspace under the coordinator. The coordinator keeps its own pane. The rail also shows work from other live swarms when a permission request needs attention.
 
 Each worker writes a result with **Goal**, **Done**, and **Next**. Open the result view to read it, reload the file, or send a follow-up to the same worker conversation. If a worker exits without a result, Kelpi hook events can turn that into a stopped row with a reason. `swarm-wait` reports the failure to the coordinator.
 

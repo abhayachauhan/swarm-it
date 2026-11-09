@@ -82,7 +82,7 @@
       "agentDirectoryEnabled": { "title": "Show all workspaces in Agents", "type": "boolean", "default": true },
       "freshSessionEnabled": { "title": "Allow the Fresh session and continue button", "type": "boolean", "default": true },
       "briefEnabled": { "title": "Create automatic workspace briefs using Claude Sonnet", "type": "boolean", "default": false },
-      "autoHide": { "title": "Move workers into the shared Workers workspace", "type": "boolean", "default": true },
+      "autoHide": { "title": "Move workers into individual child workspaces", "type": "boolean", "default": true },
       "autoCleanMinutes": { "title": "Close finished workers after this many minutes (0 = never)", "type": "number", "default": 10 },
       "snoozeMinutes": { "title": "Default snooze (minutes)", "type": "number", "default": 15 },
       "coordinatorLabel": { "title": "Orchestrator pane label", "type": "string", "default": "coordinator" },

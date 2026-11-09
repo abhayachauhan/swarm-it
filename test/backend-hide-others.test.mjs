@@ -45,28 +45,30 @@ test('another live swarm\'s workers are hidden without the user opening its work
     await dispose.ready;
     await api.command('get-state', { workspaceID: 'ws1' });
     await sleep(100);
-    const made = api.workspaceList.find(w => w.name === 'Workers');
-    assert.ok(made, 'the shared Workers workspace is created');
-    assert.equal(api.workspaceList.filter(w => w.name === 'Workers').length, 1, 'one for both swarms');
-    assert.equal(workspaceOf(api, 'w1'), made.id, 'the followed swarm\'s workers share it');
-    assert.equal(workspaceOf(api, 'x1'), made.id);
-    assert.equal(workspaceOf(api, 'x2'), made.id);
+    const children = api.workspaceList.filter(w => w.parentID);
+    assert.equal(children.filter(w => w.parentID === 'ws1').length, 2);
+    assert.equal(children.filter(w => w.parentID === 'ws2').length, 2);
+    for (const id of ['w1', 'w2', 'x1', 'x2']) {
+        assert.equal(children.find(w => w.id === workspaceOf(api, id)).parentID, id.startsWith('w') ? 'ws1' : 'ws2');
+    }
+    assert.equal(new Set(['w1', 'w2', 'x1', 'x2'].map(id => workspaceOf(api, id))).size, 4);
     // Never moved: the coordinator, a pane not in the manifest, and a worker the user put somewhere else.
     assert.equal(workspaceOf(api, 'orch2'), 'ws2');
     assert.equal(workspaceOf(api, 'y1'), 'ws2');
     assert.equal(workspaceOf(api, 'x3'), 'ws3');
-    assert.deepEqual(api.callsTo('panes.close'), [], 'nothing is closed, not even the new workspace\'s shell');
-    assert.equal(api.callsTo('workspaces.create').length, 1, 'made once');
+    assert.deepEqual(api.callsTo('panes.close').map(c => c.args[0]), ['shell-ws-created-1', 'shell-ws-created-2', 'shell-ws-created-3', 'shell-ws-created-4'], 'only untouched plugin-created shells close');
+    assert.equal(api.callsTo('workspaces.create').length, 4, 'one per worker');
     dispose();
 });
 
-test('an existing Workers workspace is reused, and nothing moves with auto-hide off', async () => {
+test('an existing shared Workers workspace is left alone, and nothing moves with auto-hide off', async () => {
     const api = makeApi({ workspaces: [{ id: 'ws9', name: 'Workers' }] });
     const dispose = registerAll(api);
     await dispose.ready;
     await sleep(100);
-    assert.equal(workspaceOf(api, 'x1'), 'ws9');
-    assert.equal(api.callsTo('workspaces.create').length, 0);
+    assert.notEqual(workspaceOf(api, 'x1'), 'ws9');
+    assert.equal(api.workspaceList.find(w => w.id === workspaceOf(api, 'x1')).parentID, 'ws2');
+    assert.equal(api.callsTo('workspaces.create').length, 4);
     dispose();
 
     const off = makeApi({ settings: { autoHide: false } });

@@ -27,7 +27,7 @@ async function assertQuiet(api, label, { backoff = false } = {}) {
     const published = snapshots(api).length;
     await sleep(150);
     // A swarm the rail stops following is still hidden as another live swarm: its retries back off (30 ms here).
-    if (backoff) assert.ok(api.callsTo('workspaces.create').length - creates <= 150 / 30, `${label}: retries back off`);
+    if (backoff) assert.ok(api.callsTo('workspaces.create').length - creates <= 2 * 150 / 30, `${label}: retries back off`);
     else assert.equal(api.callsTo('workspaces.create').length, creates, `${label}: no retry`);
     assert.equal(snapshots(api).length, published, `${label}: no publish per tick`);
     assert.deepEqual(collapse(api), [], `${label}: the collapse warning cleared`);

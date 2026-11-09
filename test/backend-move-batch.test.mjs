@@ -10,7 +10,7 @@ const { registerAll } = await import('../backend/index.mjs');
 const { BATCH_PER_SCAN } = await import('../backend/workers.mjs');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-test('another swarm\'s 20 workers in its old workspace move to Workers a batch per scan', async () => {
+test('another swarm\'s 20 workers in its old workspace move to child workspaces a batch per scan', async () => {
     const ids = Array.from({ length: 20 }, (_, n) => `x${n}`);
     const manifest = {
         version: 1,
@@ -32,7 +32,27 @@ test('another swarm\'s 20 workers in its old workspace move to Workers a batch p
     assert.equal(movedOthers(), BATCH_PER_SCAN, 'one batch in the first scan');
     for (let n = 0; n < 200 && movedOthers() < 20; n += 1) await sleep(10);
     assert.equal(movedOthers(), 20, 'the rest follow on the next scans');
-    const shared = api.workspaceList.find(w => w.name === 'Workers');
-    assert.ok(ids.every(id => api.paneList.find(p => p.id === id).workspaceID === shared.id));
+    const children = api.workspaceList.filter(w => w.parentID === 'ws2');
+    assert.equal(children.length, ids.length);
+    assert.ok(ids.every(id => api.paneList.find(p => p.id === id).workspaceID === children.find(w => w.name === id).id));
     dispose();
+});
+
+
+test('the followed swarm continues migrating after its first batch even when no host events arrive', async t => {
+    const ids = Array.from({ length: 20 }, (_, n) => `f${n}`);
+    const api = makeSwarmApi({
+        otherPanes: ids.map(id => ({ id, label: id, workspaceID: 'ws1', status: 'running' })),
+        files: { '/m/ws1.json': JSON.stringify({ version: 1, orchestrator: { paneID: 'orch', label: 'coordinator' }, workers: ids.map(id => ({ paneID: id, label: id, task: 't', resultPath: null, worktreePath: null, parent: null })) }) },
+        captures: Object.fromEntries(ids.map(id => [id, 'working']))
+    });
+    const dispose = registerAll(api);
+    t.after(dispose);
+    await dispose.ready;
+    const moves = () => api.callsTo('panes.moveToWorkspace').filter(c => ids.includes(c.args[0]));
+    assert.equal(moves().length, BATCH_PER_SCAN);
+    for (let n = 0; n < 200 && moves().length < ids.length; n++) await sleep(10);
+    assert.equal(moves().length, ids.length);
+    assert.equal(new Set(moves().map(c => c.args[1])).size, ids.length);
+    assert.equal(api.paneList.find(p => p.id === 'orch').workspaceID, 'ws1');
 });

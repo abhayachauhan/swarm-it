@@ -24,7 +24,7 @@ export interface Worker {
     worktreePath: string | null;
     /** paneID of the spawning worker, or null when spawned by the orchestrator. */
     parent: string | null;
-    /** True while the pane lives in the shared Workers workspace (or the swarm's old `<name> · workers`). */
+    /** True while the pane lives in a child workspace or an old worker workspace. */
     hidden: boolean;
     /** True once the user pressed Accept (reviewed). */
     accepted?: boolean;

@@ -24,8 +24,9 @@ function stub() {
 echo "$*" >> "${home}/calls.log"
 case "$1 $2" in
   "pane id") echo ORCH ;;
-  "pane list") cat "${home}/panes.json" ;;
+  "pane list") if [ "$3" = "--workspace" ]; then printf '[{"id":"%s","workspace_id":"CHILD"}]\\n' "$(cat "${home}/next-pane")"; else cat "${home}/panes.json"; fi ;;
   "workspace list") echo '[{"id":"WS","name":"Warm pool"}]' ;;
+  "workspace create") echo '{"workspace_id":"CHILD","parent_id":"WS"}' ;;
   "pane create") echo "{\\"pane_id\\":\\"$(cat "${home}/next-pane")\\"}" ;;
   "pane split") echo "{\\"pane_id\\":\\"$(cat "${home}/next-pane")\\"}" ;;
 esac

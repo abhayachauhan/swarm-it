@@ -253,7 +253,7 @@ test('collapse via index: only manifest workers move; orchestrator and unknown p
     assert.deepEqual(moves, ['w1', 'w2']);
     assert.equal(api.paneList.find(p => p.id === 'orch').workspaceID, 'ws1');
     assert.equal(api.paneList.find(p => p.id === 'stranger').workspaceID, 'ws1');
-    const hidden = api.workspaceList.find(w => w.name === 'Workers');
+    const hidden = api.workspaceList.find(w => w.name === 'repo-lag' && w.parentID === 'ws1');
     assert.ok(hidden);
     assert.equal(api.paneList.find(p => p.id === 'w1').workspaceID, hidden.id);
     const snap = lastSnapshot(api);
@@ -365,21 +365,21 @@ const GROUPED = {
     otherPanes: [{ id: 'n-shell', workspaceID: 'ws3', status: 'idle' }, { id: 'o-shell', workspaceID: 'ws2', status: 'idle' }]
 };
 
-test('the shared Workers workspace is created in the Workers Group, not the swarm Group', async () => {
+test('workers get individual child workspaces under their coordinator', async () => {
     const { api, dispose } = await start({ swarmGroup: 'g1' });
     const created = api.callsTo('workspaces.create').map(c => c.args[0]);
-    assert.deepEqual(created, [{ name: 'Workers', groupID: 'g-created-1' }]);
+    assert.deepEqual(created, [{ name: 'repo-lag', parentID: 'ws1', focus: false }, { name: 'tests', parentID: 'ws1', focus: false }]);
     assert.equal(api.callsTo('workspaces.moveMany').length, 0);
     dispose();
 });
 
-test('workers in an old "<name> · workers" workspace move to the shared Workers workspace, and the rail still shows them', async () => {
+test('workers in an old "<name> · workers" workspace move to child workspaces, and the rail still shows them', async () => {
     const api = makeSwarmApi({ swarmGroup: 'g1', otherWorkspaces: [{ id: 'hw', name: 'Swarm · workers', groupID: 'g1' }] });
     api.paneList.find(p => p.id === 'w1').workspaceID = 'hw';
     const dispose = registerAll(api);
     await dispose.ready;
     await api.idle();
-    const shared = api.workspaceList.find(w => w.name === 'Workers');
+    const shared = api.workspaceList.find(w => w.name === 'repo-lag' && w.parentID === 'ws1');
     assert.equal(api.paneList.find(p => p.id === 'w1').workspaceID, shared.id);
     assert.equal(lastSnapshot(api).workers.length, 2);
     dispose();

@@ -60,10 +60,10 @@ export function makeFakeApi(opts = {}) {
         statusUpdates: [],
 
         async snapshot() {
-            const byWs = new Map(workspaces.map(w => [w.id, { id: w.id, name: w.name, panes: [], parkedPanes: [] }]));
+            const byWs = new Map(workspaces.map(({ parentID, ...w }) => [w.id, { ...w, childOrder: workspaces.filter(c => c.parentID === w.id).map(c => c.id), panes: [], parkedPanes: [] }]));
             for (const p of panes) {
                 if (!byWs.has(p.workspaceID)) byWs.set(p.workspaceID, { id: p.workspaceID, name: p.workspaceID, panes: [], parkedPanes: [] });
-                byWs.get(p.workspaceID).panes.push({ id: p.id, label: p.label ?? null, title: p.title ?? null, agentStartedAt: p.agentStartedAt ?? null, status: p.status, type: 'shell', agentKind: p.agent ?? null, agentSessionID: p.agentSessionID ?? null, workingDirectory: p.workingDirectory ?? `/wt/${p.id}` });
+                byWs.get(p.workspaceID).panes.push({ id: p.id, label: p.label ?? null, title: p.title ?? null, agentStartedAt: p.agentStartedAt ?? null, status: p.status, type: 'shell', agentKind: p.agent ?? null, agentSessionID: p.agentSessionID ?? null, workingDirectory: p.workingDirectory ?? `/wt/${p.id}`, isFocused: p.isFocused, isActiveWorkspace: p.isActiveWorkspace });
             }
             return { epoch: 'e', sequence, state: { workspaces: [...byWs.values()] } };
         },
@@ -169,7 +169,7 @@ export function makeFakeApi(opts = {}) {
             },
             // Closing is destructive: only a test that opts in with allowClose may do it.
             close: opts.allowClose
-                ? async paneID => { record('panes.close', paneID); if (opts.closeFails) throw new Error('host refused'); }
+                ? async paneID => { record('panes.close', paneID); if (opts.closeFails) throw new Error('host refused'); const index = panes.findIndex(p => p.id === paneID); if (index >= 0 && (opts.removeClosedPanes || paneID.startsWith('shell-ws-created-'))) panes.splice(index, 1); }
                 : trap('panes.close'),
             async list() { return panes; },
             async split(pane, o) {
@@ -184,9 +184,9 @@ export function makeFakeApi(opts = {}) {
             async list() { return workspaces.map(w => ({ ...w })); },
             async create(o) {
                 record('workspaces.create', o);
-                if (api.createFails) throw new Error(typeof api.createFails === 'string' ? api.createFails : 'plugin invocation has expired');
+                if (api.createFails) throw Object.assign(new Error(typeof api.createFails === 'string' ? api.createFails : 'plugin invocation has expired'), { code: 'COMMAND_FAILED' });
                 const id = `ws-created-${nextWorkspace++}`;
-                workspaces.push({ id, name: o?.name ?? id, ...(o?.groupID ? { groupID: o.groupID } : {}) });
+                workspaces.push({ id, name: o?.name ?? id, ...(o?.parentID ? { parentID: o.parentID } : {}), ...(o?.groupID ? { groupID: o.groupID } : {}) });
                 // Like the host: a new workspace opens with one empty shell pane (listed at once, or only announced later).
                 if (opts.createShellPane === true) panes.push({ id: `shell-${id}`, status: 'idle', workspaceID: id, type: 'shell' });
                 return { workspaceID: id, workspaceName: o?.name ?? id, muted: false };
@@ -196,7 +196,8 @@ export function makeFakeApi(opts = {}) {
                 for (const w of workspaces) if (ids.includes(w.id)) w.groupID = o?.groupID;
                 return { workspaceIDs: ids, groupID: o?.groupID ?? null, index: null };
             },
-            remove: trap('workspaces.remove')
+            async nest() {},
+            remove: opts.allowClose ? async workspaceID => { record('workspaces.remove', workspaceID); const index = workspaces.findIndex(w => w.id === workspaceID); if (index >= 0) workspaces.splice(index, 1); } : trap('workspaces.remove')
         },
         groups: {
             async list() { return groups.map(g => ({ ...g })); },
@@ -229,7 +230,7 @@ export function makeFakeApi(opts = {}) {
             sequence += 1;
             await api.fire('state.changed', {
                 sequence, name: 'state.changed',
-                data: [{ kind: 'pane-upserted', workspaceID: pane.workspaceID, paneID, pane: { id: paneID, label: pane.label, status: pane.status, ...('title' in pane ? { title: pane.title } : {}), ...('agentStartedAt' in pane ? { agentStartedAt: pane.agentStartedAt } : {}), ...('agentSessionID' in pane ? { agentSessionID: pane.agentSessionID } : {}) } }]
+                data: [{ kind: 'pane-upserted', workspaceID: pane.workspaceID, paneID, pane: { id: paneID, label: pane.label, status: pane.status, isFocused: pane.isFocused, isActiveWorkspace: pane.isActiveWorkspace, ...('title' in pane ? { title: pane.title } : {}), ...('agentStartedAt' in pane ? { agentStartedAt: pane.agentStartedAt } : {}), ...('agentSessionID' in pane ? { agentSessionID: pane.agentSessionID } : {}) } }]
             });
         },
         async idle() { for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve)); },

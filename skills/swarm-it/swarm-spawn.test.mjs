@@ -23,8 +23,9 @@ function stub(workspaces) {
 echo "$*" >> "${home}/calls.log"
 case "$1 $2" in
   "pane id") echo ORCH ;;
-  "pane list") cat "${home}/panes.json" ;;
+  "pane list") if [ "$3" = "--workspace" ]; then echo '[{"id":"CREATED","workspace_id":"CHILD"}]'; else cat "${home}/panes.json"; fi ;;
   "workspace list") cat "${home}/workspaces.json" ;;
+  "workspace create") echo '{"workspace_id":"CHILD","parent_id":"WS"}' ;;
   "pane create") echo '{"pane_id":"CREATED"}' ;;
   "pane split") echo '{"pane_id":"SPLIT"}' ;;
 esac
@@ -61,24 +62,27 @@ test('shell metacharacters in the label, task, dir, mode or model are refused be
   assert.equal(fs.readFileSync(victim, 'utf8'), 'keep', 'a ../ label deletes nothing')
 })
 
-test('a worker opens straight in the shared Workers workspace, with no split and no move', () => {
-  const s = stub([{ id: 'WS', name: 'Warm pool' }, { id: 'OLD', name: 'Warm pool · workers' }, { id: 'LOOSE', name: 'Workers' }, { id: 'HID', name: 'Workers', group_name: 'Workers' }])
-  const { status, stdout, stderr, calls } = spawn(s)
-  assert.equal(status, 0, stderr)
-  assert.equal(stdout.trim(), 'CREATED:w1')
-  assert.ok(calls.includes(`pane create --workspace HID --name w1 --path ${s.home} --json`), calls.join('\n'))
-  assert.ok(!calls.some(c => c.startsWith('pane split') || c.includes('move') || c.includes('--focus')), calls.join('\n'))
-  const manifest = JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8'))
-  assert.deepEqual(manifest.workers.map(w => w.paneID), ['CREATED'])
+test('each worker uses the initial shell in a child workspace, without a shared workspace, split, move or focus', () => {
+  for (const workspaces of [[{ id: 'WS', name: 'Warm pool' }], [{ id: 'WS', name: 'Warm pool' }, { id: 'HID', name: 'Workers' }]]) {
+    const s = stub(workspaces)
+    const { status, stdout, stderr, calls } = spawn(s)
+    assert.equal(status, 0, stderr)
+    assert.equal(stdout.trim(), 'CREATED:w1')
+    assert.ok(calls.includes(`workspace create --parent WS --name w1 --path ${s.home} --no-repo --json`), calls.join('\n'))
+    assert.ok(calls.includes('pane list --workspace CHILD --json'))
+    assert.ok(!calls.some(c => /^pane (split|create)/.test(c) || c.includes('move') || c.includes('--focus')), calls.join('\n'))
+    const manifest = JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8'))
+    assert.deepEqual(manifest.workers.map(w => w.paneID), ['CREATED'])
+  }
 })
 
-test('before the Workers workspace exists a worker splits beside the coordinator, for the plugin to move once', () => {
-  const s = stub([{ id: 'WS', name: 'Warm pool' }, { id: 'X', name: 'Warm pool · workers' }])
-  const { status, stdout, stderr, calls } = spawn(s)
-  assert.equal(status, 0, stderr)
-  assert.equal(stdout.trim(), 'SPLIT:w1')
-  assert.ok(calls.some(c => c.startsWith('pane split --name w1')), calls.join('\n'))
-  assert.ok(!calls.some(c => c.startsWith('pane create')), calls.join('\n'))
+test('a sub-swarm nests new workers under the root parent', () => {
+  const s = stub([{ id: 'WS', name: 'Worker', parent_id: 'ROOT' }])
+  const cli = path.join(s.bin, 'kelpi')
+  fs.writeFileSync(cli, fs.readFileSync(cli, 'utf8').replace('"parent_id":"WS"', '"parent_id":"ROOT"'))
+  const out = spawn(s)
+  assert.equal(out.status, 0, out.stderr)
+  assert.ok(out.calls.some(c => c.startsWith('workspace create --parent ROOT ')))
 })
 
 test('a Codex worker uses its sandbox and records its agent without a Claude model default', () => {
@@ -155,7 +159,7 @@ test('an empty workspace list fails before creating a manifest or a worker', () 
 
 test('a failed pane creation does not register a worker or archive the previous result', () => {
   const s = stub([{ id: 'WS', name: 'Warm pool' }])
-  fs.writeFileSync(path.join(s.bin, 'kelpi'), fs.readFileSync(path.join(s.bin, 'kelpi'), 'utf8').replace('"pane_id":"SPLIT"', '"error":"socket failed"'))
+  fs.writeFileSync(path.join(s.bin, 'kelpi'), fs.readFileSync(path.join(s.bin, 'kelpi'), 'utf8').replace('[{"id":"CREATED","workspace_id":"CHILD"}]', '[]'))
   const results = path.join(s.home, '.kelpi-swarm', 'results')
   fs.mkdirSync(results, { recursive: true })
   fs.writeFileSync(path.join(results, 'w1.md'), 'previous result')
@@ -167,4 +171,21 @@ test('a failed pane creation does not register a worker or archive the previous 
     assert.equal(fs.readFileSync(path.join(results, 'w1.md'), 'utf8'), 'previous result')
     assert.equal(out.calls.some(c => c.startsWith('pane send')), false)
   } finally { fs.rmSync(s.home, { recursive: true, force: true }) }
+})
+
+
+test('a daemon that ignores nesting fails before registration, result archiving or sending a command', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const cli = path.join(s.bin, 'kelpi')
+  fs.writeFileSync(cli, fs.readFileSync(cli, 'utf8').replace(',"parent_id":"WS"', ''))
+  const results = path.join(s.home, '.kelpi-swarm', 'results')
+  fs.mkdirSync(results, { recursive: true })
+  fs.writeFileSync(path.join(results, 'w1.md'), 'previous result')
+  const out = spawn(s)
+  assert.notEqual(out.status, 0)
+  assert.match(out.stderr, /did not nest the child workspace; update Kelpi/)
+  assert.ok(out.calls.includes('workspace delete CHILD'))
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'))).workers, [])
+  assert.equal(fs.readFileSync(path.join(results, 'w1.md'), 'utf8'), 'previous result')
+  assert.ok(!out.calls.some(c => c.startsWith('pane send')))
 })

@@ -19,7 +19,7 @@ Say **“swarm it”** to a Claude Code or Codex coordinator. The skill breaks y
 | **“Use both to review.”** | Separate Claude and Codex reviews can inspect the same change with different focuses. |
 | **“Hand this goal to the other CLI.”** | The other CLI opens beside the source with its session ID as context. The pane's **Hand off to other CLI** action works without the skill. |
 
-Each worker gets its own Kelpi pane in a shared **Workers** workspace. Your coordinator stays in place. Completed workers write a short **Goal / Done / Next** result; the rail keeps the result after the worker pane closes.
+Each worker gets its own child workspace under the coordinator, with a full-size terminal. Your coordinator stays in place. Completed workers write a short **Goal / Done / Next** result; the rail keeps the result after the worker pane closes.
 
 ## Remember each workspace
 

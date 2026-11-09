@@ -58,7 +58,7 @@ export function otherSwarmPane(store, paneID) {
     if (typeof paneID !== 'string' || typeof workspaceID !== 'string' || !workspaceID) return null;
     for (const swarm of otherSwarms(store)) {
         if (store.panes.get(swarm.orchestrator.paneID)?.workspaceID !== swarm.workspaceID) continue;
-        const inWorkers = workspaceID !== swarm.workspaceID && isWorkersWorkspaceOf(store, workspaceID, swarm.name);
+        const inWorkers = workspaceID !== swarm.workspaceID && isWorkersWorkspaceOf(store, workspaceID, swarm.name, swarm.workspaceID);
         if (workspaceID !== swarm.workspaceID && (!inWorkers || claimedElsewhere(store, paneID, swarm.workspaceID))) continue;
         if (swarm.orchestrator.paneID === paneID) return { swarm, label: swarm.orchestrator.label, role: 'orchestrator' };
         const worker = swarm.workers.find(w => w.paneID === paneID);
@@ -94,7 +94,7 @@ export function createStore(api) {
         sequence: Date.now(),
         workspaceID: null,
         workspaceName: null,
-        /** The shared `Workers` workspace every swarm's workers live in (backend/workers.mjs). */
+        /** Saved legacy workspace id, retained for compatibility with older plugin storage. */
         hiddenWorkspaceID: null,
         /** Worker pane id to the time it was first seen finished (in memory): auto-clean closes it after the delay. */
         doneSince: new Map(),
@@ -119,6 +119,12 @@ export function createStore(api) {
         unparsed: new Map(),
         panes: new Map(),
         workspaceNames: new Map(),
+        workspaceParents: new Map(),
+        workerWorkspaces: new Map(),
+        ensuringWorkers: new Map(),
+        workerSeeds: new Map(),
+        blockedCreates: new Set(),
+        placementCounts: new Map(),
         lastLines: new Map(),
         /** paneID to the last line of Claude's final reply (agent Stop event): preferred over a screen read. Cleared when Claude starts a turn. */
         agentLines: new Map(),
@@ -183,10 +189,16 @@ export function applyStateChange(store, change, now) {
         const id = change.workspace?.id ?? change.workspaceID ?? change.id;
         const name = change.workspace?.name ?? change.name;
         if (id && typeof name === 'string') { store.workspaceNames.set(id, name); if (store.workspaceID === id) store.workspaceName = name; }
+        if (id) updateWorkspaceParents(store, { ...change.workspace, id, ...(change.parentID ? { parentID: change.parentID } : {}) });
         return [];
     }
     if (change.kind === 'workspace-removed') {
         store.workspaceNames.delete(change.id ?? change.workspaceID);
+        const removedID = change.id ?? change.workspaceID;
+        store.sessionsDirty = true;
+        store.workspaceParents.delete(removedID);
+        for (const [child, parent] of store.workspaceParents) if (parent === removedID) store.workspaceParents.delete(child);
+        for (const [key, id] of store.workerWorkspaces) if (id === removedID) { store.workerWorkspaces.delete(key); store.workerSeeds.delete(id); }
         return [];
     }
     if (change.kind === 'pane-removed') {
@@ -256,10 +268,20 @@ export function rememberSession(store, paneID, sessionID) {
     return true;
 }
 
+/** The host snapshot stores nesting as the parent's childOrder; list replies carry parentID. */
+export function updateWorkspaceParents(store, ws) {
+    if ('parentID' in ws) store.workspaceParents.set(ws.id, ws.parentID ?? null);
+    if (Array.isArray(ws.childOrder)) {
+        for (const [child, parent] of store.workspaceParents) if (parent === ws.id) store.workspaceParents.delete(child);
+        for (const child of ws.childOrder) store.workspaceParents.set(child, ws.id);
+    }
+}
+
 /** Seed panes from `api.snapshot()` state (workspaces[].panes and parkedPanes). */
 export function seedFromSnapshot(store, snapshot, now) {
     for (const ws of snapshot?.state?.workspaces ?? []) {
         if (ws.id && typeof ws.name === 'string') store.workspaceNames.set(ws.id, ws.name);
+        if (ws.id) updateWorkspaceParents(store, ws);
         for (const pane of [...(ws.panes ?? []), ...(ws.parkedPanes ?? [])]) {
             applyStateChange(store, { kind: 'pane-upserted', workspaceID: ws.id, paneID: pane.id, pane: { ...pane, workspaceName: ws.name } }, now);
         }
@@ -532,6 +554,11 @@ export const HISTORY_CAP = 500;
 export function pruneHistory(store, cap = HISTORY_CAP) {
     const keep = new Set([...store.panes.keys(), ...store.manifestWorkers.map(w => w.paneID),
         ...[...store.swarms, ...store.deadSwarms].flatMap(s => [s.orchestrator?.paneID, ...s.workers.map(w => w.paneID)])]);
+    if (store.workspaceNames.size) {
+        for (const [key, workspaceID] of store.workerWorkspaces) {
+            if (!store.workspaceNames.has(workspaceID)) { store.workerWorkspaces.delete(key); store.workerSeeds.delete(workspaceID); }
+        }
+    }
     const trim = ids => {
         let extra = ids.filter(id => !keep.has(id)).length - cap;
         return extra > 0 ? ids.filter(id => keep.has(id) || extra-- <= 0) : null;
@@ -575,6 +602,8 @@ export async function persist(store) {
     await set('restored', [...store.restored]);
     await set('firstSeen', store.firstSeen);
     await set('hiddenWorkspaceID', store.hiddenWorkspaceID);
+    await set('workerWorkspaces', Object.fromEntries(store.workerWorkspaces));
+    await set('workerSeeds', Object.fromEntries(store.workerSeeds));
     // Panes seen closing, and results proven to exist: both outlive a reload so a finished worker keeps reading as done.
     await set('gone', [...store.gone]);
     await set('results', [...store.resultExists].filter(([, exists]) => exists === true).map(([id]) => id));
@@ -590,8 +619,8 @@ const stringMap = value => new Map(value && typeof value === 'object' && !Array.
 /** Load persisted state. Missing or malformed values fall back to empty. */
 export async function load(store) {
     const { storage } = store.api;
-    const [attention, pins, accepted, archived, restored, firstSeen, hidden, gone, results, sessions, restarts, exits] = await Promise.all(
-        ['attention', 'pins', 'accepted', 'archived', 'restored', 'firstSeen', 'hiddenWorkspaceID', 'gone', 'results', 'sessions', 'restarts', 'exits'].map(key => storage.get(key))
+    const [attention, pins, accepted, archived, restored, firstSeen, hidden, gone, results, sessions, restarts, exits, workerWorkspaces, workerSeeds] = await Promise.all(
+        ['attention', 'pins', 'accepted', 'archived', 'restored', 'firstSeen', 'hiddenWorkspaceID', 'gone', 'results', 'sessions', 'restarts', 'exits', 'workerWorkspaces', 'workerSeeds'].map(key => storage.get(key))
     );
     for (const [id, exit] of Object.entries(exits && typeof exits === 'object' && !Array.isArray(exits) ? exits : {})) {
         if (typeof exit?.reason === 'string' && typeof exit.at === 'string') store.exits.set(id, { reason: exit.reason, at: exit.at });
@@ -607,6 +636,8 @@ export async function load(store) {
     store.archived = new Set(asArray(archived).filter(x => typeof x === 'string'));
     store.restored = new Set(asArray(restored).filter(x => typeof x === 'string'));
     store.firstSeen = firstSeen && typeof firstSeen === 'object' && !Array.isArray(firstSeen) ? { ...firstSeen } : {};
+    store.workerWorkspaces = stringMap(workerWorkspaces);
+    store.workerSeeds = new Map(Object.entries(workerSeeds ?? {}).filter(([, v]) => v && typeof v.paneID === 'string' && (v.lastActivityAt === null || typeof v.lastActivityAt === 'number')));
     store.hiddenWorkspaceID = typeof hidden === 'string' ? hidden : null;
     return store;
 }

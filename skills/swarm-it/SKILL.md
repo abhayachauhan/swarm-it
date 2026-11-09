@@ -41,7 +41,7 @@ must be run from a Kelpi pane. A summary-only transfer carries the written conte
 ## Swarm workers
 
 Turn the request into a short task plan, identify independent pieces, then start one worker per piece.
-`swarm-spawn` opens a pane, registers it in the rail, and starts Claude or Codex on a task file.
+`swarm-spawn` opens a child workspace, registers its pane in the rail, and starts Claude or Codex on a task file.
 The coordinator can be either CLI and may choose either CLI for each worker. Preserve the user's
 choice when they ask for all Claude, all Codex, or a mix. Otherwise use the coordinator's CLI as the
 default worker CLI. Claude workers default to `--mode auto --model sonnet`; Codex workers default to
@@ -73,13 +73,16 @@ Keep the worker's sandbox and permission mode. If approval is unavailable or den
 that local Kelpi access is blocked; no swarm has started. Do not treat an empty CLI response as a
 missing workspace or change `KELPI_SOCKET` to work around the sandbox.
 
-Run the swarm from a workspace inside its own Group. Every swarm's workers live in one shared
-`Workers` workspace (in a collapsed `Workers` Group), and the rail shows the swarm from any workspace
-in the coordinator's Group. `swarm-spawn` opens each worker straight in `Workers`, so the user's view
-never switches. Only before `Workers` exists does a worker open beside the coordinator: the plugin then
-creates `Workers` and moves it there, which switches the view once. Finished workers are closed
-automatically 10 minutes after they finish (plugin setting `autoCleanMinutes`); their results stay. `swarm-spawn` warns when the orchestrator's workspace is not in a Group: tell
-the user before spawning more.
+Each worker gets its own child workspace under the coordinator's workspace, named after the worker.
+`swarm-spawn` creates the child in the background and starts the agent in its first pane, so the user's
+view stays put. Kelpi supports one nesting level: a worker spawning a sub-swarm creates sibling children
+under the same root parent. The rail follows the parent swarm when a worker's child is selected, or the child's own sub-swarm when one exists.
+The plugin migrates workers in the old shared `Workers` workspace or `<name> · workers` workspaces
+into individual children. Coordinators and unlisted panes stay where they are. Disable `autoHide` in
+the plugin settings to stop automatic migration; no new shared Workers workspace or Group is created.
+Finished workers are closed automatically 10 minutes after they finish (`autoCleanMinutes`); results stay.
+Use a Kelpi version that supports `workspace create --parent`. An older daemon is refused rather than
+silently opening workers at the top level.
 
 ## Steps
 
@@ -135,7 +138,7 @@ the user before spawning more.
 - Labels, task paths and `--path` may use only letters, digits, `.`, `_`, `-` (and `/`, `~` in paths): every value is
   typed into a shell, so swarm-spawn refuses anything else. `--mode` and `--model` must be plain words, and `--effort` one of the five levels.
 - Address workers by pane id, never by label: workers live in another workspace.
-- Do NOT run `kelpi layout select`, `kelpi pane resize`, or pass `--focus`. The plugin places panes.
+- Do NOT run `kelpi layout select`, `kelpi pane resize`, or pass `--focus`. Each worker has its own child workspace.
 - Results must stay under `~/.kelpi-swarm/results/`; the rail refuses any other path (BAD_RESULT_PATH).
 - `--agent codex` uses Codex's workspace-write sandbox and requests approval when needed. The
   current Kelpi release notifies on Codex approval requests. Swarm-it Auto can handle Codex Bash

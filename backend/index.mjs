@@ -81,7 +81,10 @@ export function registerAll(api, deps = modules) {
     const lastStates = new Map();
     /** Worker pane id to { failures, nextAt, error } while its move into the hidden workspace keeps failing. */
     const hideFailed = new Map();
-    const hideRetryDue = now => [...hideFailed.values()].some(f => now >= f.nextAt);
+    const hideRetryDue = now => [...hideFailed.values()].some(f => now >= f.nextAt)
+        || (st.settings.autoHide !== false && st.settings.collapse !== false && st.manifestWorkers.some(w =>
+            st.panes.has(w.paneID) && !st.restored.has(w.paneID) && !W.inWorkerChild(st, w.paneID)
+            && !hideFailed.has(w.paneID) && !(st.panes.get(w.paneID)?.isFocused && st.panes.get(w.paneID)?.isActiveWorkspace)));
     let queue = Promise.resolve();
     let seqFloor = 0;
     let manifestReadAt = 0;
@@ -159,8 +162,15 @@ export function registerAll(api, deps = modules) {
         return st.workspaceNames.get(id) ?? [...st.panes.values()].find(p => p.workspaceID === id && p.workspaceName)?.workspaceName ?? null;
     }
 
-    /** An old `<name> · workers` workspace belongs to the swarm workspace called `<name>`. The shared Workers one belongs to none. */
-    function homeOf(id) {
+    /** A child belongs to its parent swarm; old `<name> · workers` still resolves by name during migration. */
+    async function homeOf(id) {
+        const own = await M.readManifest(api, M.manifestPath(id, homedir(), st.settings.manifestDir));
+        if (own.ok && st.panes.get(own.manifest.orchestrator.paneID)?.workspaceID === id) return id;
+        const owners = st.swarms.filter(s => st.panes.get(s.orchestrator.paneID)?.workspaceID === s.workspaceID
+            && s.workers.some(w => st.panes.get(w.paneID)?.workspaceID === id && W.inWorkerChild(st, w.paneID, s.workspaceID) && !W.claimedElsewhere(st, w.paneID, s.workspaceID)));
+        if (owners.length === 1) return owners[0].workspaceID;
+        const parent = st.workspaceParents.get(id);
+        if (parent) return parent;
         const name = wsName(id);
         if (!name || !name.endsWith(W.LEGACY_SUFFIX)) return id;
         const base = name.slice(0, -W.LEGACY_SUFFIX.length);
@@ -175,6 +185,7 @@ export function registerAll(api, deps = modules) {
     async function groupHome(id) {
         let list;
         try { list = await api.workspaces.list(); } catch { return id; }
+        for (const w of list) S.updateWorkspaceParents(st, { ...w, parentID: w.parentID ?? null });
         const groupID = list.find(w => w.id === id)?.groupID;
         if (!groupID) return id;
         const members = list.filter(w => w.groupID === groupID && w.id !== id && !W.isWorkersName(w.name));
@@ -194,7 +205,7 @@ export function registerAll(api, deps = modules) {
         // Same view, swarm already found: skip the Group scan. Without a swarm, scan again in case one started.
         if (workspaceID === lastFollowArg && st.manifest) return false;
         lastFollowArg = workspaceID;
-        const home = await groupHome(homeOf(workspaceID));
+        const home = await groupHome(await homeOf(workspaceID));
         if (home === st.followWorkspaceID) return false;
         // Pending hide retries belong to the swarm being left; the new one starts clean.
         hideFailed.clear();
@@ -213,7 +224,7 @@ export function registerAll(api, deps = modules) {
     function candidateWorkspaces() {
         if (st.followWorkspaceID) return [st.followWorkspaceID];
         const ids = [];
-        const add = id => { if (id && !W.isWorkersName(wsName(id)) && !ids.includes(id)) ids.push(id); };
+        const add = id => { if (id && !ids.includes(id)) ids.push(id); };
         add(st.workspaceID);
         const label = st.settings.coordinatorLabel || 'coordinator';
         for (const p of st.panes.values()) if (p.label === label) add(p.workspaceID);
@@ -241,7 +252,7 @@ export function registerAll(api, deps = modules) {
         const swarms = [];
         const dead = [];
         for (const [id, name] of st.workspaceNames) {
-            if (W.isWorkersName(name) || (names && !names.has(`${id}.json`))) continue;
+            if (names && !names.has(`${id}.json`)) continue;
             const result = await M.readManifest(api, M.manifestPath(id, homedir(), st.settings.manifestDir));
             if (!result.ok) continue;
             const swarm = { workspaceID: id, name, orchestrator: result.manifest.orchestrator, workers: result.manifest.workers };
@@ -303,7 +314,7 @@ export function registerAll(api, deps = modules) {
     }
 
     /**
-     * A manifest worker must be a pane in the orchestrator's workspace, the shared Workers workspace, or the swarm's
+     * A manifest worker must be in the orchestrator's workspace, a child, the shared Workers workspace, or the swarm's
      * old `<name> · workers` workspace. A pane known to live in any other workspace is ignored (never messaged, captured or moved)
      * and surfaced as a warning. A pane the model has not seen yet is kept: it cannot be acted on, and a reload runs
      * when it appears.
@@ -382,22 +393,26 @@ export function registerAll(api, deps = modules) {
         for (const paneID of [...hideFailed.keys()]) {
             if (!st.panes.has(paneID) || !st.manifestWorkers.some(w => w.paneID === paneID)) hideFailed.delete(paneID);
         }
+        let budget = W.BATCH_PER_SCAN;
         for (const w of st.manifestWorkers) {
             const pane = st.panes.get(w.paneID);
             const failed = hideFailed.get(w.paneID);
             // A closed pane is nothing to warn about; only a pane never seen is.
             if (!pane) { if (!S.paneClosed(st, w.paneID)) skipped.push(`${w.label}: pane not in the plugin's pane list`); continue; }
             if (st.restored.has(w.paneID)) { skipped.push(`${w.label}: restored by the user`); continue; }
-            // Already in the shared Workers workspace. One in the swarm's old `<name> · workers` is moved across.
-            if (wsName(pane.workspaceID) === W.WORKERS_NAME) { hideFailed.delete(w.paneID); continue; }
+            // A worker already in its own child needs no move. Shared and legacy workspaces migrate.
+            if (W.inWorkerChild(st, w.paneID)) { st.workerWorkspaces.set(`${st.workspaceID}:${w.paneID}`, pane.workspaceID); hideFailed.delete(w.paneID); continue; }
             // A failed move is retried with backoff (HIDE_RETRY_MS), not abandoned: the plugin host refuses a call whose
             // invocation has expired, and the next attempt runs under a fresh one.
+            if (failed?.nextAt === Infinity) { skipped.push(`${w.label}: automatic migration stopped after an uncertain create; reload after checking Kelpi`); continue; }
             if (failed && now < failed.nextAt) { skipped.push(`${w.label}: move failed, retrying in ${Math.ceil((failed.nextAt - now) / 1000)} s`); continue; }
+            if (pane.isFocused && pane.isActiveWorkspace) continue;
+            if (budget-- <= 0) break;
             const result = await C.hideWorker(api, st, w.paneID);
             if (result.ok) { hideFailed.delete(w.paneID); continue; }
             if (result.code === 'DISABLED') { setWarning('autohide', 'collapse is switched off in the plugin settings'); return; }
             const failures = (failed?.failures ?? 0) + 1;
-            const wait = HIDE_RETRY_MS[Math.min(failures - 1, HIDE_RETRY_MS.length - 1)] ?? 300000;
+            const wait = st.blockedCreates.has(`${st.workspaceID}:${w.paneID}`) ? Infinity : HIDE_RETRY_MS[Math.min(failures - 1, HIDE_RETRY_MS.length - 1)] ?? 300000;
             hideFailed.set(w.paneID, { failures, nextAt: now + wait, error: result.error });
         }
         // The collapse warning clears once every pending move has worked.
@@ -419,11 +434,11 @@ export function registerAll(api, deps = modules) {
         // workers) is spread over several scans so the plugin stays under Kelpi's message rate limit.
         let budget = W.BATCH_PER_SCAN;
         for (const swarm of S.otherSwarms(st)) {
+            for (const w of swarm.workers) if (W.inWorkerChild(st, w.paneID, swarm.workspaceID)) st.workerWorkspaces.set(`${swarm.workspaceID}:${w.paneID}`, st.panes.get(w.paneID).workspaceID);
             if (budget <= 0) break;
-            const legacy = W.legacyName(swarm.name);
             const due = swarm.workers.map(w => w.paneID).filter(id => {
                 const ws = st.panes.get(id)?.workspaceID;
-                return !!ws && (ws === swarm.workspaceID || wsName(ws) === legacy) && !st.restored.has(id) && !(otherHideFailed.get(id)?.nextAt > now);
+                return !!ws && (ws === swarm.workspaceID || W.isWorkersWorkspaceOf(st, ws, swarm.name, swarm.workspaceID)) && !W.inWorkerChild(st, id, swarm.workspaceID) && !st.restored.has(id) && !(st.panes.get(id)?.isFocused && st.panes.get(id)?.isActiveWorkspace) && !st.blockedCreates.has(`${swarm.workspaceID}:${id}`) && !(otherHideFailed.get(id)?.nextAt > now);
             }).slice(0, budget);
             if (!due.length) continue;
             budget -= due.length;
@@ -456,9 +471,10 @@ export function registerAll(api, deps = modules) {
             ...orphans
         ];
         const result = await W.autoClean(api, st, candidates, Date.now());
+        const children = await W.removeEmptyWorkerChildren(api, st);
         setWarning('autoclean', result.kept.length ? `kept ${result.kept.map(k => `${k.label} (${k.error})`).join('; ')}` : null);
         await W.removeEmptyLegacy(api, st);
-        return result.cleaned.length > 0;
+        return result.cleaned.length > 0 || children.length > 0;
     }
 
     async function settle({ publishAlways = false } = {}) {

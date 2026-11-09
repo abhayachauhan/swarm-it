@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStore, applyStateChange } from '../backend/store.mjs';
+import { createStore, applyStateChange, load } from '../backend/store.mjs';
 import { ensureHiddenWorkspace, hideWorker, showWorker } from '../backend/collapse.mjs';
 import { makeFakeApi, MANIFEST } from './backend-fake-api.mjs';
 
@@ -16,39 +16,32 @@ function setup(opts = {}) {
     return { api, store };
 }
 
-test('ensureHiddenWorkspace creates one shared "Workers" workspace in a new collapsed "Workers" Group, once (acceptance 9)', async () => {
+test('each worker gets a separate child workspace, reused across retry and reload, without a Workers group', async () => {
     const { api, store } = setup();
-    const first = await ensureHiddenWorkspace(api, store, store.settings);
+    const first = await ensureHiddenWorkspace(api, store, store.settings, 'w1');
+    const second = await ensureHiddenWorkspace(api, store, store.settings, 'w2');
     assert.equal(first.ok, true);
-    const [group] = api.callsTo('groups.create');
-    assert.equal(group.args[0], 'Workers');
-    const created = api.workspaceList.find(w => w.id === first.workspaceID);
-    assert.equal(created.name, 'Workers');
-    assert.equal(created.groupID, 'g-created-1');
-    assert.deepEqual(api.callsTo('groups.setCollapsed').map(c => c.args), [['g-created-1', true]]);
-    const second = await ensureHiddenWorkspace(api, store, store.settings);
-    assert.equal(second.workspaceID, first.workspaceID);
-    assert.equal(api.callsTo('workspaces.create').length, 1, 'not created twice');
-    assert.equal(api.storageMap.get('hiddenWorkspaceID'), first.workspaceID);
-    assert.equal(api.destructive.length, 0, 'the shell pane the host opens in it is kept');
+    assert.equal(second.ok, true);
+    assert.notEqual(first.workspaceID, second.workspaceID);
+    assert.deepEqual(api.callsTo('workspaces.create').map(c => c.args[0]), MANIFEST.workers.map(w => ({ name: w.label, parentID: 'ws1', focus: false })));
+    assert.deepEqual(api.callsTo('groups.create'), []);
+    assert.equal((await ensureHiddenWorkspace(api, store, store.settings, 'w1')).workspaceID, first.workspaceID);
+    const loaded = createStore(api);
+    loaded.workspaceID = 'ws1';
+    loaded.manifestWorkers = MANIFEST.workers;
+    await load(loaded);
+    assert.equal((await ensureHiddenWorkspace(api, loaded, loaded.settings, 'w1')).workspaceID, first.workspaceID);
+    assert.equal(api.callsTo('workspaces.create').length, 2);
+    assert.equal(api.destructive.length, 0);
 });
 
-test('ensureHiddenWorkspace reuses the existing Workers workspace, preferring the one in the Workers Group; never an old "<name> · workers"', async () => {
-    const { api, store } = setup({
-        workspaces: [{ id: 'ws1', name: 'Swarm' }, { id: 'old', name: 'Swarm · workers' }, { id: 'loose', name: 'Workers' }, { id: 'shared', name: 'Workers', groupID: 'gW' }],
-        groups: [{ id: 'gW', name: 'Workers', workspaces: [] }]
-    });
-    assert.equal((await ensureHiddenWorkspace(api, store, store.settings)).workspaceID, 'shared');
-    assert.equal(api.callsTo('workspaces.create').length, 0);
-    assert.equal(api.callsTo('groups.create').length, 0);
-});
-
-test('without a Group API the Workers workspace is still created, at the top level', async () => {
-    const { api, store } = setup();
-    delete api.groups;
-    const result = await ensureHiddenWorkspace(api, store, store.settings);
+test('a shared Workers workspace and same-named children of another parent are never reused', async () => {
+    const { api, store } = setup({ workspaces: [{ id: 'ws1', name: 'Swarm' }, { id: 'shared', name: 'Workers' }, { id: 'other', name: 'repo-lag', parentID: 'ws2' }] });
+    const result = await hideWorker(api, store, 'w1');
     assert.equal(result.ok, true);
-    assert.deepEqual(api.callsTo('workspaces.create')[0].args[0], { name: 'Workers' });
+    assert.deepEqual(api.callsTo('workspaces.create')[0].args[0], { name: 'repo-lag', parentID: 'ws1', focus: false });
+    assert.deepEqual(api.callsTo('panes.moveToWorkspace')[0].args, ['w1', result.workspaceID, { focus: false }]);
+    assert.equal(store.panes.get('stranger').workspaceID, 'ws1');
 });
 
 test('hideWorker moves a manifest worker with moveToWorkspace by pane id', async () => {

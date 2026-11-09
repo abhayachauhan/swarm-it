@@ -38,7 +38,7 @@ test('a failed hide is retried with backoff and the collapse warning clears once
     await dispose.ready;
     assert.equal(api.callsTo('workspaces.create').length, 2, 'one attempt per worker on the first pass');
     assert.deepEqual(moved(api), []);
-    assert.ok(lastSnapshot(api).warnings.some(w => w === 'collapse: cannot create the Workers workspace: plugin invocation has expired'), lastSnapshot(api).warnings.join(' | '));
+    assert.ok(lastSnapshot(api).warnings.some(w => w === 'collapse: cannot create the worker child workspace: plugin invocation has expired'), lastSnapshot(api).warnings.join(' | '));
     const { snapshot } = await api.command('get-state', {});
     assert.ok(snapshot.warnings.some(w => /^autohide: repo-lag: move failed, retrying in \d+ s; tests: move failed, retrying in \d+ s$/.test(w)), snapshot.warnings.join(' | '));
     assert.equal(api.callsTo('workspaces.create').length, 2, 'not retried before the first delay');
@@ -56,13 +56,15 @@ test('a failed hide is retried with backoff and the collapse warning clears once
     dispose();
 });
 
-test('the shell pane the host opens in the new Workers workspace is kept, so the workspace never empties and is never recreated', async () => {
+test('migration removes only the untouched shell created for each worker child', async () => {
     const api = makeSwarmApi({ allowClose: true, createShellPane: true });
     const dispose = registerAll(api);
     await dispose.ready;
     assert.deepEqual(moved(api), ['w1', 'w2']);
     await sleep(60);
-    assert.deepEqual(api.callsTo('panes.close'), []);
+    assert.deepEqual(api.callsTo('panes.close').map(c => c.args[0]), ['shell-ws-created-1', 'shell-ws-created-2']);
+    assert.equal(api.paneList.filter(p => p.id.startsWith('shell-ws-created-')).length, 0);
+    assert.equal(api.callsTo('workspaces.create').length, 2);
     assert.deepEqual(api.destructive, []);
     dispose();
 });
