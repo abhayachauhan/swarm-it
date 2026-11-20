@@ -57,7 +57,9 @@ test('another live swarm\'s workers are hidden without the user opening its work
     assert.equal(workspaceOf(api, 'y1'), 'ws2');
     assert.equal(workspaceOf(api, 'x3'), 'ws3');
     assert.deepEqual(api.callsTo('panes.close').map(c => c.args[0]), ['shell-ws-created-1', 'shell-ws-created-2', 'shell-ws-created-3', 'shell-ws-created-4'], 'only untouched plugin-created shells close');
-    assert.equal(api.callsTo('workspaces.create').length, 4, 'one per worker');
+    const creates = api.callsTo('workspaces.create');
+    assert.equal(creates.length, 4, 'one per worker');
+    assert.ok(creates.every(c => c.args[0].focus === false && c.args[0].collapseParent === true));
     dispose();
 });
 

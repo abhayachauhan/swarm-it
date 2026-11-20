@@ -64,7 +64,7 @@ export async function ensureWorkersWorkspace(api, store, worker, home = store.wo
             const saved = store.workerWorkspaces.get(key);
             const known = list.find(w => w.id === (saved ?? paneWorkspace) && w.parentID === parentID && (saved || inWorkerChild(store, worker.paneID, home)));
             if (known) return { ok: true, workspaceID: known.id, created: false };
-            const { workspaceID } = await api.workspaces.create({ name: worker.label, parentID, focus: false });
+            const { workspaceID, parentCollapsed } = await api.workspaces.create({ name: worker.label, parentID, focus: false, collapseParent: true });
             store.workspaceNames.set(workspaceID, worker.label);
             store.workspaceParents.set(workspaceID, parentID);
             store.workerWorkspaces.set(key, workspaceID);
@@ -74,7 +74,7 @@ export async function ensureWorkersWorkspace(api, store, worker, home = store.wo
                 if (seeds.length === 1 && emptyShell(seeds[0])) store.workerSeeds.set(workspaceID, { paneID: seeds[0].id, lastActivityAt: seeds[0].lastActivityAt ?? null });
             } catch { /* a seed that cannot be identified is never closed */ }
             await persist(store);
-            recordPlacement(store, 'created', { paneID: worker.paneID, workspaceID, parentID });
+            recordPlacement(store, 'created', { paneID: worker.paneID, workspaceID, parentID, parentCollapsed: parentCollapsed ?? null });
             return { ok: true, workspaceID, created: true };
         } catch (error) {
             // SDK errors after creation carry the created id. Stop automatic retries if the outcome is ambiguous:

@@ -332,7 +332,7 @@ const GROUPED = {
 test('workers get individual child workspaces under their coordinator', async () => {
     const { api, dispose } = await start({ swarmGroup: 'g1' });
     const created = api.callsTo('workspaces.create').map(c => c.args[0]);
-    assert.deepEqual(created, [{ name: 'repo-lag', parentID: 'ws1', focus: false }, { name: 'tests', parentID: 'ws1', focus: false }]);
+    assert.deepEqual(created, [{ name: 'repo-lag', parentID: 'ws1', focus: false, collapseParent: true }, { name: 'tests', parentID: 'ws1', focus: false, collapseParent: true }]);
     assert.equal(api.callsTo('workspaces.moveMany').length, 0);
     dispose();
 });

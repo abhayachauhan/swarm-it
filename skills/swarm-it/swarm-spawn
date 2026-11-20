@@ -76,7 +76,12 @@ cleanup_failed_spawn() {
 }
 trap cleanup_failed_spawn EXIT
 # Each worker owns the first shell of its own child workspace, created without changing focus.
-child=$(kelpi workspace create --parent "$parent" --name "$label" --path "$dir" --no-repo --json) || bad "Kelpi did not create the child workspace; no worker was registered"
+create_args=(--parent "$parent" --name "$label" --path "$dir" --no-repo --json)
+# Probe before creating: a failed create may have already opened the workspace.
+if create_help=$(kelpi workspace create --help 2>&1) && [[ $create_help == *--collapse-parent* ]]; then
+  create_args+=(--collapse-parent)
+fi
+child=$(kelpi workspace create "${create_args[@]}") || bad "Kelpi did not create the child workspace; no worker was registered"
 created_ws=$(jq -r '.workspace_id // empty' <<<"$child")
 [[ $created_ws =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $created_ws != *..* ]] || { created_ws=; bad "Kelpi returned no valid child workspace ID"; }
 worker_ws=$(jq -er --arg parent "$parent" 'select(.parent_id == $parent) | .workspace_id | select(type == "string" and length > 0)' <<<"$child") || bad "Kelpi did not nest the child workspace; update Kelpi before spawning workers"

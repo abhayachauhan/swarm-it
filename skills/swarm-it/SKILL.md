@@ -75,8 +75,12 @@ missing workspace or change `KELPI_SOCKET` to work around the sandbox.
 
 Each worker gets its own child workspace under the coordinator's workspace, named after the worker.
 `swarm-spawn` creates the child in the background and starts the agent in its first pane, so the user's
-view stays put. Kelpi supports one nesting level: a worker spawning a sub-swarm creates sibling children
-under the same root parent. The rail follows the parent swarm when a worker's child is selected, or the child's own sub-swarm when one exists.
+view stays put. On Kelpi versions that support collapse on create, a new worker folds its parent's
+child rows. If a child is active, the parent keeps its current disclosure. Opening a worker
+expands the parent.
+Kelpi supports one nesting level: a worker spawning a sub-swarm creates sibling children
+under the same root parent. Folding that root also hides the sub-swarm coordinator's sidebar row.
+The rail follows the parent swarm when a worker's child is selected, or the child's own sub-swarm when one exists.
 The plugin migrates workers in the old shared `Workers` workspace or `<name> · workers` workspaces
 into individual children. Coordinators and unlisted panes stay where they are. Disable `autoHide` in
 the plugin settings to stop automatic migration; no new shared Workers workspace or Group is created.
