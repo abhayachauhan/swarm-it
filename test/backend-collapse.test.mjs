@@ -23,7 +23,7 @@ test('each worker gets a separate child workspace, reused across retry and reloa
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
     assert.notEqual(first.workspaceID, second.workspaceID);
-    assert.deepEqual(api.callsTo('workspaces.create').map(c => c.args[0]), MANIFEST.workers.map(w => ({ name: w.label, parentID: 'ws1', focus: false })));
+    assert.deepEqual(api.callsTo('workspaces.create').map(c => c.args[0]), MANIFEST.workers.map(w => ({ name: w.label, parentID: 'ws1', focus: false, collapseParent: true })));
     assert.deepEqual(api.callsTo('groups.create'), []);
     assert.equal((await ensureHiddenWorkspace(api, store, store.settings, 'w1')).workspaceID, first.workspaceID);
     const loaded = createStore(api);
@@ -39,7 +39,7 @@ test('a shared Workers workspace and same-named children of another parent are n
     const { api, store } = setup({ workspaces: [{ id: 'ws1', name: 'Swarm' }, { id: 'shared', name: 'Workers' }, { id: 'other', name: 'repo-lag', parentID: 'ws2' }] });
     const result = await hideWorker(api, store, 'w1');
     assert.equal(result.ok, true);
-    assert.deepEqual(api.callsTo('workspaces.create')[0].args[0], { name: 'repo-lag', parentID: 'ws1', focus: false });
+    assert.deepEqual(api.callsTo('workspaces.create')[0].args[0], { name: 'repo-lag', parentID: 'ws1', focus: false, collapseParent: true });
     assert.deepEqual(api.callsTo('panes.moveToWorkspace')[0].args, ['w1', result.workspaceID, { focus: false }]);
     assert.equal(store.panes.get('stranger').workspaceID, 'ws1');
 });
