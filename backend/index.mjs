@@ -1,3 +1,4 @@
+import { cleanCandidates, createAgentMaintenance, recheckCompleted } from './maintenance.mjs';
 import { freshSession } from './fresh-session.mjs';
 import { createWorkspaceBriefs } from './workspace-brief.mjs';
 import { generateWorkspaceBrief } from './brief-generator.mjs';
@@ -28,7 +29,7 @@ export const PLUGIN_ID = 'local.swarm-view';
 export const COMMANDS = [
     'get-workspace-brief', 'edit-workspace-brief', 'open-workspace-brief', 'focus-rail', 'get-state', 'open-thread', 'read-result', 'approve', 'deny',
     'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'archive', 'close-worker', 'accept', 'send-to-worker', 'open-result', 'open-web-link',
-    'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
+    'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done', 'clean-completed', 'update-agents', 'dock-agents',
     'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff', 'fresh-session', 'agent-appearance'
 ].map(name => `${PLUGIN_ID}.${name}`);
 export const COUNTS_ITEM = `${PLUGIN_ID}.counts`;
@@ -116,8 +117,14 @@ export function registerAll(api, deps = modules) {
             })) };
         } });
 
+    const maintenance = createAgentMaintenance(api, st, RS.restartAgent);
+
     function snapshotNow() {
         const snapshot = S.buildSnapshot(st, Date.now());
+        const completed = new Set(snapshot.agents?.filter(agent => agent.state === 'done').map(agent => agent.paneID) ?? []);
+        const seen = new Set(snapshot.attention.map(item => item.id));
+        snapshot.priority = [...snapshot.attention, ...A.visibleItems(att).filter(item =>
+            item.type === 'Complete' && completed.has(item.paneID) && !seen.has(item.id))];
         if (codexQuestions) snapshot.warnings.push(...(codexQuestions.warnings?.() ?? []));
         if (codexQuestions) snapshot.codexQuestionsConnected = codexQuestions.connected?.() ?? true;
         if (codexQuestions) snapshot.codexQuestions = codexQuestions.list().map(question => {
@@ -135,9 +142,15 @@ export function registerAll(api, deps = modules) {
         const snapshot = snapshotNow();
         const hasError = snapshot.workers.some(w => !w.archived && w.state === 'error');
         const patch = countsPatch(snapshot.counts, hasError, fallback);
-        const patchJSON = JSON.stringify(patch);
+        const clean = cleanCandidates(st).length;
+        const items = {
+            [COUNTS_ITEM]: patch,
+            [`${PLUGIN_ID}.clean`]: { text: clean ? `Clean ${clean}` : 'Clean', tooltip: 'Close idle workers with saved results and clean worktrees', tone: 'default' },
+            [`${PLUGIN_ID}.update`]: maintenance.status()
+        };
+        const patchJSON = JSON.stringify(items);
         if (patchJSON !== lastCounts) {
-            try { await api.contributions.update({ items: { [COUNTS_ITEM]: patch } }); lastCounts = patchJSON; } catch { /* status bar is best effort */ }
+            try { await api.contributions.update({ items }); lastCounts = patchJSON; } catch { /* status bar is best effort */ }
         }
         try { await emit(SNAPSHOT_EVENT, snapshot); } catch { /* views re-call get-state */ }
         return snapshot;
@@ -761,6 +774,13 @@ export function registerAll(api, deps = modules) {
     scanTimer.unref?.();
     disposers.push(() => clearInterval(scanTimer));
 
+    // The updater can outlast a command invocation. Run it from a plugin-owned timer.
+    const maintenanceTimer = setInterval(() => {
+        void maintenance.tick(() => serial(publish)).catch(() => {});
+    }, 2000);
+    maintenanceTimer.unref?.();
+    disposers.push(() => { clearInterval(maintenanceTimer); maintenance.dispose(); });
+
     // kelpi.agent.permissions@1 (Kelpi 0.2.18+): Claude's PermissionRequest hook asks `decide` once the user selects it.
     // `decide` answers from memory (a write also looks up its path); the publish, and a selection re-check when it was asked
     // unconfirmed, is queued.
@@ -886,6 +906,7 @@ export function registerAll(api, deps = modules) {
         try { const result = await codexQuestions.answer(args); await publish(); return result; }
         catch (error) { return fail(text(error), 'QUESTION_CHANGED'); }
     });
+    command('dock-agents', async () => { await emit('dock-agents', {}); return { ok: true }; });
     command('focus-rail', async () => {
         try { await api.openView(RAIL_VIEW, st.workspaceID ? { workspaceID: st.workspaceID } : {}); } catch (error) { return fail(text(error), 'OPEN_FAILED'); }
         try { await emit(FOCUS_EVENT, {}); } catch { /* the view is opened; keys stay inert until it hears the signal */ }
@@ -956,6 +977,20 @@ export function registerAll(api, deps = modules) {
     command('archive', async args => needPane(args) ?? after(await X.archive(api, st, args.paneID)));
     command('close-worker', async args => needPane(args) ?? after(await X.closeWorker(api, st, args.paneID)));
     // A partial clear still changed the rail, so it publishes whenever anything was cleared.
+    command('update-agents', async () => {
+        const result = maintenance.request();
+        await publish();
+        return result;
+    });
+    command('clean-completed', async () => {
+        const result = await W.autoClean(api, st, cleanCandidates(st), Date.now(),
+            worker => recheckCompleted(api, st, worker));
+        if (result.cleaned.length) await W.removeEmptyWorkerChildren(api, st);
+        console.info(JSON.stringify({ event: 'swarm.agent-maintenance.clean', closed: result.cleaned.length, kept: result.kept.length }));
+        setWarning('clean', result.kept.length ? result.kept.map(worker => `${worker.label}: ${worker.error}`).join(', ') : null);
+        await publish();
+        return { ok: !result.kept.length, ...result };
+    });
     command('clear-done', async () => {
         const result = await X.clearDone(api, st);
         if (result.cleared.length) { await settle(); await publish(); }

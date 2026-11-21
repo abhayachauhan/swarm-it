@@ -167,13 +167,13 @@ export function claimedElsewhere(store, paneID, ownWorkspaceID) {
  * whose git status is unknown, is kept and tried again after another delay.
  * @returns {Promise<{ cleaned: string[], kept: { paneID: string, label: string, error: string }[] }>}
  */
-export async function autoClean(api, store, candidates, now) {
+export async function autoClean(api, store, candidates, now, recheck = null) {
     const result = { cleaned: [], kept: [] };
     const raw = Number(store.settings?.autoCleanMinutes ?? DEFAULT_CLEAN_MINUTES);
     const delay = (Number.isFinite(raw) ? raw : DEFAULT_CLEAN_MINUTES) * 60000;
-    if (!(delay > 0)) { store.doneSince.clear(); return result; }
+    if (!recheck && !(delay > 0)) { store.doneSince.clear(); return result; }
     const live = new Set(candidates.map(w => w.paneID));
-    for (const id of [...store.doneSince.keys()]) if (!live.has(id)) store.doneSince.delete(id);
+    if (!recheck) for (const id of [...store.doneSince.keys()]) if (!live.has(id)) store.doneSince.delete(id);
     let closes = 0;
     for (const w of candidates) {
         const id = w.paneID;
@@ -182,12 +182,16 @@ export async function autoClean(api, store, candidates, now) {
         const finished = open ? deriveState(store, w) === 'done' : paneClosed(store, id);
         if (!finished) { store.doneSince.delete(id); continue; }
         if (!store.doneSince.has(id)) store.doneSince.set(id, now);
-        if (now - store.doneSince.get(id) < delay) continue;
+        if (!recheck && now - store.doneSince.get(id) < delay) continue;
         if (open && closes >= BATCH_PER_SCAN) continue;
         if (open) {
             closes += 1;
             const problem = await worktreeProblem(api, w);
             if (problem) { store.doneSince.set(id, now); result.kept.push({ paneID: id, label: w.label, error: problem.error }); continue; }
+        }
+        if (recheck && (!open || !await recheck(w).catch(() => false))) {
+            result.kept.push({ paneID: id, label: w.label, error: 'Completion or idle terminal could not be verified.' });
+            continue;
         }
         store.archived.add(id);
         if (open) {

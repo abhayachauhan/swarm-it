@@ -294,10 +294,15 @@ test('view state restores and persists text size in sandboxed views',async()=>{
  const app=await bootApp({viewState:{agentTextSize:18,directory:false}});assert.match(app.refs.app.getAttribute('style'),/18px/);
  await app.pointerClick(app.button(app.refs.head,'Display'));await app.pointerClick(app.button(app.refs.head,'A+'));assert.equal(app.getViewState().agentTextSize,19);assert.equal(app.getViewState().directory,false);
 });
-test('Focus restores another zoomed pane before focusing the chosen agent and ignores rapid duplicate clicks',async()=>{
- const snap=fixture();snap.agents=[{paneID:'target-agent',label:'Release checks',agent:'codex',state:'running',directory:true}];let zoomed='old-agent';const zooms=[];
- const app=await bootApp({snapshot:snap,hostSnapshot:{state:{workspaces:[{id:'ws1',zoomedPaneID:'old-agent',panes:[{id:'target-agent'},{id:'old-agent'}]}]}},layout:{zoom:async id=>{zooms.push(id);zoomed=zoomed?null:id;return {zoomedPaneID:zoomed};}}});
- await app.pointerClick(app.button(app.row('target-agent'),'Focus / split'));await app.pointerClick(app.button(app.row('target-agent'),'Focus / split'));assert.deepEqual(zooms,['old-agent','target-agent']);assert.equal(zoomed,'target-agent');
+test('clicking an agent goes to its pane without changing split layout',async()=>{
+ const snap=fixture();
+ snap.agents=[{paneID:'target-agent',label:'Release checks',agent:'codex',state:'running',directory:true}];
+ const zooms=[];
+ const app=await bootApp({snapshot:snap,layout:{zoom:async id=>zooms.push(id)}});
+ assert.equal(app.button(app.row('target-agent'),'Focus / split'),null);
+ await app.pointerClick(app.row('target-agent'));
+ assert.deepEqual(app.reveals,['target-agent']);
+ assert.deepEqual(zooms,[]);
 });
 test('refresh keeps keyboard focus on the same request Approve button, never another card',async()=>{
  const snap=fixture();const second={...snap.attention[0],id:'Request:second:1',paneID:'second',promptHash:'b'.repeat(64)};snap.attention.push(second);const app=await bootApp({snapshot:snap});await app.advance(600);
@@ -368,6 +373,40 @@ test('opening a wide view twice reuses the existing pane',async()=>{
 for(const exists of [true,false]) test(`Open wide stops after disposal while checking a ${exists?'live':'closed'} pane`,async()=>{
  let reads,opens=0;const app=await bootApp({readHostSnapshot:()=>new Promise(resolve=>{reads=resolve;}),openView:async()=>{opens++;return {paneID:'wide'};}});await app.pointerClick(app.button(app.refs.head,'Display'));await app.pointerClick(app.button(app.refs.head,'Open wide'));await app.pointerClick(app.button(app.refs.head,'Open wide'));app.dispatch('pagehide');reads({state:{workspaces:[{id:'ws',panes:exists?[{id:'wide'}]:[]}]}});await app.flush();assert.equal(opens,1);assert.deepEqual(app.reveals,[]);
 });
-test('Focus does not change layout after the source view closes during its snapshot read',async()=>{
- let reads;const zooms=[];const snap=fixture();snap.agents=[{paneID:'agent',label:'Review',agent:'codex',directory:true,state:'running',activity:'running'}];const app=await bootApp({snapshot:snap,readHostSnapshot:()=>new Promise(resolve=>{reads=resolve;}),layout:{zoom:async id=>{zooms.push(id);}}});await app.pointerClick(app.button(app.row('agent'),'Focus / split'));app.dispatch('pagehide');reads({state:{workspaces:[{id:'ws',panes:[{id:'agent'},{id:'other'}]}]}});await app.flush();assert.deepEqual(zooms,[]);
+test('Dock below Workspaces selects the left container and hides the duplicate Agents sidebar',async()=>{
+ const actions=[];
+ const app=await bootApp({ui:{
+  selectView:async (slot, view)=>actions.push([slot,view]),
+  getChrome:async()=>({sidebars:{right:{viewID:'local.swarm-view.rail',visible:true}}}),
+  executeChromeCommand:async command=>actions.push(command)
+ }});
+ await app.pointerClick(app.button(app.refs.head,'Display'));
+ await app.pointerClick(app.button(app.refs.head,'Dock below Workspaces'));
+ assert.deepEqual(actions,[['sidebar.primary','local.swarm-view.workspace-agents'],'kelpi.sidebar.right']);
+});
+
+test('priority lists real requests before finished work and opens the chosen pane',async()=>{
+ const snap=fixture();
+ snap.attention.push({id:'done-priority',paneID:'p-done',type:'Complete',createdAt:'2025-10-09T00:00:00.000Z'});
+ const app=await bootApp({snapshot:snap});
+ const pill=app.refs.list.children.find(node=>node.className==='priority')?.children[0];
+ assert.ok(pill);
+ await app.pointerClick(pill);
+ const priority=app.refs.list.children.find(node=>node.className==='priority');
+ const items=priority.children.filter(node=>node.className==='priority-row');
+ assert.equal(items.length,2);
+ assert.match(items[0].children[0].textContent,/Needs you/);
+ assert.match(items[1].children[0].textContent,/Finished/);
+ await app.pointerClick(items[0]);
+ assert.equal(app.reveals.at(-1),snap.attention[0].paneID);
+});
+
+
+test('docked Agents keeps the toolbar behind Tools', async()=>{
+ const app=await bootApp({context:{viewID:'local.swarm-view.rail-left'}});
+ assert.equal(app.button(app.refs.head,'Display'),null);
+ const tools=app.button(app.refs.head,'Tools');
+ assert.equal(tools.getAttribute('aria-expanded'),'false');
+ await app.pointerClick(tools);
+ assert.ok(app.button(app.refs.head,'Display'));
 });

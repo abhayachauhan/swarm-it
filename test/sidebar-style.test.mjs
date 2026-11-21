@@ -67,13 +67,14 @@ function drawnClasses() {
     const other = { ...snap.attention[0], id: 'Request:x1:1', paneID: 'x1', swarmName: 'Kelpi UI', swarmWorkspaceID: 'ws2' };
     const stopped = { ...snap, workers: snap.workers.map(w => (w.paneID === 'p-run' ? { ...w, state: 'waiting', stopped: { reason: 'usage limit reached' } } : w)) };
     draw(stopped);
-    draw(snap, { doneOpen: true, displayOpen: true });
+    draw({ ...snap, workers: snap.workers.map(worker => ({ ...worker, agent: 'codex' })) }, { doneOpen: true, displayOpen: true, priorityOpen: true });
     draw({ ...snap, attention: [other], autoApprove: { ...auto, on: false },
         waitingPanes: [{ paneID: 'x2', label: 'narrow', swarmName: 'Kelpi UI', swarmWorkspaceID: 'ws2' }],
         otherSwarms: [{ workspaceID: 'ws2', name: 'Kelpi UI', orchestratorPaneID: 'o2', color: 'purple', running: 1, needYou: 2, done: 0 }] },
     { selectedPaneID: null, railFocused: true, autoMenuOpen: true });
     draw({ ...snap, workers: [], attention: [], orchestrator: null });
     draw({ ...snap, codexQuestions: [{ requestID: 1, threadID: 'test', questions: [{ id: 'q', question: 'Choose?' }] }] });
+    draw(snap, { toolsOpen: false }, { docked: true });
     draw(null);
     return classes;
 }

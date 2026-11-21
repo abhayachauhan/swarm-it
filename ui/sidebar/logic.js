@@ -719,6 +719,12 @@
         dot.setAttribute('role', 'img');
         dot.setAttribute('aria-label', { done: 'Done', running: 'Running', error: 'Failed', idle: 'Idle' }[status] ?? status);
         dot.setAttribute('title', dot.getAttribute('aria-label'));
+        if (row.agent === 'codex' || row.agent === 'claude') {
+            const mark = h(doc, 'span', 'agent-mark', row.agent === 'codex' ? '>_' : '✳');
+            mark.dataset.agent = row.agent;
+            mark.setAttribute('aria-hidden', 'true');
+            top.append(mark);
+        }
         const name = h(doc, 'span', 'name', row.label || row.paneID);
         top.append(name);
         if (!row.directory || (row.activity === 'running' && !isFinished(row) && Number.isFinite(row.elapsedSeconds))) {
@@ -747,14 +753,12 @@
                 top.append(actions);
             }
         }
-        if (row.directory || row.nativeNavigation) top.append(button(doc, 'Focus / split', 'btn row-hover', () => handlers.onFocusAgent?.(row.paneID), `Focus ${row.label || row.paneID} or restore its split layout`));
         const details = agentDetails(row);
         name.setAttribute('title', [row.label || row.paneID, details.meta, details.task].filter(Boolean).join(' · '));
         if (details.task) top.append(h(doc, 'span', 'last', details.task));
         top.append(dot);
         node.append(top);
-        node.addEventListener('click', () => (row.directory || (!!view.snapshot?.agents && view.ui.directory !== false) ? handlers.onAgentSelect || handlers.onSelect : handlers.onSelect)(row.paneID));
-        node.addEventListener('dblclick', () => row.directory || row.nativeNavigation ? handlers.onFocusAgent?.(row.paneID) : handlers.onOpen(row.paneID));
+        node.addEventListener('click', () => (handlers.onAgentSelect || handlers.onSelect)(row.paneID));
         scopeControls(node, row.paneID);
         return node;
     }
@@ -954,9 +958,56 @@
         return cards;
     }
 
+    function priorityEntries(snapshot) {
+        const agents = new Map([...(snapshot?.workers || []), ...(snapshot?.agents || [])].map(row => [row.paneID, row]));
+        const items = (snapshot?.priority || snapshot?.attention || []).filter(item => !item.handledAt &&
+            (item.type === 'Request' || (item.type === 'Complete' && agents.get(item.paneID)?.state === 'done')));
+        const byTime = (a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''));
+        const requests = items.filter(item => item.type === 'Request').sort(byTime);
+        const finished = items.filter(item => item.type === 'Complete').sort((a, b) => byTime(b, a));
+        const seen = new Set();
+        return [...requests, ...finished].flatMap(item => {
+            if (seen.has(item.paneID)) return [];
+            seen.add(item.paneID);
+            const row = agents.get(item.paneID);
+            return [{ paneID: item.paneID, label: row?.label || item.paneLabel || (snapshot.orchestrator?.paneID === item.paneID ? snapshot.orchestrator.label : item.paneID),
+                agent: row?.agent || item.agent, request: item.type === 'Request', createdAt: item.createdAt }];
+        });
+    }
+
+    function buildPriority(doc, view, handlers) {
+        const entries = priorityEntries(view.snapshot);
+        if (!entries.length) return null;
+        const box = h(doc, 'div', 'priority');
+        const toggle = button(doc, 'Priority', 'priority-toggle', () => handlers.onPriorityToggle?.());
+        toggle.append(h(doc, 'span', 'priority-count', String(entries.length)));
+        toggle.setAttribute('aria-expanded', view.ui.priorityOpen === true ? 'true' : 'false');
+        box.append(toggle);
+        if (view.ui.priorityOpen) for (const entry of entries.slice(0, view.ui.priorityAll ? entries.length : 5)) {
+            const row = button(doc, entry.label, 'priority-row', () => handlers.onPriorityOpen?.(entry));
+            const time = Date.parse(entry.createdAt);
+            const age = Number.isFinite(time) ? formatElapsed(Math.max(0, ((view.nowMs ?? Date.now()) - time) / 1000)) : '';
+            const detail = entry.request ? 'Needs you' : age ? `Finished ${age} ago` : 'Finished';
+            row.append(h(doc, 'span', 'priority-detail', [entry.agent === 'codex' ? 'Codex' : entry.agent === 'claude' ? 'Claude' : '', detail].filter(Boolean).join(' · ')));
+            const dot = h(doc, 'span', `dot dot-${entry.request ? 'error' : 'done'}`);
+            dot.setAttribute('aria-hidden', 'true');
+            row.append(dot);
+            box.append(row);
+        }
+        if (view.ui.priorityOpen && !view.ui.priorityAll && entries.length > 5) {
+            box.append(button(doc, `Show ${entries.length - 5} more`, 'priority-toggle', () => handlers.onPriorityMore?.()));
+        }
+        return box;
+    }
+
     function render(doc, refs, view, handlers) {
         const { snapshot, ui } = view;
-        if (refs.head) { refs.head.replaceChildren(...buildHead(doc, view, handlers)); refs.head.setAttribute('title', KEY_HINT); }
+        if (refs.head) {
+            const tools = view.docked ? button(doc, 'Tools', 'btn tools-toggle', () => handlers.onTools?.()) : null;
+            tools?.setAttribute('aria-expanded', ui.toolsOpen ? 'true' : 'false');
+            refs.head.replaceChildren(...(tools ? [tools] : []), ...(!view.docked || ui.toolsOpen ? buildHead(doc, view, handlers) : []));
+            refs.head.setAttribute('title', KEY_HINT);
+        }
         if (refs.panel) refs.panel.replaceChildren(...buildPanel(doc, view, handlers));
 
         // Approve and Deny lock for a moment after a card appears, changes or moves (see createButtonGuard).
@@ -967,7 +1018,7 @@
         const directory = snapshot?.agents && view.ui.directory !== false;
         const displaySnapshot = agentSnapshot(snapshot, view.ui);
         const list = [];
-        if (snapshot) {
+        if (snapshot && (!view.docked || ui.toolsOpen)) {
             const fleet = h(doc, 'div', 'fleet');
             if (snapshot.agents) {
                 for (const [label, all] of [['All agents', true], ['This swarm', false]]) {
@@ -982,11 +1033,14 @@
             if (view.ui.displayOpen) {
                 const options = h(doc, 'div', 'display-controls');
                 options.append(button(doc, 'A−', 'btn', () => handlers.onTextSize?.(-1), 'Smaller agent text'), button(doc, 'A+', 'btn', () => handlers.onTextSize?.(1), 'Larger agent text'), button(doc, 'Terminal 17px', 'btn', () => handlers.onTerminalSize?.(17), 'Set terminal text to 17px'), button(doc, 'Open wide', 'btn', () => handlers.onOpenWide?.(), 'Open Agents in a resizable workspace pane'));
+                options.append(button(doc, 'Dock below Workspaces', 'btn', () => handlers.onDockAgents?.()));
                 fleet.append(options);
             }
             if (refs.head) refs.head.append(fleet); else list.push(fleet);
 
         }
+        const priority = buildPriority(doc, view, handlers);
+        if (priority) list.push(priority);
         list.push(...buildCodexQuestions(doc, snapshot, view.questionDrafts || {}, handlers));
         if (!snapshot) {
             list.push(h(doc, 'p', 'empty', 'Connecting...'));
@@ -1028,6 +1082,6 @@
         reduceKey, attentionEffect, describeResult, displayCommand, statusLine, reviewEffect, buildSectionHead,
         AUTO_DEFAULT_HOURS, formatClock, autoLabel, autoEndedText, autoNotes, autoAlerts, autoOnEffect, autoOffEffect, autoLogEffect, autoLogClearEffect, buildAutoControls, buildAutoLog,
         nextNineAm, autoChoices, autoChoiceEffect, groupColor, fromTag, swarmSummary, buildOtherSwarms, buildWaitingRow, buildStoppedRow, buildSwarmTag,
-        KEY_HINT, warningsOf, buildCodexQuestions, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,
+        KEY_HINT, warningsOf, priorityEntries, buildCodexQuestions, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,
     };
 })();

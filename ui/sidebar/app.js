@@ -28,7 +28,6 @@
     let notice = '', noticeTimer = null, pointerActive = false, renderPending = false, busy = false, disposed = false;
     let wideBusy = false, widePaneID = null;
     let releaseTimer = null;
-    let focusBusy = false, lastFocusPane = null, lastFocusAt = -Infinity;
     const disposers = [];
     const guard = L.createButtonGuard();
     let unlockTimer = null;
@@ -46,7 +45,7 @@
         const selection = focusedQuestion ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
         const hadFocus = !!app && app.contains(document.activeElement);
         if (app) app.setAttribute('style', `font-size: ${textSize}px`);
-        L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog, questionDrafts }, handlers);
+        L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog, questionDrafts, docked: api.context?.viewID === 'local.swarm-view.rail-left' }, handlers);
         markOverflow();
         if (focusedQuestion) {
             for (const input of document.querySelectorAll('[data-question-key]')) if (input.getAttribute('data-question-key') === focusedQuestion) {
@@ -177,34 +176,38 @@
         else setNotice(`${label}: this Kelpi cannot reveal a pane from the rail.`);
     }
 
+    let docking = false;
+    async function dockAgents() {
+        if (docking || disposed) return;
+        const uiAPI = api.ui;
+        if (typeof uiAPI?.selectView !== 'function') return setNotice('This Kelpi build cannot dock Agents below Workspaces.');
+        docking = true;
+        try {
+            await uiAPI.selectView('sidebar.primary', 'local.swarm-view.workspace-agents');
+            const chrome = await uiAPI.getChrome?.();
+            if (chrome?.sidebars?.right?.visible && chrome.sidebars.right.viewID === 'local.swarm-view.rail') {
+                await uiAPI.executeChromeCommand('kelpi.sidebar.right');
+            }
+        } catch (cause) { setNotice(`Dock Agents: ${cause instanceof Error ? cause.message : String(cause)}`); }
+        finally { docking = false; }
+    }
+
     const handlers = {
         onTerminalSize: size => { void run('Terminal text', { command: `${L.CMD}agent-appearance`, args: { size } }); },
-        onFocusAgent: async paneID => {
-            if (disposed || focusBusy || (lastFocusPane === paneID && Date.now() - lastFocusAt < 400)) return;
-            focusBusy = true; lastFocusPane = paneID; lastFocusAt = Date.now();
-            try {
-                if (typeof api.ui?.reveal !== 'function') { setNotice('This Kelpi cannot reveal a terminal from Agents.'); return; }
-                ui = { ...ui, selectedPaneID: paneID }; draw();
-                await api.ui.reveal(paneID);
-                if (disposed) return;
-                if (typeof api.layout?.zoom !== 'function') { setNotice('Use Kelpi’s pane zoom control to focus this terminal.'); return; }
-                let native;
-                try { native = await api.snapshot?.(); } catch { setNotice('Terminal opened; use its native zoom control because the layout could not be read.'); return; }
-                if (disposed) return;
-                const workspace = (native?.state?.workspaces || native?.workspaces || []).find(w => [...(w.panes || []), ...(w.parkedPanes || [])].some(p => p.id === paneID));
-                if (!workspace) { setNotice('Terminal opened; use its native zoom control on this Kelpi version.'); return; }
-                const zoomed = workspace.zoomedPaneID ?? workspace.zoomed_pane_id;
-                if (workspace && workspace.panes.length <= 1) { setNotice('This workspace already has one terminal.'); return; }
-                if (zoomed && zoomed !== paneID) await api.layout.zoom(zoomed);
-                if (disposed) return;
-                const result = await api.layout.zoom(paneID);
-                if (result?.zoomedPaneID === null) setNotice('Split layout restored.');
-            } catch (error) { setNotice(`Focus: ${error.message}`); }
-            finally { focusBusy = false; }
+        onTools: () => { ui = { ...ui, toolsOpen: !ui.toolsOpen }; draw(); },
+        onPriorityToggle: () => { ui = { ...ui, priorityOpen: !ui.priorityOpen, priorityAll: false }; draw(); },
+        onPriorityMore: () => { ui = { ...ui, priorityAll: true }; draw(); },
+        onPriorityOpen: entry => {
+            ui = L.setRailFocused({ ...ui, selectedPaneID: entry.paneID }, true, Date.now());
+            draw();
+            const row = [...(snapshot?.agents || []), ...(snapshot?.workers || [])].find(value => value.paneID === entry.paneID);
+            if (row?.paneClosed) void openWorker(entry.paneID);
+            else reveal(entry.paneID, 'Priority');
         },
+        onDockAgents: () => { void dockAgents(); },
         onScope: all => { if ((ui.directory !== false) === all) return; ui = { ...ui, directory: all }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
         onDisplay: () => { ui = L.markLayout({ ...ui, displayOpen: !ui.displayOpen }, Date.now()); draw(); },
-        onAgentSelect: paneID => { const row = snapshot?.agents?.find(w => w.paneID === paneID); if (row?.paneClosed) { void openWorker(paneID); return; } ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now()); draw(); reveal(paneID, 'Agent'); },
+        onAgentSelect: paneID => { const row = [...(snapshot?.agents || []), ...(snapshot?.workers || [])].find(w => w.paneID === paneID); if (row?.paneClosed) { void openWorker(paneID); return; } ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now()); draw(); reveal(paneID, 'Agent'); },
         onOpenWide: async () => {
             if (wideBusy || disposed) return;
             if (typeof api.openView !== 'function') { setNotice('Open Agents from the pane view picker for a wider view.'); return; }
@@ -380,6 +383,9 @@
         ui = { ...ui, directory: display.directory, collapsedSections: display.collapsedSections, doneOpen: display.doneOpen };
         for (const name of SNAPSHOT_EVENTS) disposers.push(api.events.on(name, event => adopt(event.data)));
         disposers.push(api.events.on(FOCUS_EVENT, onFocusRequest));
+        if (api.context?.viewID === 'local.swarm-view.rail' && !api.context?.paneID) {
+            for (const name of ['dock-agents', 'local.swarm-view.dock-agents']) disposers.push(api.events.on(name, () => { void dockAgents(); }));
+        }
         disposers.push(api.events.on('gap', () => { void loadState(); }));
         disposers.push(api.events.on('services.invalidated', () => { void loadState(); }));
         // A narrower rail wraps a clamped command further: measure the overflow again whenever the list is resized.
