@@ -92,8 +92,8 @@ test('every class the rail draws has a style rule, and every styled class is dra
 });
 
 test('the 270 px layout: long names ellipsise, commands wrap and clamp to two lines, the header wraps, nothing widens the rail', () => {
-    assert.equal(declsOf('.last')['-webkit-line-clamp'], '2');
-    assert.equal(declsOf('.last')['overflow-wrap'], 'anywhere');
+    assert.equal(declsOf('.last')['white-space'], 'nowrap');
+    assert.equal(declsOf('.last')['text-overflow'], 'ellipsis');
     const clamp = declsOf('.att-clamp');
     assert.equal(clamp['-webkit-line-clamp'], '2');
     assert.equal(clamp['line-clamp'], '2');

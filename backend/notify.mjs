@@ -243,14 +243,14 @@ export async function onNotification(api, store, att, event, { screen } = {}) {
         const working = screenText.split('\n').filter(line => line.trim()).slice(-10)
             .some(line => /^\s*[•·]?\s*Working\s*\([^\n]*esc to interrupt\)/i.test(line));
         if (!prompt && working) return { ok: true, ignored: 'codex-working' };
-        const block = prompt?.block ?? 'Codex approval requested';
+        if (!prompt) return { ok: true, ignored: 'no-prompt' };
+        const block = prompt.block;
         const { item } = await addItem(att, {
             type: 'Request', paneID, agent: 'codex', promptHash: promptHash(block), promptBlock: prompt?.block,
             ...(prompt?.expandedQuestion ? { nativeQuestion: { options: prompt.options } } : {}),
             approvable: false, text: prompt?.inputQuestion || prompt?.folderTrust
                 ? `${label}: ${prompt.question}`
-                : prompt ? `${label} needs approval in Codex; open its pane to respond`
-                    : `${label}: Codex sent a notification; open its pane to check`,
+                : `${label} needs approval in Codex; open its pane to respond`,
             ...(other ? { swarmName: other.swarm.name, swarmWorkspaceID: other.swarm.workspaceID } : {})
         });
         return { ok: true, item };

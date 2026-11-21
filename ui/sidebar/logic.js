@@ -616,6 +616,10 @@
         // Name the worker; the pane id stays available as a tooltip.
         const pane = h(doc, 'div', 'att-pane', opts.title || String(item.paneID ?? '').slice(0, 8));
         pane.setAttribute('title', String(item.paneID ?? ''));
+        const indicator = h(doc, 'span', 'dot dot-error');
+        indicator.setAttribute('role', 'img');
+        indicator.setAttribute('aria-label', 'Needs your attention');
+        pane.append(indicator);
         root.append(pane);
         const unrecognised = item.approvable === false;
         const nativeQuestion = item.nativeQuestion;
@@ -710,9 +714,12 @@
         node.dataset.state = row.activity === 'idle' && !isFinished(row) ? 'idle' : row.state;
         if (row.parent) node.dataset.parent = row.parent;
         const top = h(doc, 'span', 'row-top');
-        top.append(h(doc, 'span', `dot dot-${!isFinished(row) && (row.activity === 'idle' || row.state === 'waiting') ? 'idle' : row.state}`));
+        const status = !isFinished(row) && (row.activity === 'idle' || row.state === 'waiting') ? 'idle' : row.state;
+        const dot = h(doc, 'span', `dot dot-${status}`);
+        dot.setAttribute('role', 'img');
+        dot.setAttribute('aria-label', { done: 'Done', running: 'Running', error: 'Failed', idle: 'Idle' }[status] ?? status);
+        dot.setAttribute('title', dot.getAttribute('aria-label'));
         const name = h(doc, 'span', 'name', row.label || row.paneID);
-        name.setAttribute('title', row.label || row.paneID);
         top.append(name);
         if (!row.directory || (row.activity === 'running' && !isFinished(row) && Number.isFinite(row.elapsedSeconds))) {
             const time = h(doc, 'span', 'time', formatElapsed(elapsedNow(row, view.receivedAtMs, view.nowMs)));
@@ -741,10 +748,11 @@
             }
         }
         if (row.directory || row.nativeNavigation) top.append(button(doc, 'Focus / split', 'btn row-hover', () => handlers.onFocusAgent?.(row.paneID), `Focus ${row.label || row.paneID} or restore its split layout`));
-        node.append(top);
         const details = agentDetails(row);
-        node.append(h(doc, 'div', 'agent-meta', details.meta));
-        if (details.task) node.append(h(doc, 'span', 'last', details.task));
+        name.setAttribute('title', [row.label || row.paneID, details.meta, details.task].filter(Boolean).join(' · '));
+        if (details.task) top.append(h(doc, 'span', 'last', details.task));
+        top.append(dot);
+        node.append(top);
         node.addEventListener('click', () => (row.directory || (!!view.snapshot?.agents && view.ui.directory !== false) ? handlers.onAgentSelect || handlers.onSelect : handlers.onSelect)(row.paneID));
         node.addEventListener('dblclick', () => row.directory || row.nativeNavigation ? handlers.onFocusAgent?.(row.paneID) : handlers.onOpen(row.paneID));
         scopeControls(node, row.paneID);

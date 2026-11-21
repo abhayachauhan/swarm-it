@@ -60,15 +60,16 @@ test('Codex approval notification becomes a navigation-only Request even outside
     assert.equal(api.callsTo('terminal.sendKey').length, 0);
 });
 
-test('Codex parser requires a current menu; notification still raises a generic card before the menu is drawn', async () => {
+test('a Codex completion notification without a current prompt leaves attention unchanged', async () => {
     assert.equal(parseCodexPrompt('Would you like to run the following command?\nno options'), null);
     assert.equal(parseCodexPrompt(`${CODEX_PROMPT_TEXT}\n${Array.from({ length: 30 }, (_, i) => `output ${i}`).join('\n')}`), null);
     const { api, store, att } = setup({ codex: 'Working...' });
     applyStateChange(store, { kind: 'pane-upserted', workspaceID: 'ws1', paneID: 'codex', pane: { id: 'codex', type: 'shell', agent: 'codex', status: 'running', workspaceID: 'ws1' } });
-    const { item } = await onNotification(api, store, att, note('codex', { title: 'Codex' }));
-    assert.equal(item.approvable, false);
-    assert.match(item.text, /open its pane/);
-    assert.doesNotMatch(item.text, /needs approval/);
+    const before = store.attention.slice();
+    assert.deepEqual(await onNotification(api, store, att, note('codex', {
+        title: 'Codex', body: 'Reported the result to the parent'
+    })), { ok: true, ignored: 'no-prompt' });
+    assert.deepEqual(store.attention, before);
 });
 
 test('a delayed Codex notification cannot claim approval while the terminal is working', async () => {
@@ -82,7 +83,7 @@ test('a delayed Codex notification cannot claim approval while the terminal is w
 });
 
 test('Codex hook title identifies a pane whose Kelpi agent field is empty', async () => {
-    const { api, store, att } = setup({ codex: 'Codex working' });
+    const { api, store, att } = setup({ codex: CODEX_PROMPT_TEXT });
     applyStateChange(store, { kind: 'pane-upserted', workspaceID: 'ws2', paneID: 'codex', pane: { id: 'codex', type: 'shell', agent: null, status: 'idle', workspaceID: 'ws2' } });
     const { item } = await onNotification(api, store, att, note('codex', { title: 'Codex', body: 'Waiting for approval' }));
     assert.equal(item.agent, 'codex');
