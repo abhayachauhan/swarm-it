@@ -181,3 +181,13 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 .priority-detail { grid-column: 1; color: var(--dim); font-size: .82em; }
 .priority-toggle:hover, .priority-row:hover, .priority-toggle:focus-visible, .priority-row:focus-visible { background: var(--hover); }
 .head .tools-toggle { padding: 1px 5px; }
+
+.row[data-docked="true"] { margin: 2px 6px; width: calc(100% - 12px); padding: 4px 6px; gap: 2px; }
+.row[data-docked="true"][data-parent] { margin-left: 13px; width: calc(100% - 19px); }
+.row[data-docked="true"] .row-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 8px; }
+.row[data-docked="true"] .row-top .name { grid-column: 2; }
+.row[data-docked="true"] .time { grid-column: 3; font-size: .78em; }
+.row[data-docked="true"] .dot { grid-column: 4; }
+.row[data-docked="true"] > .last { padding-left: 21px; font-size: .85em; }
+.docked-actions { display: flex; flex-wrap: wrap; padding-left: 21px; }
+.docked-actions .btn { padding: 1px 4px; }

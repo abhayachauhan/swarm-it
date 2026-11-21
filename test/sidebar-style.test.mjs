@@ -74,7 +74,7 @@ function drawnClasses() {
     { selectedPaneID: null, railFocused: true, autoMenuOpen: true });
     draw({ ...snap, workers: [], attention: [], orchestrator: null });
     draw({ ...snap, codexQuestions: [{ requestID: 1, threadID: 'test', questions: [{ id: 'q', question: 'Choose?' }] }] });
-    draw(snap, { toolsOpen: false }, { docked: true });
+    draw(snap, { toolsOpen: true }, { docked: true });
     draw(null);
     return classes;
 }

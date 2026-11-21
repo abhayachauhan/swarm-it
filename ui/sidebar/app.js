@@ -177,13 +177,13 @@
     }
 
     let docking = false;
-    async function dockAgents() {
+    async function dockAgents(layout = 'workspace-agents') {
         if (docking || disposed) return;
         const uiAPI = api.ui;
         if (typeof uiAPI?.selectView !== 'function') return setNotice('This Kelpi build cannot dock Agents below Workspaces.');
         docking = true;
         try {
-            await uiAPI.selectView('sidebar.primary', 'local.swarm-view.workspace-agents');
+            await uiAPI.selectView('sidebar.primary', `local.swarm-view.${layout}`);
             const chrome = await uiAPI.getChrome?.();
             if (chrome?.sidebars?.right?.visible && chrome.sidebars.right.viewID === 'local.swarm-view.rail') {
                 await uiAPI.executeChromeCommand('kelpi.sidebar.right');
@@ -204,6 +204,7 @@
             if (row?.paneClosed) void openWorker(entry.paneID);
             else reveal(entry.paneID, 'Priority');
         },
+        onSidebarSpace: moreAgents => { void dockAgents(moreAgents ? 'agents-more-room' : 'workspace-agents'); },
         onDockAgents: () => { void dockAgents(); },
         onScope: all => { if ((ui.directory !== false) === all) return; ui = { ...ui, directory: all }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
         onDisplay: () => { ui = L.markLayout({ ...ui, displayOpen: !ui.displayOpen }, Date.now()); draw(); },

@@ -9,7 +9,7 @@
   "contributes": {
     "views": [
       { "id": "local.swarm-view.rail", "title": "Agents", "entry": "ui/sidebar/index.html", "stateVersion": 1, "placements": ["sidebar.secondary", "pane"] },
-      { "id": "local.swarm-view.rail-left", "title": "Agents", "entry": "ui/sidebar/index.html", "stateVersion": 1, "placements": ["local.swarm-view.left-agents"] },
+      { "id": "local.swarm-view.rail-left", "title": "Agents", "entry": "ui/sidebar/index.html", "stateVersion": 1, "placements": ["local.swarm-view.left-agents", "local.swarm-view.more-agents"] },
       { "id": "local.swarm-view.brief", "title": "Workspace brief", "entry": "ui/brief/index.html", "stateVersion": 1, "placements": ["pane"] },
       { "id": "local.swarm-view.thread", "title": "Swarm thread", "entry": "ui/thread/index.html", "stateVersion": 1, "placements": ["pane"] },
       { "id": "local.swarm-view.run", "title": "Run suggested command", "entry": "ui/run/index.html", "stateVersion": 1, "placements": ["pane"] }
@@ -18,6 +18,10 @@
       { "id": "local.swarm-view.workspace-agents", "title": "Workspaces and Agents", "placements": ["sidebar.primary"], "layout": "column", "slots": [
         { "id": "local.swarm-view.left-workspaces", "title": "Workspaces", "defaultView": "kelpi.workspaces", "weight": 2 },
         { "id": "local.swarm-view.left-agents", "title": "Agents", "defaultView": "local.swarm-view.rail-left", "weight": 1 }
+      ] },
+      { "id": "local.swarm-view.agents-more-room", "title": "Workspaces and Agents (more Agents)", "placements": ["sidebar.primary"], "layout": "column", "slots": [
+        { "id": "local.swarm-view.more-workspaces", "title": "Workspaces", "defaultView": "kelpi.workspaces", "weight": 1 },
+        { "id": "local.swarm-view.more-agents", "title": "Agents", "defaultView": "local.swarm-view.rail-left", "weight": 2 }
       ] },
       { "id": "local.swarm-view.brief-toolbar", "title": "Toolbar", "placements": ["topbar"], "bandHeights": { "topbar": 32 }, "layout": "column", "slots": [
         { "id": "local.swarm-view.brief-toolbar-main", "title": "Toolbar", "defaultView": "kelpi.topbar", "weight": 1 }

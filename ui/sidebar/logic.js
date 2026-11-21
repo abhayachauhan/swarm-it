@@ -714,6 +714,9 @@
         node.dataset.state = row.activity === 'idle' && !isFinished(row) ? 'idle' : row.state;
         if (row.parent) node.dataset.parent = row.parent;
         const top = h(doc, 'span', 'row-top');
+        const controls = view.docked ? h(doc, 'span', 'docked-actions') : top;
+        const showControls = !view.docked || view.ui.toolsOpen || view.ui.closeAsk?.paneID === row.paneID;
+        if (view.docked) node.dataset.docked = 'true';
         const status = !isFinished(row) && (row.activity === 'idle' || row.state === 'waiting') ? 'idle' : row.state;
         const dot = h(doc, 'span', `dot dot-${status}`);
         dot.setAttribute('role', 'img');
@@ -733,9 +736,9 @@
             time.setAttribute('title', row.directory ? 'Time in the current run' : 'Time since this worker started');
             top.append(time);
         }
-        if (isFinished(row) && !row.directory && (!row.paneClosed || row.state === 'done')) {
-            top.append(button(doc, 'Open result', 'btn', () => (handlers.onOpenResult || handlers.onOpen)(row.paneID)));
-        } else if (!row.directory) {
+        if (showControls && isFinished(row) && !row.directory && (!row.paneClosed || row.state === 'done')) {
+            controls.append(button(doc, 'Open result', 'btn', () => (handlers.onOpenResult || handlers.onOpen)(row.paneID)));
+        } else if (showControls && !row.directory) {
             const asked = view.ui && view.ui.closeAsk && view.ui.closeAsk.paneID === row.paneID;
             {
                 const actions = h(doc, 'span', 'row-actions row-hover');
@@ -750,14 +753,19 @@
                 } else {
                     actions.append(button(doc, 'Stop', 'btn', () => handlers.onCloseAsk(row.paneID), 'Stop this worker (X)'));
                 }
-                top.append(actions);
+                controls.append(actions);
             }
         }
         const details = agentDetails(row);
         name.setAttribute('title', [row.label || row.paneID, details.meta, details.task].filter(Boolean).join(' · '));
-        if (details.task) top.append(h(doc, 'span', 'last', details.task));
+        const task = details.task ? h(doc, 'span', 'last', details.task) : null;
+        if (task && !view.docked) top.append(task);
         top.append(dot);
         node.append(top);
+        if (view.docked) {
+            if (task) node.append(task);
+            if (showControls && !row.directory) node.append(controls);
+        }
         node.addEventListener('click', () => (handlers.onAgentSelect || handlers.onSelect)(row.paneID));
         scopeControls(node, row.paneID);
         return node;
@@ -1006,6 +1014,10 @@
             const tools = view.docked ? button(doc, 'Tools', 'btn tools-toggle', () => handlers.onTools?.()) : null;
             tools?.setAttribute('aria-expanded', ui.toolsOpen ? 'true' : 'false');
             refs.head.replaceChildren(...(tools ? [tools] : []), ...(!view.docked || ui.toolsOpen ? buildHead(doc, view, handlers) : []));
+            if (view.docked && ui.toolsOpen) refs.head.append(
+                button(doc, 'More Workspaces', 'btn', () => handlers.onSidebarSpace?.(false)),
+                button(doc, 'More Agents', 'btn', () => handlers.onSidebarSpace?.(true))
+            );
             refs.head.setAttribute('title', KEY_HINT);
         }
         if (refs.panel) refs.panel.replaceChildren(...buildPanel(doc, view, handlers));

@@ -410,3 +410,21 @@ test('docked Agents keeps the toolbar behind Tools', async()=>{
  await app.pointerClick(tools);
  assert.ok(app.button(app.refs.head,'Display'));
 });
+
+test('docked agents keep task text below the name and let users change the vertical split', async () => {
+ const actions = [];
+ const app = await bootApp({
+  context: {viewID:'local.swarm-view.rail-left'},
+  ui: {selectView: async (slot, view) => actions.push([slot, view])}
+ });
+ const row = app.row('p-run');
+ assert.ok(row.children.find(node => node.className === 'last'));
+ assert.equal(app.button(row, 'Stop'), null);
+ await app.pointerClick(app.button(app.refs.head, 'Tools'));
+ await app.pointerClick(app.button(app.refs.head, 'More Agents'));
+ await app.pointerClick(app.button(app.refs.head, 'More Workspaces'));
+ assert.deepEqual(actions, [
+  ['sidebar.primary', 'local.swarm-view.agents-more-room'],
+  ['sidebar.primary', 'local.swarm-view.workspace-agents']
+ ]);
+});
