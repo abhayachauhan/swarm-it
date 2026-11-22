@@ -433,7 +433,9 @@ test('the right Agents sidebar shows all agents with Auto and without the extra 
     const snapshot = fixture();
     snapshot.autoApprove = { on: true, logCount: 3 };
     snapshot.agents = [{ paneID: 'global-agent', label: 'Other workspace', state: 'running', activity: 'running' }];
-    const app = await bootApp({ snapshot, context: { viewID: 'local.swarm-view.rail' }, viewState: { directory: false } });
+    let stored = { directory: false };
+    const storage = { get: async () => stored, set: async (_key, value) => { stored = value; } };
+    const app = await bootApp({ snapshot, context: { viewID: 'local.swarm-view.rail' }, storage });
 
     for (const label of ['⌂ Coordinator', 'log', 'All agents', 'This swarm', 'Display']) {
         assert.equal(app.button(app.refs.head, label), null, label);
@@ -441,4 +443,8 @@ test('the right Agents sidebar shows all agents with Auto and without the extra 
     assert.match(app.refs.head.textContent, /Auto: on/);
     assert.ok(app.row('global-agent'));
     assert.ok(app.row('global-agent').querySelector('.dot-running'));
+    await app.pointerClick(app.refs.list.querySelector('[data-focus-key="section:running"]'));
+    await app.flush();
+    assert.equal(stored.directory, false);
+    assert.deepEqual([...stored.collapsedSections], ['running']);
 });

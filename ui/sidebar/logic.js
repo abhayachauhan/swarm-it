@@ -92,7 +92,7 @@
      *   done:    no rows, only `count`: how many workers finished (done or error).
      * Archived workers are omitted everywhere.
      */
-    const agentSnapshot = (snapshot, ui) => !snapshot ? snapshot : { ...snapshot, doneOpen: !!ui.doneOpen, collapsedSections: ui.collapsedSections || [], ...(snapshot.agents && ui.directory !== false ? { workers: snapshot.agents.map(w => ({...w, nativeNavigation: !w.paneClosed})), orchestrator: null, otherSwarms: [] } : {}) };
+    const agentSnapshot = (snapshot, ui, allAgents = false) => !snapshot ? snapshot : { ...snapshot, doneOpen: !!ui.doneOpen, collapsedSections: ui.collapsedSections || [], ...(snapshot.agents && (allAgents || ui.directory !== false) ? { workers: snapshot.agents.map(w => ({...w, nativeNavigation: !w.paneClosed})), orchestrator: null, otherSwarms: [] } : {}) };
     function sections(snapshot) {
         if (!snapshot) return [];
         const needs = [];
@@ -1030,7 +1030,7 @@
         (view.guard || defaultGuard).observe(requests, requests.length ? nowMs : 0);
 
         const directory = snapshot?.agents && view.ui.directory !== false;
-        const displaySnapshot = agentSnapshot(snapshot, view.ui);
+        const displaySnapshot = agentSnapshot(snapshot, view.ui, view.rightSidebar);
         const list = [];
         if (snapshot && !view.rightSidebar && (!view.docked || ui.toolsOpen)) {
             const fleet = h(doc, 'div', 'fleet');

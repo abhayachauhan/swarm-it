@@ -111,7 +111,7 @@
         const accepted = L.acceptSnapshot(snapshot, next);
         if (accepted === snapshot) return;
         snapshot = accepted; receivedAtMs = Date.now();
-        ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui));
+        ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui, rightSidebar));
         // The duration menu belongs to the off state.
         if (ui.autoMenuOpen && snapshot.autoApprove && snapshot.autoApprove.on) ui = { ...ui, autoMenuOpen: false };
         const pendingDrafts = new Set((snapshot.codexQuestions || []).flatMap(r => r.questions.map(q => `${r.threadID}:${r.requestID}:${q.id}`)));
@@ -207,7 +207,7 @@
         },
         onSidebarSpace: moreAgents => { void dockAgents(moreAgents ? 'agents-more-room' : 'workspace-agents'); },
         onDockAgents: () => { void dockAgents(); },
-        onScope: all => { if ((ui.directory !== false) === all) return; ui = { ...ui, directory: all }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
+        onScope: all => { if ((ui.directory !== false) === all) return; ui = { ...ui, directory: all }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui, rightSidebar)); savePreferences(); draw(); },
         onDisplay: () => { ui = L.markLayout({ ...ui, displayOpen: !ui.displayOpen }, Date.now()); draw(); },
         onAgentSelect: paneID => { const row = [...(snapshot?.agents || []), ...(snapshot?.workers || [])].find(w => w.paneID === paneID); if (row?.paneClosed) { void openWorker(paneID); return; } ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now()); draw(); reveal(paneID, 'Agent'); },
         onOpenWide: async () => {
@@ -232,9 +232,9 @@
             const closed = new Set(ui.collapsedSections || []);
             if (closed.has(key)) closed.delete(key); else closed.add(key);
             ui = { ...ui, collapsedSections: [...closed] };
-            ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw();
+            ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui, rightSidebar)); savePreferences(); draw();
         },
-        onToggleDone: () => { ui = { ...ui, doneOpen: !ui.doneOpen }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
+        onToggleDone: () => { ui = { ...ui, doneOpen: !ui.doneOpen }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui, rightSidebar)); savePreferences(); draw(); },
         onTextSize: delta => { textSize = Math.max(13, Math.min(20, textSize + delta)); savePreferences(); draw(); },
         onQuestionChoice: (item, option) => { void run('Answer Codex', { command: `${L.CMD}answer-codex-question`, args: { itemID: item.id, promptHash: item.promptHash, option } }); },
         onTrustFolder: item => { void run('Trust folder', { command: `${L.CMD}trust-folder`, args: { itemID: item.id, promptHash: item.promptHash, confirm: true } }); },
@@ -313,7 +313,7 @@
         const target = event.target;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
         if (event.target?.closest?.('button, a, input, textarea, select')) return;
-        const out = L.reduceKey(ui, L.agentSnapshot(snapshot, ui), { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, nowMs: Date.now() });
+        const out = L.reduceKey(ui, L.agentSnapshot(snapshot, ui, rightSidebar), { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, nowMs: Date.now() });
         if (!out.handled) return;
         event.preventDefault();
         ui = out.ui;
@@ -345,7 +345,7 @@
     // The backend's focus-rail command asks this view to take the keyboard.
     function onFocusRequest() {
         try { window.focus(); $('app').focus({ preventScroll: true }); } catch { /* best effort */ }
-        ui = L.reconcile(L.setRailFocused(ui, true, Date.now()), L.agentSnapshot(snapshot, ui));
+        ui = L.reconcile(L.setRailFocused(ui, true, Date.now()), L.agentSnapshot(snapshot, ui, rightSidebar));
         draw();
     }
 
@@ -361,7 +361,7 @@
     function tick() {
         if (!snapshot || disposed) return;
         const now = Date.now();
-        for (const worker of L.agentSnapshot(snapshot, ui).workers) {
+        for (const worker of L.agentSnapshot(snapshot, ui, rightSidebar).workers) {
             const node = document.querySelector(`[data-elapsed-pane="${CSS.escape(worker.paneID)}"]`);
             if (node) node.textContent = L.formatElapsed(L.elapsedNow(worker, receivedAtMs, now));
         }
@@ -382,7 +382,7 @@
         if (disposed) return;
         const display = L.displayPreferences({ agentTextSize: textSize, ...preferences });
         textSize = display.agentTextSize;
-        ui = { ...ui, directory: rightSidebar || display.directory, collapsedSections: display.collapsedSections, doneOpen: display.doneOpen };
+        ui = { ...ui, directory: display.directory, collapsedSections: display.collapsedSections, doneOpen: display.doneOpen };
         for (const name of SNAPSHOT_EVENTS) disposers.push(api.events.on(name, event => adopt(event.data)));
         disposers.push(api.events.on(FOCUS_EVENT, onFocusRequest));
         if (rightSidebar) {
