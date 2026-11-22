@@ -3,6 +3,7 @@
 (() => {
     const L = globalThis.SwarmLogic;
     const api = window.kelpi;
+    const rightSidebar = api.context?.viewID === 'local.swarm-view.rail' && !api.context?.paneID;
     const $ = id => document.getElementById(id);
     const refs = { head: $('head'), panel: $('panel'), list: $('list'), footer: $('footer') };
     const SNAPSHOT_EVENTS = ['local.swarm-view.snapshot', 'snapshot'];
@@ -45,7 +46,7 @@
         const selection = focusedQuestion ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
         const hadFocus = !!app && app.contains(document.activeElement);
         if (app) app.setAttribute('style', `font-size: ${textSize}px`);
-        L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog, questionDrafts, docked: api.context?.viewID === 'local.swarm-view.rail-left' }, handlers);
+        L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog, questionDrafts, rightSidebar, docked: api.context?.viewID === 'local.swarm-view.rail-left' }, handlers);
         markOverflow();
         if (focusedQuestion) {
             for (const input of document.querySelectorAll('[data-question-key]')) if (input.getAttribute('data-question-key') === focusedQuestion) {
@@ -381,10 +382,10 @@
         if (disposed) return;
         const display = L.displayPreferences({ agentTextSize: textSize, ...preferences });
         textSize = display.agentTextSize;
-        ui = { ...ui, directory: display.directory, collapsedSections: display.collapsedSections, doneOpen: display.doneOpen };
+        ui = { ...ui, directory: rightSidebar || display.directory, collapsedSections: display.collapsedSections, doneOpen: display.doneOpen };
         for (const name of SNAPSHOT_EVENTS) disposers.push(api.events.on(name, event => adopt(event.data)));
         disposers.push(api.events.on(FOCUS_EVENT, onFocusRequest));
-        if (api.context?.viewID === 'local.swarm-view.rail' && !api.context?.paneID) {
+        if (rightSidebar) {
             for (const name of ['dock-agents', 'local.swarm-view.dock-agents']) disposers.push(api.events.on(name, () => { void dockAgents(); }));
         }
         disposers.push(api.events.on('gap', () => { void loadState(); }));

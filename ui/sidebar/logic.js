@@ -791,7 +791,7 @@
         if (!on) toggle.setAttribute('aria-expanded', ui.autoMenuOpen ? 'true' : 'false');
         const nodes = [toggle];
         const count = auto ? auto.logCount : 0;
-        if (count) {
+        if (count && !view.rightSidebar) {
             const link = button(doc, 'log', 'btn btn-link', () => handlers.onAutoLogToggle(), `Auto-approved (${count}): click to ${ui.autoLogOpen ? 'hide' : 'show'} the log`);
             link.setAttribute('aria-expanded', ui.autoLogOpen ? 'true' : 'false');
             nodes.push(link);
@@ -879,9 +879,11 @@
      */
     function buildHead(doc, view, handlers) {
         const { snapshot, ui } = view;
-        const home = button(doc, '⌂ Coordinator', 'btn btn-home', () => handlers.onHome(),
-            snapshot && snapshot.orchestrator ? `Back to the coordinator pane (${snapshot.orchestrator.label})` : 'No coordinator pane known yet: closes the worker view');
-        const nodes = [home];
+        const nodes = [];
+        if (!view.rightSidebar) {
+            nodes.push(button(doc, '⌂ Coordinator', 'btn btn-home', () => handlers.onHome(),
+                snapshot && snapshot.orchestrator ? `Back to the coordinator pane (${snapshot.orchestrator.label})` : 'No coordinator pane known yet: closes the worker view'));
+        }
         const warnings = warningsOf(snapshot);
         if (warnings.length) {
             const warn = button(doc, `⚠ ${warnings.length}`, 'btn btn-warn', () => handlers.onWarnings(), warnings.join('\n'));
@@ -1030,7 +1032,7 @@
         const directory = snapshot?.agents && view.ui.directory !== false;
         const displaySnapshot = agentSnapshot(snapshot, view.ui);
         const list = [];
-        if (snapshot && (!view.docked || ui.toolsOpen)) {
+        if (snapshot && !view.rightSidebar && (!view.docked || ui.toolsOpen)) {
             const fleet = h(doc, 'div', 'fleet');
             if (snapshot.agents) {
                 for (const [label, all] of [['All agents', true], ['This swarm', false]]) {
