@@ -457,9 +457,14 @@ test('right sidebar puts attention behind a Needs you pill with red and blue dot
     const pill = app.button(app.refs.list, 'Needs you');
     assert.ok(pill);
     assert.equal(pill.getAttribute('aria-expanded'), 'false');
+    assert.ok(pill.querySelector('.dot-error'));
+    assert.ok(pill.querySelector('.dot-done'));
+    assert.ok(app.refs.list.querySelector('[data-needs-you="closed"]'));
     assert.equal(app.refs.list.querySelector('.priority-row'), null);
     await app.pointerClick(pill);
-    const rows = app.refs.list.children.find(node => node.className.includes('priority')).children.filter(node => node.className === 'priority-row');
+    const card = app.refs.list.querySelector('[data-needs-you="open"]');
+    assert.ok(card);
+    const rows = card.children.filter(node => node.className === 'priority-row');
     assert.ok(rows[0].querySelector('.dot-error'));
     assert.ok(rows[1].querySelector('.dot-done'));
     await app.pointerClick(rows[0]);

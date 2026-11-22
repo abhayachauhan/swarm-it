@@ -991,6 +991,14 @@
         const box = h(doc, 'div', 'priority');
         if (view.rightSidebar) box.setAttribute('data-needs-you', view.ui.priorityOpen === true ? 'open' : 'closed');
         const toggle = button(doc, view.rightSidebar ? 'Needs you' : 'Priority', 'priority-toggle', () => handlers.onPriorityToggle?.());
+        if (view.rightSidebar && !view.ui.priorityOpen) {
+            for (const [request, status] of [[true, 'error'], [false, 'done']]) {
+                if (!entries.some(entry => entry.request === request)) continue;
+                const dot = h(doc, 'span', `dot dot-${status}`);
+                dot.setAttribute('aria-hidden', 'true');
+                toggle.append(dot);
+            }
+        }
         toggle.append(h(doc, 'span', 'priority-count', String(entries.length)));
         toggle.setAttribute('aria-expanded', view.ui.priorityOpen === true ? 'true' : 'false');
         box.append(toggle);

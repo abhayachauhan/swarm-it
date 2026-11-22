@@ -200,4 +200,4 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
     border-radius: 999px;
 }
 .priority[data-needs-you="closed"] .priority-toggle { gap: 8px; border-radius: inherit; }
-.priority[data-needs-you="open"] .priority-toggle { color: var(--dim); }
+.priority[data-needs-you="open"] > .priority-toggle:first-child { color: var(--dim); }
