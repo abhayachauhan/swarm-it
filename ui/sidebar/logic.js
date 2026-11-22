@@ -989,7 +989,8 @@
         const entries = priorityEntries(view.snapshot);
         if (!entries.length) return null;
         const box = h(doc, 'div', 'priority');
-        const toggle = button(doc, 'Priority', 'priority-toggle', () => handlers.onPriorityToggle?.());
+        if (view.rightSidebar) box.setAttribute('data-needs-you', view.ui.priorityOpen === true ? 'open' : 'closed');
+        const toggle = button(doc, view.rightSidebar ? 'Needs you' : 'Priority', 'priority-toggle', () => handlers.onPriorityToggle?.());
         toggle.append(h(doc, 'span', 'priority-count', String(entries.length)));
         toggle.setAttribute('aria-expanded', view.ui.priorityOpen === true ? 'true' : 'false');
         box.append(toggle);

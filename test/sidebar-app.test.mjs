@@ -448,3 +448,20 @@ test('the right Agents sidebar shows all agents with Auto and without the extra 
     assert.equal(stored.directory, false);
     assert.deepEqual([...stored.collapsedSections], ['running']);
 });
+
+
+test('right sidebar puts attention behind a Needs you pill with red and blue dots', async () => {
+    const snapshot = fixture();
+    snapshot.attention.push({ id: 'finished', paneID: 'p-done', type: 'Complete' });
+    const app = await bootApp({ snapshot, context: { viewID: 'local.swarm-view.rail' } });
+    const pill = app.button(app.refs.list, 'Needs you');
+    assert.ok(pill);
+    assert.equal(pill.getAttribute('aria-expanded'), 'false');
+    assert.equal(app.refs.list.querySelector('.priority-row'), null);
+    await app.pointerClick(pill);
+    const rows = app.refs.list.children.find(node => node.className.includes('priority')).children.filter(node => node.className === 'priority-row');
+    assert.ok(rows[0].querySelector('.dot-error'));
+    assert.ok(rows[1].querySelector('.dot-done'));
+    await app.pointerClick(rows[0]);
+    assert.equal(app.reveals.at(-1), snapshot.attention[0].paneID);
+});

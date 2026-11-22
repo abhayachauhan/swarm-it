@@ -191,3 +191,13 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); f
 .row[data-docked="true"] > .last { padding-left: 21px; font-size: .85em; }
 .docked-actions { display: flex; flex-wrap: wrap; padding-left: 21px; }
 .docked-actions .btn { padding: 1px 4px; }
+
+.priority[data-needs-you="closed"] {
+    width: max-content;
+    max-width: calc(100% - 16px);
+    margin-left: auto;
+    padding: 0;
+    border-radius: 999px;
+}
+.priority[data-needs-you="closed"] .priority-toggle { gap: 8px; border-radius: inherit; }
+.priority[data-needs-you="open"] .priority-toggle { color: var(--dim); }
