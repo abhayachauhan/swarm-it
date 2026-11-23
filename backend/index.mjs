@@ -649,7 +649,7 @@ export function registerAll(api, deps = modules) {
             const pending = st.unparsed.has(paneID) || st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt);
             if (!displayOnly && pane?.status === 'idle' && !knownCodex && !st.displayCodex.has(paneID) && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) return;
             let screen;
-            try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
+            try { screen = await S.capturePane(api, paneID, displayOnly ? 24 : N.PROMPT_CAPTURE_LINES); } catch { return; }
             if (disposed) return;
             if (displayOnly) displayRead.add(paneID); else noteDisplayPrompt(paneID, screen);
             const codexPrompt = st.panes.get(paneID)?.agent === 'claude' ? null : N.parseCodexPrompt(screen);
@@ -659,7 +659,7 @@ export function registerAll(api, deps = modules) {
             const marker = tail.findLastIndex(line => /^\s*(?:[•·◦]\s*\S[^\n]*?|Working|Waiting for background terminals?)\s*\((?:\d+[hms]\s*)+[•·]\s*esc to interrupt\)/i.test(line));
             const composer = tail.findLastIndex(line => /^\s*›(?:\s|$)/.test(line));
             const codexFooter = composer >= 0 && tail.slice(composer + 1).some(line => /^\s*←\s*for agents\s*·\s*\? for shortcuts\b/i.test(line));
-            const inferredCodex = pane && !pane.agent && codexFooter;
+            const inferredCodex = pane && !pane.agent && (codexFooter || !!codexPrompt);
             if (inferredCodex) screenCodex.add(paneID);
             const backgroundRunning = codexFooter && tail.slice(0, composer).some(line =>
                 /^\s*[1-9]\d* background terminals? running\s*·\s*\/ps to view\s*·\s*\/stop to close\s*$/i.test(line));
@@ -737,12 +737,18 @@ export function registerAll(api, deps = modules) {
         for (const pane of [...st.panes.values()]) if (!scannedCodex.has(pane.id) && S.anyCodexPane(st, pane.id)) await scanWorker(pane.id);
         // Hooks can be unavailable in an older Codex session. Scan an unknown shell when Kelpi says it is
         // waiting, or when it is the focused pane, and recognise only Codex's navigation-only menu.
+        const displayOnlyPanes = [];
         for (const pane of [...st.panes.values()]) {
             if (scannedCodex.has(pane.id) || pane.agent || (pane.type ?? 'shell') !== 'shell') continue;
             const promptCandidate = pane.status === 'waitingForInput' || (pane.isFocused && pane.isActiveWorkspace)
                 || /\bAction Required\b/i.test(pane.title ?? '');
-            if (!promptCandidate && !st.displayCodex.has(pane.id) && pane.status !== 'running' && !pane.isFocused) continue;
-            await scanWorker(pane.id, null, !promptCandidate);
+            if (promptCandidate) await scanWorker(pane.id);
+            else if (st.settings.agentDirectoryEnabled !== false && (st.displayCodex.has(pane.id) || pane.isFocused)) {
+                displayOnlyPanes.push(pane);
+            }
+        }
+        for (let i = 0; i < displayOnlyPanes.length && !disposed; i += 3) {
+            await Promise.all(displayOnlyPanes.slice(i, i + 3).map(pane => scanWorker(pane.id, null, true)));
         }
         // Display-only checks outside Auto never raise an approvable card or send a key.
         // Claude reports waitingForInput at an ordinary idle composer too, so only a visible
