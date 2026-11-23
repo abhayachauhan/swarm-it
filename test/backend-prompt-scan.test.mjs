@@ -157,6 +157,10 @@ test('a live Working footer clears a stale Codex waiting fallback but keeps genu
         api.captureStore.w1 = '• Working (1m 55s • esc to interrupt)\n› Ask Codex to do anything\nGPT-6.1-Sol high · ~/repos\n? for shortcuts';
         await sleep(100);
         assert.deepEqual(lastSnapshot(api).waitingPanes, []);
+        const row = lastSnapshot(api).agents.find(agent => agent.paneID === 'w1');
+        assert.equal(row.state, 'running');
+        assert.equal(row.activity, 'running');
+        assert.equal(lastSnapshot(api).workers.find(worker => worker.paneID === 'w1').state, 'waiting');
         assert.deepEqual(api.callsTo('terminal.sendKey'), []);
         api.captureStore.w1 = '• Working (2m • esc to interrupt)\nQueued follow-up inputs\n? 1 question\n⇧← to answer\n› Ask Codex to do anything';
         await sleep(100);
@@ -186,4 +190,23 @@ test('a hung focus-list read releases the command queue after its deadline',asyn
 
 test('disposing during display capture starts no further batches or prompt actions',async()=>{
  const panes=Array.from({length:7},(_,i)=>({id:`closing-${i}`,agent:'claude',type:'shell',status:'idle',workspaceID:'ws1'}));const api=makeFakeApi({panes});const dispose=registerAll(api);await dispose.ready;const pending=[];api.terminal.capture=()=>new Promise(resolve=>pending.push(resolve));await sleep(40);assert.equal(pending.length,3);dispose();for(const resolve of pending)resolve(PROMPT_TEXT);await sleep(40);assert.equal(pending.length,3);assert.equal(api.callsTo('terminal.sendKey').length,0);assert.equal(lastSnapshot(api).attention.length,0);
+});
+
+test('Agents shows a Codex terminal as running while its live screen says Working', async () => {
+    const api = makeFakeApi({
+        panes: [{ id: 'codex-live', agent: 'codex', type: 'shell', status: 'waitingForInput', workspaceID: 'ws1' }],
+        captures: { 'codex-live': '• Working (40s • esc to interrupt)\n› Ask Codex to do anything\n? for shortcuts' }
+    });
+    const dispose = registerAll(api);
+    try {
+        await dispose.ready;
+        await sleep(100);
+        const row = () => lastSnapshot(api).agents.find(agent => agent.paneID === 'codex-live');
+        assert.equal(row().activity, 'running');
+        assert.equal(row().state, 'running');
+        api.captureStore['codex-live'] = '• Working (40s • esc to interrupt)\nsh-3.2$';
+        await sleep(100);
+        assert.equal(row().activity, 'idle');
+        assert.equal(api.callsTo('terminal.sendKey').length, 0);
+    } finally { dispose(); }
 });

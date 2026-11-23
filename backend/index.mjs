@@ -612,6 +612,8 @@ export function registerAll(api, deps = modules) {
         if (disposed) return;
         let changed = false;
         const displayRead = new Set();
+        // Screen evidence only affects the Agents display. Keep daemon status and worker actions separate.
+        const screenWorking = new Set();
         const noteDisplayPrompt = (paneID, screen) => {
             if (disposed) return;
             displayRead.add(paneID);
@@ -661,9 +663,11 @@ export function registerAll(api, deps = modules) {
             }
             const open = st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt && i.promptHash === hash);
             if (prompt && !open) { await N.onNotification(api, st, att, { data: { paneID, kind: 'prompt-scan' } }, { screen }); changed = true; }
-            const working = codex && screen.split('\n').filter(line => line.trim()).slice(-10)
-                .some(line => /^\s*[•·]?\s*Working\s*\([^\n]*esc to interrupt\)/i.test(line));
-            if (worker && await noteUnparsed(worker, !prompt && !working)) changed = true;
+            const tail = codex ? screen.split('\n').filter(line => line.trim()).slice(-10) : [];
+            const marker = tail.findLastIndex(line => /^\s*[•·]?\s*Working\s*\([^\n]*esc to interrupt\)/i.test(line));
+            if (knownCodex && marker >= 0 && !prompt && !st.displayPrompts.has(paneID)
+                && tail.slice(marker + 1).some(line => /^\s*›(?:\s|$)/.test(line))) screenWorking.add(paneID);
+            if (worker && await noteUnparsed(worker, !prompt && marker < 0)) changed = true;
         };
         /**
          * A worker waiting for input whose prompt does not parse (a pane a few columns wide wraps it one word per line)
@@ -743,6 +747,8 @@ export function registerAll(api, deps = modules) {
         }
         if (disposed) return;
         for (const paneID of st.displayPrompts) if (!st.panes.has(paneID)) { st.displayPrompts.delete(paneID); changed = true; }
+        for (const paneID of st.displayWorkingCodex) if (!st.panes.has(paneID) || (displayRead.has(paneID) && !screenWorking.has(paneID))) { st.displayWorkingCodex.delete(paneID); changed = true; }
+        for (const paneID of screenWorking) if (!st.displayWorkingCodex.has(paneID) && st.panes.has(paneID)) { st.displayWorkingCodex.add(paneID); changed = true; }
         for (const orch of orchestrators) {
             const orchOpen = orch && st.panes.has(orch) ? st.attention.filter(i => i.paneID === orch && i.type === 'Request' && !i.handledAt) : [];
             if (!orchOpen.length) continue;

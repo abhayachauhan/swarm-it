@@ -99,6 +99,7 @@ export function createStore(api) {
         /** Worker pane id to the time it was first seen finished (in memory): auto-clean closes it after the delay. */
         doneSince: new Map(),
         displayPrompts: new Set(),
+        displayWorkingCodex: new Set(),
         /** Old `<name> · workers` workspaces already tried for removal this run. */
         legacyTried: new Set(),
         /** Set once a view reports the workspace the user is in: only that workspace's swarm is shown. */
@@ -446,8 +447,9 @@ export function agentWorkspaceName(store, pane, membership = otherSwarmPane(stor
 
 /** Recognised agent terminals across workspaces. Completion needs a result file, never an idle prompt alone. */
 function agentDirectory(store, nowMs) {
+    const screenRunning = id => store.displayWorkingCodex.has(id) && !store.exits.has(id) && !store.displayPrompts.has(id);
     const followed = currentWorkers(store, nowMs).filter(w => !w.archived).map(w => ({
-        ...w, directory: false, coordinator: false, workspaceName: store.workspaceName || 'Current swarm',
+        ...w, ...(w.state === 'waiting' && screenRunning(w.paneID) ? { state: 'running', activity: 'running' } : {}), directory: false, coordinator: false, workspaceName: store.workspaceName || 'Current swarm',
         parent: w.parent || store.orchestrator?.paneID || null,
         parentLabel: (w.parent ? store.manifestWorkers.find(p => p.paneID === w.parent)?.label : null) || store.workspaceName || 'Coordinator'
     }));
@@ -459,11 +461,14 @@ function agentDirectory(store, nowMs) {
         if (!['claude', 'codex'].includes(agent)) return [];
         const coordinator = membership?.role === 'orchestrator' || actionableOrchestrator(store, p.id);
         const workspaceName = agentWorkspaceName(store, p, membership);
-        const state = worker ? deriveState(store, worker) : p.status === 'running' ? 'running' : 'waiting';
+        const screenBusy = agent === 'codex' && screenRunning(p.id);
+        const running = p.status === 'running' || screenBusy;
+        const workerState = worker ? deriveState(store, worker) : null;
+        const state = workerState === null ? (running ? 'running' : 'waiting') : (workerState === 'waiting' && screenBusy ? 'running' : workerState);
         const exit = store.exits.get(p.id);
         return [{ directory: true, paneID: p.id, label: (p.label && p.label !== 'coordinator' ? p.label : null) || workspaceName,
             task: worker?.task || agentTask(p), agent, state,
-            activity: store.displayPrompts.has(p.id) ? 'waiting' : p.status === 'running' ? 'running' : 'idle',
+            activity: store.displayPrompts.has(p.id) ? 'waiting' : running ? 'running' : 'idle',
             ...(exit && state === 'waiting' ? { stopped: { reason: exit.reason } } : {}),
             parent: worker ? worker.parent || membership.swarm.orchestrator.paneID : null,
             parentLabel: worker ? membership.swarm.workers.find(w => w.paneID === worker.parent)?.label || membership.swarm.name : null, coordinator: !!coordinator,
