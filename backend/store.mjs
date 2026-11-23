@@ -457,7 +457,7 @@ function agentDirectory(store, nowMs) {
     const extra = [...store.panes.values()].filter(p => (p.type ?? 'shell') === 'shell' && !known.has(p.id) && !store.archived.has(p.id)).flatMap(p => {
         const membership = otherSwarmPane(store, p.id);
         const worker = membership?.role === 'worker' ? membership.swarm.workers.find(w => w.paneID === p.id) : null;
-        const agent = worker?.agent ?? p.agent ?? (worker ? 'claude' : null);
+        const agent = worker?.agent ?? p.agent ?? (screenRunning(p.id) ? 'codex' : worker ? 'claude' : null);
         if (!['claude', 'codex'].includes(agent)) return [];
         const coordinator = membership?.role === 'orchestrator' || actionableOrchestrator(store, p.id);
         const workspaceName = agentWorkspaceName(store, p, membership);
