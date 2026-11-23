@@ -221,7 +221,7 @@ test('Agents shows Codex as running while working or waiting for background term
 
 test('Agents recognizes active Codex before Kelpi binds the terminal', async () => {
     const screen = '• Waiting for background terminal (3s • esc to interrupt)\n› Ask Codex to do anything\n← for agents · ? for shortcuts';
-    const pane = { id: 'unbound', type: 'shell', agent: null, status: 'idle', workspaceID: 'ws1', isFocused: true, isActiveWorkspace: true };
+    const pane = { id: 'unbound', type: 'shell', agent: null, status: 'idle', workspaceID: 'ws1', isFocused: true, isActiveWorkspace: false };
     const api = makeFakeApi({ panes: [pane], captures: { unbound: screen } });
     const dispose = registerAll(api);
     try {
@@ -230,7 +230,15 @@ test('Agents recognizes active Codex before Kelpi binds the terminal', async () 
         const row = () => lastSnapshot(api).agents.find(agent => agent.paneID === pane.id);
         assert.equal(row()?.agent, 'codex');
         assert.equal(row()?.state, 'running');
-        api.captureStore.unbound = screen.replace('← for agents · ? for shortcuts', 'ordinary shell output');
+        const composer = '› Ask Codex to do anything\nGPT-6.2-Sol · ~/repos\n← for agents · ? for shortcuts                     ⚠ 5 warnings · f2 to view';
+        api.captureStore.unbound = 'Worked for 5m 42s · 12:53 PM\n1 background terminal running · /ps to view · /stop to close\n' + composer;
+        await sleep(100);
+        assert.equal(row()?.activity, 'running');
+        api.captureStore.unbound = composer;
+        await sleep(100);
+        assert.equal(row()?.activity, 'idle');
+        assert.equal(row()?.agent, 'codex');
+        api.captureStore.unbound = 'sh-3.2$';
         await sleep(100);
         assert.equal(row(), undefined);
     } finally { dispose(); }

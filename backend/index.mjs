@@ -614,6 +614,7 @@ export function registerAll(api, deps = modules) {
         const displayRead = new Set();
         // Screen evidence only affects the Agents display. Keep daemon status and worker actions separate.
         const screenWorking = new Set();
+        const screenCodex = new Set();
         const noteDisplayPrompt = (paneID, screen) => {
             if (disposed) return;
             displayRead.add(paneID);
@@ -638,7 +639,7 @@ export function registerAll(api, deps = modules) {
         if (disposed) return;
         /** Workers scanned this round; a waiting row for any other pane is dropped. */
         const scanned = new Set();
-        const scanWorker = async (paneID, worker = null) => {
+        const scanWorker = async (paneID, worker = null, displayOnly = false) => {
             if (disposed) return;
             if (worker) scanned.add(paneID);
             const knownCodex = S.anyCodexPane(st, paneID) || worker?.worker?.agent === 'codex';
@@ -646,14 +647,25 @@ export function registerAll(api, deps = modules) {
             // unless a card or waiting row for it still needs settling.
             const pane = st.panes.get(paneID);
             const pending = st.unparsed.has(paneID) || st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt);
-            if (pane?.status === 'idle' && !knownCodex && !st.displayWorkingCodex.has(paneID) && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) return;
+            if (!displayOnly && pane?.status === 'idle' && !knownCodex && !st.displayCodex.has(paneID) && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) return;
             let screen;
             try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
             if (disposed) return;
-            noteDisplayPrompt(paneID, screen);
+            if (displayOnly) displayRead.add(paneID); else noteDisplayPrompt(paneID, screen);
             const codexPrompt = st.panes.get(paneID)?.agent === 'claude' ? null : N.parseCodexPrompt(screen);
             const codex = knownCodex || !!codexPrompt;
             const prompt = codex ? codexPrompt : N.parsePrompt(screen);
+            const tail = screen.split('\n').filter(line => line.trim()).slice(-10);
+            const marker = tail.findLastIndex(line => /^\s*(?:[•·◦]\s*\S[^\n]*?|Working|Waiting for background terminals?)\s*\((?:\d+[hms]\s*)+[•·]\s*esc to interrupt\)/i.test(line));
+            const composer = tail.findLastIndex(line => /^\s*›(?:\s|$)/.test(line));
+            const codexFooter = composer >= 0 && tail.slice(composer + 1).some(line => /^\s*←\s*for agents\s*·\s*\? for shortcuts\b/i.test(line));
+            const inferredCodex = pane && !pane.agent && codexFooter;
+            if (inferredCodex) screenCodex.add(paneID);
+            const backgroundRunning = codexFooter && tail.slice(0, composer).some(line =>
+                /^\s*[1-9]\d* background terminals? running\s*·\s*\/ps to view\s*·\s*\/stop to close\s*$/i.test(line));
+            const working = (marker >= 0 && composer > marker) || backgroundRunning;
+            if ((knownCodex || inferredCodex) && working && !prompt && !st.displayPrompts.has(paneID)) screenWorking.add(paneID);
+            if (displayOnly) return;
             const hash = prompt ? N.promptHash(prompt.block) : null;
             for (const item of st.attention) {
                 if (item.paneID !== paneID || item.type !== 'Request' || item.handledAt || item.promptHash === hash) continue;
@@ -663,13 +675,7 @@ export function registerAll(api, deps = modules) {
             }
             const open = st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt && i.promptHash === hash);
             if (prompt && !open) { await N.onNotification(api, st, att, { data: { paneID, kind: 'prompt-scan' } }, { screen }); changed = true; }
-            const tail = screen.split('\n').filter(line => line.trim()).slice(-10);
-            const marker = tail.findLastIndex(line => /^\s*(?:[•·◦]\s*\S[^\n]*?|Working|Waiting for background terminals?)\s*\((?:\d+[hms]\s*)+[•·]\s*esc to interrupt\)/i.test(line));
-            const footer = tail.slice(marker + 1);
-            const inferredCodex = pane && !pane.agent && footer.some(line => /(?:←\s*for agents|\? for shortcuts)\s*$/i.test(line));
-            if ((knownCodex || inferredCodex) && marker >= 0 && !prompt && !st.displayPrompts.has(paneID)
-                && footer.some(line => /^\s*›(?:\s|$)/.test(line))) screenWorking.add(paneID);
-            if (worker && await noteUnparsed(worker, !prompt && (!codex || marker < 0))) changed = true;
+            if (worker && await noteUnparsed(worker, !prompt && (!(codex || inferredCodex) || (!working && marker < 0)))) changed = true;
         };
         /**
          * A worker waiting for input whose prompt does not parse (a pane a few columns wide wraps it one word per line)
@@ -733,8 +739,10 @@ export function registerAll(api, deps = modules) {
         // waiting, or when it is the focused pane, and recognise only Codex's navigation-only menu.
         for (const pane of [...st.panes.values()]) {
             if (scannedCodex.has(pane.id) || pane.agent || (pane.type ?? 'shell') !== 'shell') continue;
-            if (!st.displayWorkingCodex.has(pane.id) && pane.status !== 'waitingForInput' && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) continue;
-            await scanWorker(pane.id);
+            const promptCandidate = pane.status === 'waitingForInput' || (pane.isFocused && pane.isActiveWorkspace)
+                || /\bAction Required\b/i.test(pane.title ?? '');
+            if (!promptCandidate && !st.displayCodex.has(pane.id) && pane.status !== 'running' && !pane.isFocused) continue;
+            await scanWorker(pane.id, null, !promptCandidate);
         }
         // Display-only checks outside Auto never raise an approvable card or send a key.
         // Claude reports waitingForInput at an ordinary idle composer too, so only a visible
@@ -749,6 +757,8 @@ export function registerAll(api, deps = modules) {
         }
         if (disposed) return;
         for (const paneID of st.displayPrompts) if (!st.panes.has(paneID)) { st.displayPrompts.delete(paneID); changed = true; }
+        for (const paneID of st.displayCodex) if (!st.panes.has(paneID) || (displayRead.has(paneID) && !screenCodex.has(paneID))) { st.displayCodex.delete(paneID); changed = true; }
+        for (const paneID of screenCodex) if (!st.displayCodex.has(paneID) && st.panes.has(paneID)) { st.displayCodex.add(paneID); changed = true; }
         for (const paneID of st.displayWorkingCodex) if (!st.panes.has(paneID) || (displayRead.has(paneID) && !screenWorking.has(paneID))) { st.displayWorkingCodex.delete(paneID); changed = true; }
         for (const paneID of screenWorking) if (!st.displayWorkingCodex.has(paneID) && st.panes.has(paneID)) { st.displayWorkingCodex.add(paneID); changed = true; }
         for (const orch of orchestrators) {
