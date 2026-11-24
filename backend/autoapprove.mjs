@@ -493,6 +493,46 @@ function pathValues(value, out = [], named = false) {
     }
     return out;
 }
+/** A field that names the program of a structured call, and one that holds its arguments (an array of words, not a command line). */
+const EXEC_FIELD = /^(?:executable|exe|command|cmd|program|binary|bin|command_?name)$/i;
+const ARGS_FIELD = /^(?:args|arguments|argv)$/i;
+export const UNREADABLE_EXEC_RULE = 'structured command the floor cannot read';
+const isWords = value => Array.isArray(value) && value.every(item => typeof item === 'string' || typeof item === 'number');
+/** One word of a command line, single-quoted unless it is plainly safe, so the reader sees it as the one word a structured call passes. */
+const shellWord = text => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`);
+/**
+ * An MCP call that runs a program is often written as an executable field and an `args` array (`{ executable: 'aws', args: ['s3', 'rm', …] }`),
+ * which no single string holds. Each such object is joined into the one command line it stands for and judged as shell, so its words keep their
+ * boundaries (the flattened line puts field names and array indices between them). A program given as an array of words (`command: ['aws', 's3', …]`)
+ * is joined the same way. An object with an `args` array and no field that names the program, or arguments that are not plain words, is a layout
+ * this cannot read: it is left, since the program could be anything.
+ */
+function structuredExecRule(value) {
+    if (value === null || typeof value !== 'object') return null;
+    if (Array.isArray(value)) {
+        for (const item of value) { const rule = structuredExecRule(item); if (rule) return rule; }
+        return null;
+    }
+    const keys = Object.keys(value);
+    const argsKey = keys.find(key => ARGS_FIELD.test(key) && Array.isArray(value[key]));
+    const execKey = keys.find(key => EXEC_FIELD.test(key) && (typeof value[key] === 'string' || (isWords(value[key]) && value[key].length > 0)));
+    if (execKey !== undefined) {
+        // A lone string is a command line the per-string check already read; only a program with arguments, or a program given as words, is joined.
+        if (argsKey !== undefined || Array.isArray(value[execKey])) {
+            const program = [value[execKey]].flat();
+            const args = argsKey === undefined ? [] : value[argsKey];
+            if (!isWords(args)) return UNREADABLE_EXEC_RULE;
+            // A string program may be a whole command line already (`aws s3 ls`): its own words are read as written.
+            const first = typeof program[0] === 'string' && /\s/.test(program[0]) ? program[0] : shellWord(String(program[0]));
+            const line = [first, ...program.slice(1).map(String).map(shellWord), ...args.map(String).map(shellWord)].join(' ');
+            const rule = floorRule(line, true);
+            if (rule) return rule;
+        }
+    } else if (argsKey !== undefined) return UNREADABLE_EXEC_RULE;
+    for (const inner of Object.values(value)) { const rule = structuredExecRule(inner); if (rule) return rule; }
+    return null;
+}
+
 /**
  * What an MCP call adds to the floor, read from its structured input instead of the one flattened line. The flattened line lets one
  * field fake a reader segment for another (`{"content":"; cat ","path":"~/.claude/settings.json"}` reads as a `cat`, which is
@@ -505,6 +545,8 @@ function mcpFloor(toolName, input) {
         const rule = settingsRule(value) ?? floorExecRule(value, command);
         if (rule) return { rule };
     }
+    const exec = structuredExecRule(input);
+    if (exec) return { rule: exec };
     const words = mcpWords(String(toolName).split('__').pop());
     const onlyReads = words.some(w => MCP_READ_WORDS.has(w)) && !words.some(w => MCP_CHANGE_WORDS.has(w) || FILE_WRITE_WORDS.has(w));
     return !onlyReads && pathValues(input).some(mentions) ? { rule: FLOOR_SETTINGS_RULE } : null;

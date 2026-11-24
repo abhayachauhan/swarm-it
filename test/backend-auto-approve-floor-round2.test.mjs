@@ -48,7 +48,7 @@ const approved = [ALLOW, 'OK', undefined, undefined];
 async function expectAll(commands, expected, make = bash) {
     const { api, dispose } = await start();
     try {
-        for (const [command, rule] of commands) assert.deepEqual(await judge(api, make(command)), expected(rule), command);
+        for (const [command, rule] of commands) assert.deepEqual(await judge(api, make(command)), expected(rule), typeof command === 'string' ? command : JSON.stringify(command));
     } finally { dispose(); }
 }
 const leftBy = (commands, make) => expectAll(commands, left, make);
@@ -169,6 +169,36 @@ test('finding 3: standard and privilege wrappers are looked through in any order
     ]);
     await approve(['cat /tmp/payload | command sudo grep x', 'nice sudo ls /tmp', 'command sudo tee /tmp/x', 'command -v git', 'env A=1 timeout 5 sudo -n true',
         'echo hi | command sudo -u root tee /tmp/x']);
+});
+
+test('finding 5: an MCP call with an executable and an args array is judged as the one command line it stands for', async () => {
+    const run = input => request('mcp__x__run', input);
+    const UNREADABLE = AA.UNREADABLE_EXEC_RULE;
+    await leftBy([
+        // The reviewer's: the strings were checked one by one, and the flattened line put field names between the words.
+        [{ executable: 'aws', args: ['s3', 'rm', 's3://bucket/key', '--profile', 'p'] }, AWS],
+        [{ command: 'terraform', args: ['apply', '-auto-approve'] }, TERRAFORM],
+        [{ cmd: 'bash', argv: ['-c', 'terraform apply'] }, TERRAFORM],
+        [{ params: { program: '/usr/local/bin/aws', arguments: ['ec2', 'terminate-instances', '--instance-ids', 'i-1'] } }, AWS],
+        [{ command: ['aws', 's3', 'rm', 's3://b/k'] }, AWS],
+        [{ binary: 'sudo', args: ['-u', 'root', 'terraform', 'destroy'] }, TERRAFORM],
+        [{ server: { command: 'npx', args: ['-y', 'x'] }, steps: [{ executable: 'terragrunt', args: ['destroy'] }] }, TERRAFORM],
+        [{ executable: 'cp', args: ['/tmp/x', '/Users/x/.claude/settings.json'] }, SETTINGS],
+        [{ executable: 'claude', args: ['--settings', '/tmp/s.json', 'mcp', 'add', 'evil'] }, SETTINGS],
+        // A word with a quote or a space in it stays one word: this is `aws ssm put-parameter --value 'a b'`, a write.
+        [{ executable: 'aws', args: ['ssm', 'put-parameter', '--name', 'n', '--value', "it's a b", '--profile', 'p'] }, AWS],
+        // A layout this cannot read is left: no field names the program, or the arguments are not plain words.
+        [{ args: ['s3', 'rm'] }, UNREADABLE],
+        [{ tool: 'aws', args: ['s3', 'rm', 's3://b/k'] }, UNREADABLE],
+        [{ executable: 'aws', args: ['s3', { nested: true }] }, UNREADABLE],
+        [{ command: 'ls', options: { argv: ['x'] } }, UNREADABLE]
+    ], run);
+    await approve([
+        { executable: 'git', args: ['status'] }, { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'] }, { command: ['ls', '-la'] },
+        { executable: 'aws', args: ['s3', 'ls', '--profile', 'p'] }, { executable: 'aws', args: ['s3api', 'list-objects-v2', '--bucket', 'b', '--profile', 'p'] },
+        { executable: 'aws', args: ['s3', 'cp', 's3://b/k', '/tmp/k', '--profile', 'p'] }, { command: 'ls -la' }, { executable: 'terraform', args: ['plan'] },
+        { channel: 'C1', text: 'hello', tags: ['a', 'b'], ids: [1, 2, 3] }
+    ], run);
 });
 
 test('finding 6: mediaconvert describe-endpoints creates an endpoint unless it says GET_ONLY, and other reads that mint or create are left', async () => {
