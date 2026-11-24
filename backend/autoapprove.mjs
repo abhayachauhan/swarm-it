@@ -10,7 +10,7 @@ import { actionableWorker, ownedRequestPane, otherSwarmPane } from './store.mjs'
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
 import { inertCurlBodies, inertQuoted, quietGrepPatterns, stripHeredocs, unrollLoops } from './floor-helpers.mjs';
-import { atlantisRule, commandIndex, floorExecRule, interpreterProgramRule, kelpiFloorRule, runsFile } from './floor-exec.mjs';
+import { AWS_RULE, TERRAFORM_RULE, atlantisRule, commandIndex, floorExecRule, interpreterProgramRule, kelpiFloorRule, runsFile } from './floor-exec.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -260,6 +260,7 @@ const validEntry = e => e && typeof e === 'object' && typeof e.at === 'string' &
  *  Auto approve is on (no end time) unless the user's saved choice is exactly off. A timed window saved with the choice
  *  is kept: still ahead, it carries on with the time left; passed, Auto approve stays off and says it expired. */
 export async function load(store, now = Date.now(), mono = performance.now()) {
+    console.info(JSON.stringify({ event: 'swarm.auto-approve.policy', policy: approvePolicy() }));
     try {
         const raw = await store.api.storage.get(LOG_KEY);
         store.auto.log = (Array.isArray(raw) ? raw : []).filter(validEntry).slice(-LOG_CAP);
@@ -293,8 +294,9 @@ async function saveLog(store) {
     try { await store.api.storage.set(LOG_KEY, store.auto.log); } catch { /* the log still lives in memory */ }
 }
 
+/** Every decision is logged with the policy that made it (`floor` or `careful`), so a log read later says which one answered. */
 export async function appendLog(store, entry) {
-    store.auto.log.push(entry);
+    store.auto.log.push({ ...entry, policy: approvePolicy() });
     if (store.auto.log.length > LOG_CAP) store.auto.log.splice(0, store.auto.log.length - LOG_CAP);
     await saveLog(store);
 }
@@ -367,6 +369,27 @@ export const supersededBy = (store, item) => store.attention.some(o => o !== ite
 // because it could spell either of them.
 export const FLOOR_RULES = new Set(['terraform apply or destroy', 'aws write', 'command word is a variable', 'alias or eval', 'shell expansion builds a word',
     'shell fed generated code', 'command word from a substitution', 'ANSI-C escape', 'env -S', 'git -c alias', 'git config from the environment']);
+/** Throws when a rule the floor selects by name is not on the never list: renaming a never rule must not drop it from the floor without a word. */
+export function checkFloorRules(floorRules = FLOOR_RULES, never = NEVER_AUTO_APPROVE) {
+    for (const name of floorRules) {
+        if (!never.some(rule => rule.name === name)) throw new Error(`the floor names a rule that is not on the never-auto-approve list: "${name}"`);
+    }
+}
+checkFloorRules();
+
+/**
+ * MCP tools that send, share or delete (agreed 24 Nov): a name with one of these words, such as `slack_send_message`, Gmail `forward`
+ * and `reply`, Drive `share_file` and `trash_file`, `notion-delete-pages`, or `schedule` then `message`, is left. A draft is not sent or
+ * deleted for good, so a name with `draft` (`create_draft`, `send_message_draft`) and every read stay approved. Other names that put
+ * something in front of people (`create_comment`, `add_reaction`, `respond_to_event`) are outside this list.
+ */
+export const MCP_SEND_RULE = 'mcp send or delete';
+const MCP_SEND_WORDS = new Set(['send', 'post', 'reply', 'forward', 'share', 'publish', 'delete', 'trash', 'remove', 'archive']);
+export function mcpSends(toolName) {
+    const words = mcpWords(String(toolName).split('__').pop());
+    if (words.includes('draft') || words.includes('drafts')) return false;
+    return words.some((word, i) => MCP_SEND_WORDS.has(word) || (word === 'schedule' && words[i + 1] === 'message'));
+}
 
 /** Which policy answers: `floor` (the default) or `careful`, the full never list and Kelpi's example policy. Set SWARM_AUTO_APPROVE_POLICY=careful for the old behaviour. */
 export const POLICY_ENV = 'SWARM_AUTO_APPROVE_POLICY';
@@ -485,6 +508,7 @@ export function judgeFloor(toolName, toolInput) {
         if (check?.tooLong) return { allow: false, text, reason: 'too long to check', code: 'TOO_LONG' };
         if (check) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: check.rule };
     }
+    if (mcp && mcpSends(toolName)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: MCP_SEND_RULE };
     if (WRITES.has(toolName) && settingsPath(input.file_path)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
     // A script written now and run by a later call is read now: the later call only names the file.
     const script = WRITES.has(toolName) ? scriptCheck(toolName, input) : null;
@@ -500,7 +524,7 @@ export function judgeFloor(toolName, toolInput) {
  * `#!` line) gets the whole floor, a Makefile the calls to aws, terraform and the deploy tools, and any other source file, and package.json,
  * only its string literals that hold such a call (`os.system("terraform apply")`, `"deploy": "cdk deploy"`).
  */
-const SHELL_FILE = /\.(?:sh|bash|zsh)$/i;
+const SHELL_FILE = /\.(?:sh|bash|zsh|ksh|fish|command)$/i;
 const MAKE_FILE = /(?:^|\/)(?:makefile|gnumakefile)$|\.mk$/i;
 const SOURCE_FILE = /\.(?:py|mjs|cjs|js|ts|mts|rb|pl)$|(?:^|\/)package\.json$/i;
 const SHEBANG = /^#!\s*(\S+)(?:\s+(?:-S\s+)?(\S+))?/;
@@ -519,14 +543,25 @@ function scriptKind(path, text) {
     if (MAKE_FILE.test(path)) return 'make';
     return SOURCE_FILE.test(path) ? 'source' : null;
 }
-/** The first call to aws, terraform, Atlantis, a deploy tool or the agent's settings held in a string literal of the source, as `{ rule }`. */
+/** A call that runs another program, in Python, JavaScript, Ruby or Perl. */
+const PROCESS_API = /\b(?:subprocess|child_process|execSync|execFileSync|execFile|spawnSync|spawn|popen|execa|shelljs|os\.system|Deno\.Command|Bun\.spawn)\b|\bsystem\s*\(/;
+/** A string that is just the name of one of the programs, or the path to it: an argument list starts with it (`["terraform", "apply"]`). */
+const PROGRAM_LITERAL = /^(?:.*\/)?(aws|terraform|terragrunt|tofu)$/i;
+/**
+ * The first call to aws, terraform, Atlantis, a deploy tool or the agent's settings held in a string literal of the source, as `{ rule }`.
+ * A literal that is only the program's name leaves the file when the file also runs programs (`subprocess.run(["terraform", "apply"])`),
+ * since an argument list holds no command line to read; the same name in a file that runs nothing (`provider: 'aws'`) is only a word.
+ */
 function literalCheck(source) {
     let read = 0;
+    const spawns = PROCESS_API.test(source);
     for (const match of source.matchAll(STRING_LITERAL)) {
         const value = match[2] ?? match[3] ?? '';
         if (!PROTECTED_WORD.test(value)) continue;
         read += 1;
         if (value.length > MAX_REQUEST_TEXT || read > MAX_LITERALS) return { tooLong: true };
+        const program = spawns ? PROGRAM_LITERAL.exec(value.trim())?.[1] : undefined;
+        if (program) return { rule: program.toLowerCase() === 'aws' ? AWS_RULE : TERRAFORM_RULE };
         const rule = (line => atlantisRule(line) ?? floorExecRule(line, false))(value.replace(/\\[nrt]/g, ' ').replace(/\\(.)/g, '$1'));
         if (rule) return { rule };
     }
@@ -765,14 +800,16 @@ export async function run(api, store, now = Date.now()) {
         // Both never lists, as the provider applies: the screen fallback must not be the weaker path.
         // The same policy as the provider: the floor rules by default, both full lists under SWARM_AUTO_APPROVE_POLICY=careful.
         const never = approvePolicy() === 'floor'
-            ? floorCheck(item.command ?? '')
+            ? screenFloor(item)
             : (rule => (rule ? { rule } : null))(neverAutoApprove(item.command ?? '') ?? kelpiNever(item.command ?? ''));
         if (never) {
             if (!a.seenNever.has(item.id)) {
                 a.seenNever.add(item.id); a.skipped += 1; changed = true;
                 await appendLog(store, {
                     at: iso(now), ...describePane(store, item.paneID), paneID: item.paneID, command: item.command ?? '', ok: false, skipped: true, source: 'screen',
-                    ...(never.tooLong ? { reason: 'too long to check', code: 'TOO_LONG' } : { reason: NEVER_REASON, rule: never.rule, code: 'NEVER' })
+                    ...(never.tooLong ? { reason: 'too long to check', code: 'TOO_LONG' }
+                        : never.file ? { reason: 'a file write seen only on the screen: where it lands cannot be followed', code: 'PATH' }
+                            : { reason: NEVER_REASON, rule: never.rule, code: 'NEVER' })
                 });
             }
             continue;
@@ -800,6 +837,26 @@ export async function run(api, store, now = Date.now()) {
         changed = true;
     }
     return changed;
+}
+
+/** A file card on the screen: its header says Edit, Create or Write file. */
+const FILE_CARD = /^\s*(?:edit|create|write) file\b/im;
+/** An MCP card on the screen: its header says Tool use, and the call reads `server - tool(args)`. */
+const TOOL_CARD = /^\s*tool use\b/im;
+const SCREEN_TOOL_NAME = /^[^()]*?([A-Za-z0-9_.-]+)\s*\(/;
+/**
+ * The floor's answer for a card read off the screen: `{ file: true }` for an Edit or Write card, `{ rule }` for an MCP tool that sends or
+ * deletes or a command that breaks a floor rule, `{ tooLong: true }`, or null. The screen shows only the path text Claude chose to print
+ * (a relative `settings.json` in a pane whose folder is `~/.claude` names nothing under `.claude`), and the symlinks and the folder the
+ * provider path resolves cannot be followed from here, so a file write is left for the provider path or the user.
+ */
+function screenFloor(item) {
+    if (FILE_CARD.test(String(item.promptBlock ?? ''))) return { file: true };
+    if (TOOL_CARD.test(String(item.promptBlock ?? ''))) {
+        const name = SCREEN_TOOL_NAME.exec(String(item.command ?? ''))?.[1];
+        if (name && mcpSends(name)) return { rule: MCP_SEND_RULE };
+    }
+    return floorCheck(item.command ?? '');
 }
 
 /**

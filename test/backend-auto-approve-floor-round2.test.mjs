@@ -237,7 +237,7 @@ test('finding 4: an MCP tool that writes, moves or copies a file is followed to 
                 ['create_release', { target: 'main', name: 'v1' }],
                 ['save_note', { title: 'x', folder: 'inbox', body: 'y' }]
             ]) assert.deepEqual(await mcp(tool, input), approved, tool);
-            assert.deepEqual(await judge(api, request('mcp__slack__slack_send_message', { channel: 'C1', text: 'hi' })), approved);
+            assert.deepEqual(await judge(api, request('mcp__slack__slack_add_reaction', { channel: 'C1', text: 'hi' })), approved);
         } finally { dispose(); }
         // A landing place that cannot be told is left: this is the same lookup Write makes, with the same limits.
         const denied = { realpath: () => Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' })), lstat: () => Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' })) };

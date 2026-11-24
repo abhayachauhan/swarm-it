@@ -72,14 +72,14 @@ test('finding 1: an MCP write tool is checked on its destination field, not on t
     // Data that cannot be read as shell is left when any part of it starts as a call to the tool.
     assert.deepEqual(await judge(api, request('mcp__x__run', { note: "echo hi; aws s3 rm s3://b/k '" })), left(AWS));
     for (const text of ["don't touch the aws account", 'we run terraform plan nightly and the aws bill is fine', '{"service":"aws","note":"$HOME"}']) {
-        assert.deepEqual(await judge(api, request('mcp__slack__slack_send_message', { channel: 'C1', text })), approved, text);
+        assert.deepEqual(await judge(api, request('mcp__slack__slack_add_reaction', { channel: 'C1', text })), approved, text);
     }
     // What stays approved: reads of any file, writes to ordinary files, and other tools' text.
     for (const [tool, input] of [
         ['mcp__filesystem__read_file', { path: '/Users/x/repo/a.txt' }],
         ['mcp__filesystem__write_file', { content: '{"note":"; cat "}', path: '/Users/x/repo/notes.json' }],
         ['mcp__fs__get_file_contents', { file_path: '/Users/x/repo/CLAUDE.md' }],
-        ['mcp__slack__slack_send_message', { channel: 'C1', text: 'hi' }]
+        ['mcp__slack__slack_add_reaction', { channel: 'C1', text: 'hi' }]
     ]) assert.deepEqual(await judge(api, request(tool, input)), approved, tool);
     dispose();
 });

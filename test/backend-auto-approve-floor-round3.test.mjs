@@ -2,9 +2,9 @@
 // `atlantis apply`, a script written and run later, the AWS read list, interpreter argument lists, the guard on FLOOR_RULES, the screen
 // path, AWS deploys without the aws CLI, Terraform state commands, MCP tools that send, share or delete, and the policy in the log.
 // A test here asserts the exact decision, the code and the rule, so a command left for a different reason fails it.
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeSwarmApi } from './backend-fake-api.mjs';
@@ -54,6 +54,7 @@ const approve = (commands, make) => expectAll(commands.map(c => [c]), () => appr
 /** A store with just what `load` reads, so a reload at a chosen time needs no clock. */
 const storeWith = saved => ({ api: { storage: { get: async key => (saved.has(key) ? saved.get(key) : null), set: async (key, value) => void saved.set(key, value) } }, auto: AA.createState() });
 const HOUR = 3600000;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 test('finding 1: a timed window saved with the choice is kept across a reload, and an expired one stays off', async () => {
     const now = Date.parse('2026-11-24T20:00:00.000Z');
@@ -199,7 +200,11 @@ test('finding 3: a script written now is read for the commands in it, since the 
         [{ file: 'p.py', content: 'import os\nos.system("terraform apply")\n' }, TERRAFORM],
         [{ file: 'x.mjs', content: "import { execSync } from 'node:child_process';\nexecSync(`aws s3 rm s3://b/k --recursive`);\n" }, AWS],
         [{ file: 'package.json', content: '{"scripts":{"deploy":"cdk deploy --all"}}' }, DEPLOY],
-        [{ file: 'post.ts', content: 'await sh("gh pr comment 1 --body \\"atlantis apply\\"");\n' }, TERRAFORM]
+        [{ file: 'post.ts', content: 'await sh("gh pr comment 1 --body \\"atlantis apply\\"");\n' }, TERRAFORM],
+        // An argument list holds no command line: the program's name beside a call that runs programs is enough.
+        [{ file: 'tf.py', content: 'import subprocess\nsubprocess.run(["terraform", "apply", "-auto-approve"])\n' }, TERRAFORM],
+        [{ file: 'rm.mjs', content: "import { spawnSync } from 'node:child_process';\nspawnSync('aws', ['s3', 'rm', 's3://b/k']);\n" }, AWS],
+        [{ file: 'fish.fish', content: 'terraform apply\n' }, TERRAFORM]
     ], rule => left(rule), write);
     // Edit and MultiEdit put the new text in the same file, so it is read the same way.
     const edit = request('Edit', { file_path: join(dir, 'deploy.sh'), old_string: 'echo hi', new_string: 'terraform destroy' });
@@ -219,8 +224,98 @@ test('finding 3: a script written now is read for the commands in it, since the 
         [{ file: 'package.json', content: '{"dependencies":{"aws-cdk-lib":"2.1.0","@aws-sdk/client-s3":"3.0.0"},"scripts":{"build":"tsc","synth":"cdk synth"}}' }],
         [{ file: 'Makefile', content: 'build:\n\t$(CC) -o app main.c\n\ntest:\n\tnpm test\n' }],
         [{ file: 'plan.mk', content: 'plan:\n\tterraform plan\n\taws s3 ls\n' }],
-        [{ file: 'check.py', content: 'import subprocess\nsubprocess.run(["aws", "--version"])\nprint("terraform plan")\n' }]
+        [{ file: 'check.py', content: 'import subprocess\nsubprocess.run(["git", "status"])\nprint("terraform plan")\n' }],
+        [{ file: 'tool.mjs', content: "import { spawnSync } from 'node:child_process';\nspawnSync('git', ['status']);\n" }]
     ], () => approved, write);
+});
+
+test('finding 7: a rule the floor selects by name must be on the never list, and that is checked when the module loads', async () => {
+    assert.doesNotThrow(() => AA.checkFloorRules());
+    assert.throws(() => AA.checkFloorRules(new Set([...AA.FLOOR_RULES, 'terraform apply or destroy, renamed'])),
+        { message: 'the floor names a rule that is not on the never-auto-approve list: "terraform apply or destroy, renamed"' });
+    // Renaming a never rule is the mistake the guard exists for: the floor would drop it without a word.
+    assert.throws(() => AA.checkFloorRules(AA.FLOOR_RULES, AA.NEVER_AUTO_APPROVE.map(rule => (rule.name === 'aws write' ? { ...rule, name: 'aws changes' } : rule))),
+        { message: 'the floor names a rule that is not on the never-auto-approve list: "aws write"' });
+    const source = await readFile(new URL('../backend/autoapprove.mjs', import.meta.url), 'utf8');
+    assert.match(source, /^checkFloorRules\(\);$/m, 'the check runs at the top level of the module');
+});
+
+const MCP_SEND = 'mcp send or delete';
+
+test('finding 9: MCP tools that send, share or delete are left, and drafts and reads are not', async () => {
+    const input = { channel: 'C1', text: 'hi' };
+    await expectAll([
+        ['mcp__claude_ai_Slack__slack_send_message', MCP_SEND], ['mcp__claude_ai_Slack__slack_schedule_message', MCP_SEND],
+        ['mcp__claude_ai_Gmail__send_message', MCP_SEND], ['mcp__claude_ai_Gmail__forward', MCP_SEND], ['mcp__claude_ai_Gmail__reply', MCP_SEND],
+        ['mcp__claude_ai_Gmail__trash_thread', MCP_SEND], ['mcp__claude_ai_Google_Drive__share_file', MCP_SEND], ['mcp__claude_ai_Google_Drive__trash_file', MCP_SEND],
+        ['mcp__claude_ai_Notion__notion-delete-pages', MCP_SEND], ['mcp__missive__create_post', MCP_SEND], ['mcp__linear-server__delete_comment', MCP_SEND],
+        ['mcp__claude_ai_Granola__remove_note_from_folder', MCP_SEND], ['mcp__x__archiveThread', MCP_SEND], ['mcp__x__publishRelease', MCP_SEND]
+    ], rule => left(rule), tool => request(tool, input));
+    await expectAll([
+        // Drafts stay a draft, and every read and ordinary change stays approved.
+        ['mcp__claude_ai_Gmail__create_draft'], ['mcp__claude_ai_Slack__slack_send_message_draft'], ['mcp__missive__draft_reply'], ['mcp__claude_ai_Gmail__delete_draft'],
+        ['mcp__claude_ai_Slack__slack_read_channel'], ['mcp__claude_ai_Gmail__search_threads'], ['mcp__linear-server__get_issue'], ['mcp__claude_ai_Slack__slack_add_reaction'],
+        ['mcp__buildkite__create_pipeline_schedule'], ['mcp__post-office__list_items'], ['mcp__linear-server__save_issue']
+    ], () => approved, tool => request(tool, input));
+});
+
+test('finding 8 and 9: under the floor a screen card for a file write is left, as is a Tool use card that sends; a Bash card and other tools are answered', async () => {
+    const api = makeSwarmApi({});
+    const dispose = registerAll(api);
+    await dispose.ready;
+    await api.command('get-state', { workspaceID: 'ws1' });
+    await api.command('auto-approve', { on: true, hours: 8 });
+    const card = (header, text) => ['╭──────────────────╮', ` ${header}`, '', `   ${text}`, '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No'].join('\n');
+    const enters = () => api.callsTo('terminal.sendKey').filter(c => c.args[0] === 'w1' && c.args[1] === 'enter').length;
+    const show = async text => { api.captureStore.w1 = text; await sleep(100); api.captureStore.w1 = 'working'; await sleep(60); };
+    // The reviewer's: a relative settings.json, in a pane whose folder is ~/.claude, names nothing under .claude.
+    await show(card('Edit file', 'settings.json'));
+    await show(card('Write file', 'notes.txt'));
+    await show(card('Create file', 'src/new.mjs'));
+    await show(card('Tool use', 'Slack - slack_send_message(channel_id: "C1", message: "hi")'));
+    assert.equal(enters(), 0, 'none of the four gets an Enter');
+    await show(card('Bash command', 'git status'));
+    await show(card('Tool use', 'Slack - slack_add_reaction(channel_id: "C1", name: "eyes")'));
+    await show(card('Read file', 'settings.json'));
+    assert.equal(enters(), 3, 'a Bash card, a Tool use card that only reacts and a Read card are answered');
+    const entries = (await api.command('auto-approve-log', {})).entries.reverse();
+    assert.deepEqual(entries.map(e => [e.command, e.ok, e.code, e.rule, e.policy]), [
+        ['settings.json', false, 'PATH', undefined, 'floor'],
+        ['notes.txt', false, 'PATH', undefined, 'floor'],
+        ['src/new.mjs', false, 'PATH', undefined, 'floor'],
+        ['Slack - slack_send_message(channel_id: "C1", message: "hi")', false, 'NEVER', MCP_SEND, 'floor'],
+        ['git status', true, undefined, undefined, 'floor'],
+        ['Slack - slack_add_reaction(channel_id: "C1", name: "eyes")', true, undefined, undefined, 'floor'],
+        ['settings.json', true, undefined, undefined, 'floor']
+    ]);
+    assert.equal(entries[0].reason, 'a file write seen only on the screen: where it lands cannot be followed');
+    dispose();
+});
+
+test('finding 10: every log entry says which policy decided, and the policy is logged once at the start', async () => {
+    const lines = [];
+    const info = mock.method(console, 'info', line => { lines.push(line); });
+    try {
+        await AA.load(storeWith(new Map()));
+        process.env.SWARM_AUTO_APPROVE_POLICY = 'careful';
+        await AA.load(storeWith(new Map()));
+    } finally { info.mock.restore(); delete process.env.SWARM_AUTO_APPROVE_POLICY; }
+    assert.deepEqual(lines.map(line => JSON.parse(line)), [
+        { event: 'swarm.auto-approve.policy', policy: 'floor' },
+        { event: 'swarm.auto-approve.policy', policy: 'careful' }
+    ]);
+    const { api, dispose } = await start();
+    try {
+        assert.equal((await judge(api, bash('ls')))[0].behavior, 'allow');
+        assert.equal((await api.command('auto-approve-log', {})).entries[0].policy, 'floor');
+        process.env.SWARM_AUTO_APPROVE_POLICY = 'careful';
+        assert.equal((await judge(api, bash('ls')))[0].behavior, 'allow');
+        const [careful, floor] = (await api.command('auto-approve-log', {})).entries;
+        assert.deepEqual([careful.policy, floor.policy], ['careful', 'floor']);
+        // A decision that leaves the request is logged with the policy too.
+        assert.equal((await judge(api, bash('terraform apply')))[0].behavior, 'abstain');
+        assert.equal((await api.command('auto-approve-log', {})).entries[0].policy, 'careful');
+    } finally { delete process.env.SWARM_AUTO_APPROVE_POLICY; dispose(); }
 });
 
 test('finding 9: Terraform commands that change state without an apply are left, reads of state are not', async () => {

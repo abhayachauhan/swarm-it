@@ -119,7 +119,7 @@ test('floor: file, Monitor and MCP requests are approved; a floor rule inside th
     assert.deepEqual(await judge(api, request('Read', { file_path: '/Users/x/.ssh/config' })), [ALLOW, 'OK', undefined, undefined]);
     assert.deepEqual(await judge(api, request('Monitor', { command: 'tail -f /tmp/log' })), [ALLOW, 'OK', undefined, undefined]);
     assert.deepEqual(await judge(api, request('Monitor', { command: 'terraform apply' })), [ABSTAIN, 'NEVER', 'terraform apply or destroy', AA.NEVER_REASON]);
-    assert.deepEqual(await judge(api, request('mcp__slack__slack_send_message', { channel: 'C1', text: 'hi' })), [ALLOW, 'OK', undefined, undefined]);
+    assert.deepEqual(await judge(api, request('mcp__slack__slack_add_reaction', { channel: 'C1', text: 'hi' })), [ALLOW, 'OK', undefined, undefined]);
     assert.deepEqual(await judge(api, request('mcp__x__run', { command: 'aws s3 rm s3://b/k' })), [ABSTAIN, 'NEVER', 'aws write', AA.NEVER_REASON]);
     dispose();
 });
