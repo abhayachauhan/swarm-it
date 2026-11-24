@@ -1,8 +1,12 @@
-// Auto-approve for unattended (overnight) runs. The user turns it on knowingly: it bypasses their own ask rules.
+// Auto-approve for unattended (overnight) runs. It is on from the first start and bypasses the user's own ask rules, except for the
+// floor: AWS and Terraform changes, agent settings, and MCP tools that send, share or delete (docs/permissions.md lists it all;
+// SWARM_AUTO_APPROVE_POLICY=careful restores the older, stricter policy). The floor guards against honest mistakes by a well-meaning
+// agent, not against one that disguises a command, so a few ways round it (python string joins, `git -c`, `npx --call`, `env --split`)
+// are accepted limits.
 // Two ways to answer, never both at once. With swarm-it the active kelpi.agent.permissions provider, `decide` answers
 // Claude's PermissionRequest hook from the real tool input and the screen path sends no key. Otherwise every approval
 // goes through actions.approve, the SAME path as the Approve button (double live capture, hash and command match,
-// Enter only). Off by default and after every reload: the on/off state is never persisted; only the log is.
+// Enter only). The user's on/off choice is saved and kept across a reload, with the end of a timed window; so is the log.
 import { posix } from 'node:path';
 import { realpath, lstat, stat } from 'node:fs/promises';
 import { approve } from './actions.mjs';
@@ -364,9 +368,10 @@ export function describePane(store, paneID) {
 export const supersededBy = (store, item) => store.attention.some(o => o !== item && o.type === 'Request' && !o.handledAt
     && o.paneID === item.paneID && o.createdAt > item.createdAt);
 
-// The floor policy, the user's choice on 14 Nov (swarm-it-herdr/lib/policy.mjs has the same): everything is answered except terraform
-// apply or destroy and AWS writes. Besides those two rules, a command whose real words the shell only builds at run time stays left,
-// because it could spell either of them.
+// The floor policy, the user's choice on 24 Nov (swarm-it-herdr/lib/policy.mjs has the same): everything is answered except AWS writes,
+// Terraform changes, agent settings writes and MCP tools that send, share or delete. Besides those rules, a command whose real words the
+// shell only builds at run time stays left, because it could spell any of them. These rules are selected from the never list by name
+// (FLOOR_RULES); the others (Terraform state, AWS deploys, Atlantis, MCP send, scripts) live in floor-exec.mjs and judgeFloor.
 export const FLOOR_RULES = new Set(['terraform apply or destroy', 'aws write', 'command word is a variable', 'alias or eval', 'shell expansion builds a word',
     'shell fed generated code', 'command word from a substitution', 'ANSI-C escape', 'env -S', 'git -c alias', 'git config from the environment']);
 /** Throws when a rule the floor selects by name is not on the never list: renaming a never rule must not drop it from the floor without a word. */

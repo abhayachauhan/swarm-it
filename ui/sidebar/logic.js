@@ -773,7 +773,7 @@
     }
 
     /**
-     * Auto-approve in one header control: "Auto: off" opens a menu of four durations (10 minutes, 4 hours, 12 hours, until 9am)
+     * Auto-approve in one header control: "Auto: off" opens a menu of five choices (10 minutes, 4 hours, 12 hours, until 9am, no time limit)
      * under the header, "Auto: on · 14 ✓ · until 08:30" turns it off in one click. Notes (prompts left for you,
      * refusals, paused panes, the last switch-off) are the tooltip. A small "log" link follows when the log has
      * entries; it expands the log under the header.
