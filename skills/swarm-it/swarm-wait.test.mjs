@@ -112,6 +112,25 @@ test('a result written after the spawn is DONE, and a failure still outranks not
   assert.deepEqual(mixed.stdout.trim().split('\n'), ['NOTHING-NEW w2: worker finished earlier; nothing new', 'FAILED P3:w3 usage limit reached'])
 })
 
+test('waiting again on a result a previous swarm-wait already reported is NOTHING-NEW; a newer result is DONE again', () => {
+  const s = setup()
+  manifest(s, [['P1', 'w1', '2026-11-24T10:00:00Z']])
+  fs.writeFileSync(s.result('w1'), '## Goal\nfirst report\n')
+  const first = s.run(['P1:w1'])
+  assert.equal(first.status, 0)
+  assert.match(first.stdout, /^DONE w1: ## Goal first report/)
+  const again = s.run(['P1:w1'])
+  assert.equal(again.status, 3)
+  assert.equal(again.stdout.trim(), 'NOTHING-NEW w1: worker finished earlier; nothing new')
+  // A new report, written later, is news.
+  fs.writeFileSync(s.result('w1'), '## Goal\nsecond report\n')
+  const later = new Date(Date.now() + 60000)
+  fs.utimesSync(s.result('w1'), later, later)
+  const next = s.run(['P1:w1'])
+  assert.equal(next.status, 0)
+  assert.match(next.stdout, /^DONE w1: ## Goal second report/)
+})
+
 test('a worker with no manifest entry keeps the old behaviour: any result is DONE', () => {
   const s = setup()
   fs.writeFileSync(s.result('w1'), '## Goal\nfix\n')

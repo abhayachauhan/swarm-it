@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # swarm-status [--stale-minutes N]
-# One line per worker in this coordinator's swarm: label, pane alive yes/no, the last heartbeat line
-# (results/<label>.status) and its age. Flags:
-#   DEAD   the pane is gone and the worker never wrote a done line or a result
-#   STALE  the pane is alive but the last heartbeat is older than N minutes (default 20)
+# One line per worker in this coordinator's swarm: label, whether its agent is alive yes/no, the age of
+# its last heartbeat and that line (results/<label>.status). Flags:
+#   DEAD   no agent runs in the pane (pane gone, or an open shell after the agent ended, or the plugin
+#          wrote an exit file) and the worker never wrote a done line or a result
+#   STALE  the agent runs but the status file was last written more than N minutes ago (default 20)
+# The age is the status file's modification time, not the time the worker wrote in the line.
 # Exit code 0 when no worker is flagged, 1 when any is. It is a snapshot, not a wait: run it when you
 # want to know whether a quiet worker is slow or dead, and use swarm-wait to be told when one finishes.
 set -uo pipefail
@@ -20,7 +22,10 @@ done
 [[ $stale_min =~ ^[0-9]+$ ]] || bad "--stale-minutes must be a whole number of minutes"
 
 RES="$HOME/.kelpi-swarm/results"
+EXITS="${SWARM_MANIFEST_DIR:-$HOME/.kelpi-swarm}/exits"
 MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
+# A new worker's agent needs a moment to show up in the pane list.
+GRACE_MIN=2
 
 orch=$(kelpi pane id) || bad "cannot identify the coordinator pane; run swarm-status from a Kelpi pane"
 panes=$(kelpi pane list --json) || bad "cannot read Kelpi panes; if Codex denied local IPC, retry this command with sandbox escalation"
@@ -32,26 +37,35 @@ manifest=$(node "$MW" show "$ws") || bad "no swarm manifest for this workspace"
 now=$(date +%s)
 flagged=0
 count=0
-while IFS=$'\t' read -r pane label startedAt; do
+# Same agent test as swarm-retry: Kelpi reports it running or waiting, or holds a session for it.
+# swarm-retry briefly lists the old and the new pane under one label; only the newest entry counts.
+while IFS=$'\t' read -r pane label startedAt paneUp agentUp; do
   count=$((count + 1))
-  alive=no
-  jq -e --arg p "$pane" 'any(.[]; .id == $p)' <<<"$panes" >/dev/null && alive=yes
-  last= stamp=
-  [ ! -s "$RES/$label.status" ] || last=$(tail -n 1 "$RES/$label.status")
-  # The first word of a heartbeat line is its UTC time; with no usable line, age runs from the spawn.
-  stamp=${last%% *}
-  [ -n "$last" ] || stamp=$startedAt
-  at=$(jq -nr --arg t "$stamp" '$t | try fromdateiso8601 catch empty')
-  age="unknown"
-  [ -z "$at" ] || age="$(((now - at) / 60))m"
-  text=${last#* }
+  [ "$startedAt" != - ] || startedAt=
+  last=
+  [ ! -s "$RES/$label.status" ] || last=$(grep -v '^[[:space:]]*$' "$RES/$label.status" | tail -n 1)
+  # The line's own time is the worker's word; the file's modification time is ours.
+  at=$(date -r "$RES/$label.status" +%s 2>/dev/null || true)
+  if [ -z "$at" ] && [ -n "$startedAt" ]; then
+    at=$(jq -nr --arg t "$startedAt" '$t | try fromdateiso8601 catch empty')
+  fi
+  age=unknown mins=
+  if [ -n "$at" ]; then mins=$(((now - at) / 60)); [ "$mins" -ge 0 ] || mins=0; age="${mins}m"; fi
+  text=$last
+  [[ $last =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[^[:space:]]*[[:space:]]+(.*)$ ]] && text=${BASH_REMATCH[1]}
   [ -n "$last" ] || text="(no heartbeat yet)"
-  # A worker that wrote its result is finished even if it forgot the done line.
+
+  alive=$agentUp
+  # Just spawned: the pane is there but its agent may not be listed yet.
+  if [ "$alive" = no ] && [ "$paneUp" = yes ] && [ -n "$mins" ] && [ "$mins" -lt "$GRACE_MIN" ]; then alive=yes; fi
+  [ ! -s "$EXITS/$pane.json" ] || alive=no
+
   finished=no
   [[ $text == done* ]] && finished=yes
   if [ -s "$RES/$label.md" ] && [ -n "$startedAt" ]; then
     s=$(jq -nr --arg t "$startedAt" '$t | try fromdateiso8601 catch empty')
     m=$(date -r "$RES/$label.md" +%s 2>/dev/null || true)
+    # A worker that wrote its result is finished even if it forgot the done line.
     [ -z "$s" ] || [ -z "$m" ] || [ "$m" -lt "$s" ] || finished=yes
   fi
   flag=
@@ -60,12 +74,17 @@ while IFS=$'\t' read -r pane label startedAt; do
   elif [ "$alive" = no ]; then
     flag=DEAD
     flagged=$((flagged + 1))
-  elif [ -n "$at" ] && [ $(((now - at) / 60)) -gt "$stale_min" ]; then
+  elif [ -n "$mins" ] && [ "$mins" -gt "$stale_min" ]; then
     flag=STALE
     flagged=$((flagged + 1))
   fi
   printf '%s\talive=%s\t%s\t%s%s\n' "$label" "$alive" "$age" "$text" "${flag:+  [$flag]}"
-done < <(jq -r '.workers[] | [.paneID, .label, (.startedAt // "")] | @tsv' <<<"$manifest")
+done < <(jq -r --argjson panes "$panes" '
+  .workers | group_by(.label) | map(max_by(.startedAt // "")) | .[]
+  | . as $w
+  | ([$panes[] | select(.id == $w.paneID) | select(.status == "running" or .status == "waitingForInput" or ((.agent_session_id // "") != ""))] | length > 0) as $up
+  | ([$panes[] | select(.id == $w.paneID)] | length > 0) as $pane
+  | [.paneID, .label, (.startedAt // "-"), (if $pane then "yes" else "no" end), (if $up then "yes" else "no" end)] | @tsv' <<<"$manifest")
 
 [ "$count" -gt 0 ] || echo "no workers in this swarm"
 [ "$flagged" -eq 0 ]

@@ -81,6 +81,9 @@ cleanup_failed_spawn() {
   fi
 }
 trap cleanup_failed_spawn EXIT
+# A second worker under a label whose agent still runs would share its result and status files.
+dup=$(node "$MW" show "$ws" | jq --argjson panes "$panes" --arg l "$label" '[.workers[] | select(.label == $l) | .paneID] as $ids | [$panes[] | select(.id as $i | $ids | index($i)) | select(.status == "running" or .status == "waitingForInput" or ((.agent_session_id // "") != ""))] | length') || bad "cannot read the swarm manifest"
+[ "$dup" = 0 ] || bad "a worker named $label is still running; wait for it or pick another label"
 # Each worker owns the first shell of its own child workspace, created without changing focus.
 child=$(kelpi workspace create --parent "$parent" --name "$label" --path "$dir" --no-repo --json) || bad "Kelpi did not create the child workspace; no worker was registered"
 created_ws=$(jq -r '.workspace_id // empty' <<<"$child")
@@ -100,19 +103,20 @@ if [ -e "$RES/$label.md" ]; then
   [ ! -e "$RES/$label.md" ] || { echo "cannot archive the old result for $label" >&2; exit 1; }
 fi
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" \
-  --agent "$agent" --task-path "$task" --model "${model:--}" --mode "$mode" --effort "${effort:--}" --dir "$dir" --started-at "$started" >/dev/null
-registered=1
 # First heartbeat line, written here so swarm-status can tell a worker that never started from a slow one.
 # It replaces a reused label's old file, so the last worker's done line is never read as this one's.
+# Before registering, so a failed write leaves no worker that never started.
 rm -f -- "$RES/$label.status"
 # noclobber: refuse to write through anything that appears at the path between the rm and the write.
 ( set -C; printf '%s spawned\n' "$started" >"$RES/$label.status" ) || bad "cannot write the status file for $label"
+node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" \
+  --agent "$agent" --task-path "$task" --model "${model:--}" --mode "$mode" --effort "${effort:--}" --dir "$dir" --started-at "$started" >/dev/null
+registered=1
 
 FORMAT="Write the result as markdown with three headings, ## Goal, ## Done and ## Next. Goal is one plain sentence saying what you were asked to do. Done is at most three short bullets saying what is now true or what you found, in plain words, with no code, file dumps or tool narration. Next is at most two bullets of what a human must decide or do, or the words Nothing pending. Keep the whole file under 80 words."
 
 # Both agents get this one. Workers are one-shot, so the status file is the only sign of life before the result.
-HEARTBEAT="Keep a heartbeat in $RES/$label.status: append one line per state change, each starting with the UTC time from date -u +%Y-%m-%dT%H:%M:%SZ, such as started, working: <short what>, pr-open: #123 <sha>, blocked: <why>, done. Write at most one line every few minutes, but a working: line at least every 15 minutes during long work. Append, never overwrite. Write the final done line last, after the result file."
+HEARTBEAT="Keep a heartbeat in $RES/$label.status: append one line per state change with one shell command, echo \"\$(date -u +%Y-%m-%dT%H:%M:%SZ) working: <short what>\" >> $RES/$label.status. The text after the time is started, working: <short what>, pr-open: #123 <sha>, blocked: <why> or done. Write at most one line every few minutes, but a working: line at least every 15 minutes during long work. Append, never overwrite. Write the final done line last, after the result file."
 
 report=
 if [ "$agent" = claude ]; then

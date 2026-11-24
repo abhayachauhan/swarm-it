@@ -2,7 +2,9 @@
 # swarm-wait <pane-id>:<label> ... [--timeout seconds]
 # Run in the background. Exits when every worker has written ~/.kelpi-swarm/results/<label>.md,
 # its pane has closed, or its agent stopped without a result. Prints one status line per worker as it finishes.
-# A result older than the worker's spawn time (startedAt in the manifest) is not new: it prints
+# A result is not new when it is older than the worker's spawn time (startedAt in the manifest) or when
+# a previous swarm-wait already reported that same file (it records the result's time in results/<label>.seen,
+# so waiting again after a worker finished cannot mistake its old report for an answer). It prints
 # NOTHING-NEW <label>: worker finished earlier; nothing new, and the run ends with exit code 3
 # (0 all done, 1 a worker failed, 2 timeout, 3 nothing new from at least one worker and no failure).
 # The Swarm View plugin (Kelpi 0.2.18+) writes $SWARM_MANIFEST_DIR/exits/<pane-id>.json
@@ -45,11 +47,15 @@ for ((t = 0; t < limit; t += 2)); do
     if [ -s "$RES/$label.md" ]; then
       done_[$label]=1 finished=$((finished + 1))
       mtime=$(date -r "$RES/$label.md" +%s 2>/dev/null || true)
-      if [ -n "${started[$label]:-}" ] && [ -n "$mtime" ] && [ "$mtime" -lt "${started[$label]}" ]; then
+      seen=$(cat "$RES/$label.seen" 2>/dev/null || true)
+      # Old: written before this spawn, or the same file a previous swarm-wait already reported.
+      if { [ -n "${started[$label]:-}" ] && [ -n "$mtime" ] && [ "$mtime" -lt "${started[$label]}" ]; } ||
+         { [[ $seen =~ ^[0-9]+$ ]] && [ -n "$mtime" ] && [ "$mtime" -le "$seen" ]; }; then
         stale=$((stale + 1))
         echo "NOTHING-NEW $label: worker finished earlier; nothing new"
       else
         echo "DONE $label: $(head -c 200 "$RES/$label.md" | tr '\n' ' ')"
+        [ -z "$mtime" ] || echo "$mtime" >"$RES/$label.seen"
       fi
     elif [ -s "$EXITS/$pane.json" ]; then
       done_[$label]=1 failed=$((failed + 1)) finished=$((finished + 1))

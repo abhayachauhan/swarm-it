@@ -178,15 +178,33 @@ test('two spawns with the same label keep separate prompt files, and a real shel
 test('every worker, Claude and Codex, is told to keep a heartbeat in results/<label>.status, and the status file starts with a spawned line', () => {
   const s = stub([{ id: 'WS', name: 'Warm pool' }])
   for (const agent of ['claude', 'codex']) {
-    const out = spawn(s, ['hb', s.task, '--agent', agent, '--path', s.home])
+    const label = `hb-${agent}`
+    const out = spawn(s, [label, s.task, '--agent', agent, '--path', s.home])
     assert.equal(out.status, 0, out.stderr)
     const send = out.calls.filter(c => c.startsWith('pane send')).at(-1)
-    assert.ok(send.includes(`Keep a heartbeat in ${s.home}/.kelpi-swarm/results/hb.status: append one line per state change`), `${agent}: ${send}`)
+    const file = `${s.home}/.kelpi-swarm/results/${label}.status`
+    assert.ok(send.includes(`Keep a heartbeat in ${file}: append one line per state change`), `${agent}: ${send}`)
+    assert.ok(send.includes(`>> ${file}.`), `${agent} is given the exact append command: ${send}`)
     assert.ok(send.includes('a working: line at least every 15 minutes') && send.includes('Write the final done line last, after the result file.'), `${agent}: ${send}`)
     assert.ok(send.endsWith('Reply done."'), send)
+    assert.match(fs.readFileSync(file, 'utf8'), /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ spawned\n$/, agent)
   }
-  const status = fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'results', 'hb.status'), 'utf8')
-  assert.match(status, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ spawned\n$/)
+})
+
+test('a label whose agent is still running is refused before anything is created or its files touched', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const first = spawn(s)
+  assert.equal(first.status, 0, first.stderr)
+  const results = path.join(s.home, '.kelpi-swarm', 'results')
+  fs.writeFileSync(path.join(results, 'w1.status'), '2026-11-24T10:00:00Z working: busy\n')
+  // The stub's first worker pane is CREATED; list it as running an agent.
+  fs.writeFileSync(path.join(s.home, 'panes.json'), JSON.stringify([ME, { id: 'CREATED', workspace_id: 'CHILD', status: 'running' }]))
+  const before = fs.readFileSync(path.join(s.home, 'calls.log'), 'utf8').split('\n').length
+  const again = spawn(s)
+  assert.notEqual(again.status, 0)
+  assert.match(again.stderr, /a worker named w1 is still running/)
+  assert.equal(again.typed.slice(before - 1).some(c => /^(workspace create|pane send)/.test(c)), false)
+  assert.equal(fs.readFileSync(path.join(results, 'w1.status'), 'utf8'), '2026-11-24T10:00:00Z working: busy\n')
 })
 
 test('reusing a label starts a fresh status file, so the last worker\'s done line is not read as the new one', () => {
