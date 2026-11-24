@@ -21,7 +21,18 @@ const EXCLUDED = new Set([
     'redshift get-identity-center-auth-token', 'redshift get-cluster-credentials', 'redshift get-cluster-credentials-with-iam', 'redshift-serverless get-credentials',
     'quicksight get-dashboard-embed-url', 'quicksight get-session-embed-url', 'marketplace-reporting get-buyer-dashboard',
     'security-ir get-case-attachment-upload-url', 'auditmanager get-evidence-file-upload-url', 'datazone get-iam-portal-login-url',
-    'connectparticipant get-authentication-url', 'emr-serverless get-dashboard-for-job-run'
+    'connectparticipant get-authentication-url', 'emr-serverless get-dashboard-for-job-run',
+    // Round 2 (24 Nov): the docs of every remaining read were scanned again for create, send, start, rotate, generate and mint wording.
+    'mediaconvert describe-endpoints', // DEFAULT, also the mode when none is given, creates the account endpoint when there is none; floor-exec.mjs allows it with --mode GET_ONLY
+    'evs get-depot-url', // `--rotate` replaces the authentication token
+    'ec2 get-flow-logs-integration-template', // writes the generated template to an S3 bucket
+    'taxsettings get-tax-registration-document', // writes the document to an S3 bucket
+    'inspector get-assessment-report', 'importexport get-shipping-label', // generate a report and a shipping label
+    'endusermessaging validate-notify-code-verification', // spends one of the passcode's attempts
+    'payment-cryptography get-parameters-for-export', 'payment-cryptography get-parameters-for-import', // create an import or export token and certificate
+    'gamelift get-compute-access', 'gamelift get-instance-access', 's3control get-data-access', 'kinesis-video-signaling get-ice-server-config', // temporary credentials
+    'codepipeline get-job-details', 'codepipeline get-third-party-job-details', // temporary credentials and the action's secret values
+    'groundstation get-agent-task-response-url', 'support get-attachment-upload-links', 'socialmessaging get-whats-app-flow-preview' // presigned upload links and a preview link
 ]);
 /** Operations that mint a credential, token, session or link: left for the user, except the few people run all day. A `list-` or `describe-` is never one. */
 // A qualifier may follow (`get-credentials-for-identity`, `get-tokens-from-refresh-token`, `get-workload-access-token-for-jwt`). A URL that only

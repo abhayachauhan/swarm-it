@@ -457,9 +457,34 @@ function awsRule(args, stdin) {
         if (operands.slice(1).some(w => S3_URL.test(w.text) || ((w.dynamic || w.glob) && !surelyLocal(w)))) return AWS_RULE;
         return null;
     }
+    if (service === 'mediaconvert' && op === 'describe-endpoints') return mediaConvertEndpointsRule(words.slice(2));
     const known = AWS_READ_OPS.get(service);
     if (known === undefined) return AWS_RULE;
     return op === 'wait' || known.has(op) ? null : AWS_RULE;
+}
+
+/**
+ * `mediaconvert describe-endpoints` creates the account's endpoint when there is none, in the default mode and when no mode is given;
+ * only `--mode GET_ONLY` cannot. So it passes when that is written out, once or more and never with another value, and nothing else
+ * could change it: an input JSON or YAML file (or any option this does not know) may carry a different mode, so those are left.
+ */
+function mediaConvertEndpointsRule(rest) {
+    let getOnly = false;
+    for (let i = 0; i < rest.length; i += 1) {
+        const word = rest[i];
+        if (word.dynamic || word.glob) return AWS_RULE;
+        const eq = word.text.indexOf('=');
+        const name = eq > 0 ? word.text.slice(0, eq) : word.text;
+        if (name === '--mode') {
+            const value = eq > 0 ? { text: word.text.slice(eq + 1), dynamic: false } : rest[i + 1];
+            if (value === undefined || value.dynamic || value.text !== 'GET_ONLY') return AWS_RULE;
+            getOnly = true;
+            if (eq < 0) i += 1;
+        } else if (AWS_VALUES.has(name)) {
+            if (eq < 0) i += 1;
+        } else if (!AWS_FLAGS.has(name)) return AWS_RULE;
+    }
+    return getOnly ? null : AWS_RULE;
 }
 
 // ---------------------------------------------------------------------------------------------------------------- the rest of the floor
