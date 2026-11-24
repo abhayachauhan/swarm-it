@@ -531,6 +531,8 @@ function structuredExecRule(value) {
                     if (rule) return rule;
                 }
             }
+            // Which program gets which arguments, and in what order the tool puts them together, cannot be told: more than one of either is left.
+            if (execKeys.length > 1 || argKeys.length > 1) return UNREADABLE_EXEC_RULE;
         }
     }
     for (const inner of Object.values(value)) { const rule = structuredExecRule(inner); if (rule) return rule; }

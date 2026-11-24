@@ -194,6 +194,10 @@ test('finding 5: an MCP call with an executable and an args array is judged as t
         [{ executable: 'aws', args: 's3 rm s3://b/k' }, AWS],
         [{ command: 'terraform', options: ['apply'] }, TERRAFORM],
         [{ command: 'terraform', params: 'destroy' }, TERRAFORM],
+        // More than one program field or one args field: each pairing is read, and when none breaks a rule the object is still left, because the
+        // tool's own order of putting them together is not known.
+        [{ executable: 'git', args: ['status'], argv: ['log'] }, UNREADABLE],
+        [{ command: 'git', cmd: 'ls', args: ['status'] }, UNREADABLE],
         // A layout this cannot read is left: no field names the program, or the arguments are not plain words.
         [{ command: ['aws', { x: 1 }] }, UNREADABLE],
         [{ args: ['s3', 'rm'] }, UNREADABLE],
