@@ -1,3 +1,4 @@
+import { cleanCandidates, createAgentMaintenance, recheckCompleted } from './maintenance.mjs';
 import { freshSession } from './fresh-session.mjs';
 import { createWorkspaceBriefs } from './workspace-brief.mjs';
 import { generateWorkspaceBrief } from './brief-generator.mjs';
@@ -28,7 +29,7 @@ export const PLUGIN_ID = 'local.swarm-view';
 export const COMMANDS = [
     'get-workspace-brief', 'edit-workspace-brief', 'open-workspace-brief', 'focus-rail', 'get-state', 'open-thread', 'read-result', 'approve', 'deny',
     'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'archive', 'close-worker', 'accept', 'send-to-worker', 'open-result', 'open-web-link',
-    'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done',
+    'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done', 'clean-completed', 'update-agents', 'dock-agents',
     'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff', 'fresh-session', 'agent-appearance'
 ].map(name => `${PLUGIN_ID}.${name}`);
 export const COUNTS_ITEM = `${PLUGIN_ID}.counts`;
@@ -116,8 +117,14 @@ export function registerAll(api, deps = modules) {
             })) };
         } });
 
+    const maintenance = createAgentMaintenance(api, st, RS.restartAgent);
+
     function snapshotNow() {
         const snapshot = S.buildSnapshot(st, Date.now());
+        const completed = new Set(snapshot.agents?.filter(agent => agent.state === 'done').map(agent => agent.paneID) ?? []);
+        const seen = new Set(snapshot.attention.map(item => item.id));
+        snapshot.priority = [...snapshot.attention, ...A.visibleItems(att).filter(item =>
+            item.type === 'Complete' && completed.has(item.paneID) && !seen.has(item.id))];
         if (codexQuestions) snapshot.warnings.push(...(codexQuestions.warnings?.() ?? []));
         if (codexQuestions) snapshot.codexQuestionsConnected = codexQuestions.connected?.() ?? true;
         if (codexQuestions) snapshot.codexQuestions = codexQuestions.list().map(question => {
@@ -135,9 +142,15 @@ export function registerAll(api, deps = modules) {
         const snapshot = snapshotNow();
         const hasError = snapshot.workers.some(w => !w.archived && w.state === 'error');
         const patch = countsPatch(snapshot.counts, hasError, fallback);
-        const patchJSON = JSON.stringify(patch);
+        const clean = cleanCandidates(st).length;
+        const items = {
+            [COUNTS_ITEM]: patch,
+            [`${PLUGIN_ID}.clean`]: { text: clean ? `Clean ${clean}` : 'Clean', tooltip: 'Close idle workers with saved results and clean worktrees', tone: 'default' },
+            [`${PLUGIN_ID}.update`]: maintenance.status()
+        };
+        const patchJSON = JSON.stringify(items);
         if (patchJSON !== lastCounts) {
-            try { await api.contributions.update({ items: { [COUNTS_ITEM]: patch } }); lastCounts = patchJSON; } catch { /* status bar is best effort */ }
+            try { await api.contributions.update({ items }); lastCounts = patchJSON; } catch { /* status bar is best effort */ }
         }
         try { await emit(SNAPSHOT_EVENT, snapshot); } catch { /* views re-call get-state */ }
         return snapshot;
@@ -599,6 +612,9 @@ export function registerAll(api, deps = modules) {
         if (disposed) return;
         let changed = false;
         const displayRead = new Set();
+        // Screen evidence only affects the Agents display. Keep daemon status and worker actions separate.
+        const screenWorking = new Set();
+        const screenCodex = new Set();
         const noteDisplayPrompt = (paneID, screen) => {
             if (disposed) return;
             displayRead.add(paneID);
@@ -623,7 +639,7 @@ export function registerAll(api, deps = modules) {
         if (disposed) return;
         /** Workers scanned this round; a waiting row for any other pane is dropped. */
         const scanned = new Set();
-        const scanWorker = async (paneID, worker = null) => {
+        const scanWorker = async (paneID, worker = null, displayOnly = false) => {
             if (disposed) return;
             if (worker) scanned.add(paneID);
             const knownCodex = S.anyCodexPane(st, paneID) || worker?.worker?.agent === 'codex';
@@ -631,14 +647,25 @@ export function registerAll(api, deps = modules) {
             // unless a card or waiting row for it still needs settling.
             const pane = st.panes.get(paneID);
             const pending = st.unparsed.has(paneID) || st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt);
-            if (pane?.status === 'idle' && !knownCodex && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) return;
+            if (!displayOnly && pane?.status === 'idle' && !knownCodex && !st.displayCodex.has(paneID) && !pane.agentSessionID && !pending && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) return;
             let screen;
-            try { screen = await S.capturePane(api, paneID, N.PROMPT_CAPTURE_LINES); } catch { return; }
+            try { screen = await S.capturePane(api, paneID, displayOnly ? 24 : N.PROMPT_CAPTURE_LINES); } catch { return; }
             if (disposed) return;
-            noteDisplayPrompt(paneID, screen);
+            if (displayOnly) displayRead.add(paneID); else noteDisplayPrompt(paneID, screen);
             const codexPrompt = st.panes.get(paneID)?.agent === 'claude' ? null : N.parseCodexPrompt(screen);
             const codex = knownCodex || !!codexPrompt;
             const prompt = codex ? codexPrompt : N.parsePrompt(screen);
+            const tail = screen.split('\n').filter(line => line.trim()).slice(-10);
+            const marker = tail.findLastIndex(line => /^\s*(?:[•·◦]\s*\S[^\n]*?|Working|Waiting for background terminals?)\s*\((?:\d+[hms]\s*)+[•·]\s*esc to interrupt\)/i.test(line));
+            const composer = tail.findLastIndex(line => /^\s*›(?:\s|$)/.test(line));
+            const codexFooter = composer >= 0 && tail.slice(composer + 1).some(line => /^\s*←\s*for agents\s*·\s*\? for shortcuts\b/i.test(line));
+            const inferredCodex = pane && !pane.agent && (codexFooter || !!codexPrompt);
+            if (inferredCodex) screenCodex.add(paneID);
+            const backgroundRunning = codexFooter && tail.slice(0, composer).some(line =>
+                /^\s*[1-9]\d* background terminals? running\s*·\s*\/ps to view\s*·\s*\/stop to close\s*$/i.test(line));
+            const working = (marker >= 0 && composer > marker) || backgroundRunning;
+            if ((knownCodex || inferredCodex) && working && !prompt && !st.displayPrompts.has(paneID)) screenWorking.add(paneID);
+            if (displayOnly) return;
             const hash = prompt ? N.promptHash(prompt.block) : null;
             for (const item of st.attention) {
                 if (item.paneID !== paneID || item.type !== 'Request' || item.handledAt || item.promptHash === hash) continue;
@@ -648,9 +675,7 @@ export function registerAll(api, deps = modules) {
             }
             const open = st.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt && i.promptHash === hash);
             if (prompt && !open) { await N.onNotification(api, st, att, { data: { paneID, kind: 'prompt-scan' } }, { screen }); changed = true; }
-            const working = codex && screen.split('\n').filter(line => line.trim()).slice(-10)
-                .some(line => /^\s*[•·]?\s*Working\s*\([^\n]*esc to interrupt\)/i.test(line));
-            if (worker && await noteUnparsed(worker, !prompt && !working)) changed = true;
+            if (worker && await noteUnparsed(worker, !prompt && (!(codex || inferredCodex) || (!working && marker < 0)))) changed = true;
         };
         /**
          * A worker waiting for input whose prompt does not parse (a pane a few columns wide wraps it one word per line)
@@ -712,10 +737,18 @@ export function registerAll(api, deps = modules) {
         for (const pane of [...st.panes.values()]) if (!scannedCodex.has(pane.id) && S.anyCodexPane(st, pane.id)) await scanWorker(pane.id);
         // Hooks can be unavailable in an older Codex session. Scan an unknown shell when Kelpi says it is
         // waiting, or when it is the focused pane, and recognise only Codex's navigation-only menu.
+        const displayOnlyPanes = [];
         for (const pane of [...st.panes.values()]) {
             if (scannedCodex.has(pane.id) || pane.agent || (pane.type ?? 'shell') !== 'shell') continue;
-            if (pane.status !== 'waitingForInput' && !(pane.isFocused && pane.isActiveWorkspace) && !/\bAction Required\b/i.test(pane.title ?? '')) continue;
-            await scanWorker(pane.id);
+            const promptCandidate = pane.status === 'waitingForInput' || (pane.isFocused && pane.isActiveWorkspace)
+                || /\bAction Required\b/i.test(pane.title ?? '');
+            if (promptCandidate) await scanWorker(pane.id);
+            else if (st.settings.agentDirectoryEnabled !== false && (st.displayCodex.has(pane.id) || pane.isFocused)) {
+                displayOnlyPanes.push(pane);
+            }
+        }
+        for (let i = 0; i < displayOnlyPanes.length && !disposed; i += 3) {
+            await Promise.all(displayOnlyPanes.slice(i, i + 3).map(pane => scanWorker(pane.id, null, true)));
         }
         // Display-only checks outside Auto never raise an approvable card or send a key.
         // Claude reports waitingForInput at an ordinary idle composer too, so only a visible
@@ -730,6 +763,10 @@ export function registerAll(api, deps = modules) {
         }
         if (disposed) return;
         for (const paneID of st.displayPrompts) if (!st.panes.has(paneID)) { st.displayPrompts.delete(paneID); changed = true; }
+        for (const paneID of st.displayCodex) if (!st.panes.has(paneID) || (displayRead.has(paneID) && !screenCodex.has(paneID))) { st.displayCodex.delete(paneID); changed = true; }
+        for (const paneID of screenCodex) if (!st.displayCodex.has(paneID) && st.panes.has(paneID)) { st.displayCodex.add(paneID); changed = true; }
+        for (const paneID of st.displayWorkingCodex) if (!st.panes.has(paneID) || (displayRead.has(paneID) && !screenWorking.has(paneID))) { st.displayWorkingCodex.delete(paneID); changed = true; }
+        for (const paneID of screenWorking) if (!st.displayWorkingCodex.has(paneID) && st.panes.has(paneID)) { st.displayWorkingCodex.add(paneID); changed = true; }
         for (const orch of orchestrators) {
             const orchOpen = orch && st.panes.has(orch) ? st.attention.filter(i => i.paneID === orch && i.type === 'Request' && !i.handledAt) : [];
             if (!orchOpen.length) continue;
@@ -760,6 +797,13 @@ export function registerAll(api, deps = modules) {
     }, PROMPT_SCAN_MS);
     scanTimer.unref?.();
     disposers.push(() => clearInterval(scanTimer));
+
+    // The updater can outlast a command invocation. Run it from a plugin-owned timer.
+    const maintenanceTimer = setInterval(() => {
+        void maintenance.tick(() => serial(publish)).catch(() => {});
+    }, 2000);
+    maintenanceTimer.unref?.();
+    disposers.push(() => { clearInterval(maintenanceTimer); maintenance.dispose(); });
 
     // kelpi.agent.permissions@1 (Kelpi 0.2.18+): Claude's PermissionRequest hook asks `decide` once the user selects it.
     // `decide` answers from memory (a write also looks up its path); the publish, and a selection re-check when it was asked
@@ -886,6 +930,7 @@ export function registerAll(api, deps = modules) {
         try { const result = await codexQuestions.answer(args); await publish(); return result; }
         catch (error) { return fail(text(error), 'QUESTION_CHANGED'); }
     });
+    command('dock-agents', async () => { await emit('dock-agents', {}); return { ok: true }; });
     command('focus-rail', async () => {
         try { await api.openView(RAIL_VIEW, st.workspaceID ? { workspaceID: st.workspaceID } : {}); } catch (error) { return fail(text(error), 'OPEN_FAILED'); }
         try { await emit(FOCUS_EVENT, {}); } catch { /* the view is opened; keys stay inert until it hears the signal */ }
@@ -956,6 +1001,20 @@ export function registerAll(api, deps = modules) {
     command('archive', async args => needPane(args) ?? after(await X.archive(api, st, args.paneID)));
     command('close-worker', async args => needPane(args) ?? after(await X.closeWorker(api, st, args.paneID)));
     // A partial clear still changed the rail, so it publishes whenever anything was cleared.
+    command('update-agents', async () => {
+        const result = maintenance.request();
+        await publish();
+        return result;
+    });
+    command('clean-completed', async () => {
+        const result = await W.autoClean(api, st, cleanCandidates(st), Date.now(),
+            worker => recheckCompleted(api, st, worker));
+        if (result.cleaned.length) await W.removeEmptyWorkerChildren(api, st);
+        console.info(JSON.stringify({ event: 'swarm.agent-maintenance.clean', closed: result.cleaned.length, kept: result.kept.length }));
+        setWarning('clean', result.kept.length ? result.kept.map(worker => `${worker.label}: ${worker.error}`).join(', ') : null);
+        await publish();
+        return { ok: !result.kept.length, ...result };
+    });
     command('clear-done', async () => {
         const result = await X.clearDone(api, st);
         if (result.cleared.length) { await settle(); await publish(); }

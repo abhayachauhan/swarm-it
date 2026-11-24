@@ -119,7 +119,7 @@ Use this on a coordinator or ordinary conversation. Manifest workers must finish
 
 The **Agents** view keeps the workspace sidebar and gives Claude and Codex terminals a shared activity list. **All agents** shows recognised agent terminals across workspaces and current swarm history; **This swarm** shows the current swarm and its saved worker results. **Needs you** stays first, followed by **Running**, **Idle** and an expandable **Done** group. Idle terminals are not treated as successful completed tasks. Failed workers are marked Failed.
 
-Larger task cards show the workspace, tool, coordinator or worker role, task and elapsed time. Workers are indented beneath their coordinator's workspace. Click a row to reach its native terminal. **Focus / split**, shown on hover or selection, toggles the native pane zoom without destroying the split layout. Double-clicking a global directory row does the same. Completed swarm workers offer **Open result**.
+Larger task cards show the workspace, tool, coordinator or worker role, task and elapsed time. Workers are indented beneath their coordinator's workspace. Click a row to reach its native terminal. Use **Display → Dock below Workspaces** to stack Agents under the built-in workspace list on the left. The **Priority** pill lists open requests first, followed by completed workers with unread results. Completed swarm workers offer **Open result**.
 
 Stopped workers and visible question or permission menus remain in Needs you. An ordinary idle Claude prompt stays Idle even when its native status says waiting for input. Closed workers from the current swarm retain their saved results.
 
@@ -134,3 +134,10 @@ Sample tasks shown above. Your sessions and worker results fill the same view.
 Activity headings collapse and expand independently, remember your choices, and keep their live counts visible. **Display → Open wide** opens Agents in a resizable workspace pane and reuses that pane on repeated clicks. The generated top description strip has been removed; workspace brief details remain available on demand.
 
 Cards omit repeated workspace names, section states and generic session-resume banners. Ordinary sessions show a timer only while running and when Kelpi supplies a real run start time. Panel redraws recover when a pointer release is missed, and slow display-preference storage cannot leave Agents stuck at Connecting.
+
+
+## Agent maintenance
+
+**Clean** in the status bar closes idle swarm workers with saved results. It rechecks the live terminal and repository before closing. Results stay on disk. Workers with a draft, an open question, background tasks, uncommitted changes or a live child stay open.
+
+**Update** checks the native Claude and Codex installs linked from `~/.local/bin`. Click to run the native updater if a newer release is available, then resume each eligible idle conversation with its exact session ID in the same pane. The same command can pick up a newer version already installed on disk. The check skips swarm workers, their coordinators, active terminals and sessions with unfinished input. Resume uses the tool’s saved conversation and the terminal’s current configuration. Launch-only flags are not carried forward. The item's tooltip reports the outcome.

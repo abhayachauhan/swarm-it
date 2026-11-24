@@ -21,6 +21,7 @@ test('existing shared workers migrate to separate children without moving a coor
     assert.equal(childOf(api, 'unlisted').id, 'shared');
     assert.deepEqual(api.callsTo('panes.close'), []);
     assert.deepEqual(api.callsTo('groups.create'), []);
+    assert.deepEqual(api.callsTo('workspaces.create').map(c => c.args[0]), MANIFEST.workers.map(({ label: name }) => ({ name, parentID: 'ws1', focus: false, collapseParent: true })));
     assert.ok(api.callsTo('panes.moveToWorkspace').every(c => c.args[2].focus === false));
 });
 
@@ -98,6 +99,32 @@ test('a seed shell with new activity or an agent is preserved', async () => {
         assert.equal(api.paneList.find(p => p.id === 'w1').status, 'running');
     }
 });
+
+for (const [host, parentCollapsed] of [['an older daemon', undefined], ['a daemon that collapsed the parent', true], ['a daemon that kept it expanded', false]]) {
+    test(`keeps the child confirmed by ${host} and records its collapse state`, async t => {
+        const { api, store } = await migrationFixture();
+        const log = t.mock.method(console, 'info', () => {});
+        const create = api.workspaces.create;
+        api.workspaces.create = async options => {
+            const result = await create(options);
+            return { ...result, parentID: options.parentID, ...(parentCollapsed === undefined ? {} : { parentCollapsed }) };
+        };
+        const result = { ok: true, paneID: 'w1', workspaceID: 'ws-created-1', moved: true };
+        assert.deepEqual(await hideWorker(api, store, 'w1'), result);
+        assert.deepEqual(await hideWorker(api, store, 'w1'), { ...result, moved: false });
+        assert.equal(api.callsTo('workspaces.create').length, 1);
+        assert.deepEqual(api.callsTo('workspaces.remove'), []);
+        assert.deepEqual(api.callsTo('panes.close').map(c => c.args[0]), ['shell-ws-created-1']);
+        assert.equal(childOf(api, 'w1').parentID, 'ws1');
+        assert.equal(childOf(api, 'orch').id, 'ws1');
+        const placement = log.mock.calls.map(call => JSON.parse(call.arguments[0]))
+            .find(entry => entry.event === 'swarm.worker-workspace.created');
+        assert.deepEqual(placement, {
+            event: 'swarm.worker-workspace.created', count: 1, paneID: 'w1',
+            workspaceID: 'ws-created-1', parentID: 'ws1', parentCollapsed: parentCollapsed ?? null
+        });
+    });
+}
 
 test('unsupported nesting after creation removes the untouched orphan and blocks repeated creation', async () => {
     const { api, store } = await migrationFixture();

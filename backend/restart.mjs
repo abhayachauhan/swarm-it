@@ -63,6 +63,13 @@ export async function typeResumeLine(api, paneID, line, sleep = pause) {
     }
 }
 
+export const paneAgent = pane => pane?.agent ?? pane?.agentKind ?? null;
+export const matchesMaintenancePane = (pane, expected) => pane
+    && ['idle', 'waitingForInput'].includes(pane.status) && !(pane.backgroundTasks > 0)
+    && !(pane.isFocused && pane.isActiveWorkspace)
+    && paneAgent(pane) === paneAgent(expected) && pane.agentSessionID === expected.agentSessionID
+    && pane.workingDirectory === expected.workingDirectory;
+
 async function freshPane(api, paneID) {
     try { return (await api.panes.list()).find(p => p?.id === paneID) ?? null; } catch { return null; }
 }
@@ -91,6 +98,7 @@ export async function restartAgent(api, store, paneID, deps = {}) {
         ?? (typeof session === 'string' && SESSION_ID.test(session) ? (await findTranscript(session))?.agent : null);
     if (!['claude', 'codex'].includes(agent)) return done(fail('cannot identify Claude or Codex in this pane', 'UNSUPPORTED_AGENT'));
     const codex = agent === 'codex';
+    if (deps.maintenance && !matchesMaintenancePane(pane, deps.maintenance)) return done(fail('The idle session changed before updating.', 'SESSION_CHANGED'));
     const name = codex ? 'Codex' : 'Claude';
     const showsInput = text => codex ? codexInput(text) !== null : showsClaudeInput(text);
     if (parsePrompt(screen) || parseCodexPrompt(screen)) return done(fail(`${name} is asking for input; answer it first`, 'PROMPT_OPEN'));
@@ -115,8 +123,10 @@ export async function restartAgent(api, store, paneID, deps = {}) {
     if (deps.fresh && (!atInput || deps.fresh.session !== session || deps.fresh.agent !== agent)) return done(fail('The source session changed; the saved summary was kept.', 'SESSION_CHANGED'));
     const quote = value => "'" + value.replace(/'/g, "'\"'\"'") + "'";
     const freshPrompt = deps.fresh ? `Read ${deps.fresh.path} and follow its continuation instructions.` : null;
-    const resumeLine = deps.fresh ? `${deps.fresh.cwd ? `cd ${quote(deps.fresh.cwd)} && ` : ""}${agent}${codex ? "" : " --model opus"} ${quote(freshPrompt)}` : codex ? `codex resume ${session}` : `claude --resume ${session}`;
+    const executable = deps.executable ? quote(deps.executable) : agent;
+    const resumeLine = deps.fresh ? `${deps.fresh.cwd ? `cd ${quote(deps.fresh.cwd)} && ` : ""}${agent}${codex ? "" : " --model opus"} ${quote(freshPrompt)}` : codex ? `${executable} resume ${session}` : `${executable} --resume ${session}`;
     if (textProblem(resumeLine)) return done(fail('The launch command is invalid; the source was left open.', 'BAD_TEXT'));
+    if (deps.maintenance && (!atInput || session !== deps.maintenance.agentSessionID)) return done(fail('The original conversation is no longer idle.', 'SESSION_CHANGED'));
     if (!atInput) {
         if (pane.agentSessionID) return done(fail(`${name} is busy in this pane; wait for it to finish`, 'BUSY'));
         const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
@@ -129,6 +139,18 @@ export async function restartAgent(api, store, paneID, deps = {}) {
         if ((codex && !read.altScreen) || !Number.isSafeInteger(read.revision) || read.revision < 0) return done(fail('The source changed before clearing; try again.', 'SESSION_CHANGED'));
         if (!(codex ? codexInputEmpty(read.text) : claudeInputEmpty(read.text) || suggestionRevision === read.revision) || parsePrompt(read.text) || parseCodexPrompt(read.text)
             || BACKGROUND.test(read.text) || /(?:esc|ctrl\+c) to interrupt/i.test(read.text.split("\n").filter(l => l.trim()).slice(-12).join("\n"))) return done(fail('The source is no longer idle with an empty input box.', 'SESSION_CHANGED'));
+        suggestionRevision = read.revision;
+    }
+    if (deps.maintenance) {
+        const current = await freshPane(api, paneID);
+        const read = await api.terminal.read(paneID);
+        if (deps.cancelled?.() || !matchesMaintenancePane(current, deps.maintenance)
+            || !Number.isSafeInteger(read.revision) || read.revision < 0
+            || !(codex ? read.altScreen && codexInputEmpty(read.text) : claudeInputEmpty(read.text))
+            || parsePrompt(read.text) || parseCodexPrompt(read.text)
+            || BACKGROUND.test(read.text) || /(?:esc|ctrl\+c) to interrupt/i.test(read.text.split('\n').slice(-12).join('\n'))) {
+            return done(fail('The idle session changed before updating.', 'SESSION_CHANGED'));
+        }
         suggestionRevision = read.revision;
     }
     if (deps.deadline && Date.now() >= deps.deadline - 2500) return done(fail('The restart deadline was reached; the source was left open.', 'TIMEOUT'));
@@ -150,10 +172,21 @@ export async function restartAgent(api, store, paneID, deps = {}) {
             try { text = await capturePane(api, paneID, 40); } catch { continue; }
             const goodbye = codex ? text.includes(`Session ID: ${session}`) : /Resume this session with/.test(text);
             if (showsInput(text) || (now.agentSessionID && !goodbye)) continue;
+            if (deps.maintenance && (!goodbye || (!codex && !text.includes(`claude --resume ${session}`)) || now.workingDirectory !== deps.maintenance.workingDirectory)) continue;
             if (deps.deadline && Date.now() >= deps.deadline - 2500) return fail('Restart timed out; use the saved summary to continue.', 'TIMEOUT');
             await sleep(SHELL_SETTLE_MS);
             const sent = await typeResumeLine(api, paneID, resumeLine, sleep);
-            return sent.ok ? { ok: true, paneID, session, resumed: true } : sent;
+            if (!sent.ok || !deps.maintenance) return sent.ok ? { ok: true, paneID, session, resumed: true } : sent;
+            for (let elapsed = 0; elapsed < 20_000; elapsed += EXIT_POLL_MS) {
+                await sleep(EXIT_POLL_MS);
+                const resumed = await freshPane(api, paneID);
+                if (resumed?.agentSessionID && resumed.agentSessionID !== session) break;
+                const read = await capturePane(api, paneID, PROMPT_CAPTURE_LINES).catch(() => '');
+                if (resumed?.agentSessionID === session && paneAgent(resumed) === agent && showsInput(read)) {
+                    return { ok: true, paneID, session, resumed: true };
+                }
+            }
+            return fail(`${name} was sent a resume command for session ${session}. Open the pane to verify it.`, 'RESUME_UNCONFIRMED');
         }
         return fail(`${name} did not exit within ${Math.round(timeoutMs / 1000)}s; nothing more was typed`, 'EXIT_TIMEOUT');
     })();

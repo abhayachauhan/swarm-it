@@ -11,9 +11,11 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const script = path.join(here, 'swarm-spawn')
 
+const COLLAPSE_WARNING = 'Warning: the daemon does not support --collapse-parent. Workspace w1 (CHILD) was created.'
+
 const ME = { id: 'ORCH', label: 'coordinator', workspace_id: 'WS', workspace_name: 'Warm pool', group_id: 'G' }
 
-function stub(workspaces) {
+function stub(workspaces, { collapseParent = false, olderDaemon = false, createError = '', errorParent = '' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-spawn-'))
   const bin = path.join(home, 'bin')
   fs.mkdirSync(bin)
@@ -25,7 +27,17 @@ case "$1 $2" in
   "pane id") echo ORCH ;;
   "pane list") if [ "$3" = "--workspace" ]; then echo '[{"id":"CREATED","workspace_id":"CHILD"}]'; else cat "${home}/panes.json"; fi ;;
   "workspace list") cat "${home}/workspaces.json" ;;
-  "workspace create") echo '{"workspace_id":"CHILD","parent_id":"WS"}' ;;
+  "workspace create")
+    if [ "$3" = "--help" ]; then
+      echo 'Usage: kelpi workspace create --parent <id>${collapseParent ? ' [--collapse-parent]' : ''}'
+    elif ${createError ? 'true' : 'false'}; then
+      ${errorParent ? `echo '{"ok":true,"workspace_id":"CHILD","parent_id":"${errorParent}"}'` : ':'}
+      echo '${createError}' >&2
+      exit 1
+    else
+      echo '{"ok":true,"workspace_id":"CHILD","parent_id":"WS"${collapseParent && !olderDaemon ? ',"parent_collapsed":true' : ''}}'
+      ${olderDaemon ? `echo '${COLLAPSE_WARNING}' >&2` : ':'}
+    fi ;;
   "pane create") echo '{"pane_id":"CREATED"}' ;;
   "pane split") echo '{"pane_id":"SPLIT"}' ;;
 esac
@@ -75,11 +87,67 @@ test('each worker uses the initial shell in a child workspace, without a shared 
     const { status, stdout, stderr, calls } = spawn(s)
     assert.equal(status, 0, stderr)
     assert.equal(stdout.trim(), 'CREATED:w1')
-    assert.ok(calls.includes(`workspace create --parent WS --name w1 --path ${s.home} --no-repo --json`), calls.join('\n'))
+    assert.deepEqual(calls.filter(c => c.startsWith('workspace create ')), [
+      'workspace create --help',
+      `workspace create --parent WS --name w1 --path ${s.home} --no-repo --json`
+    ])
     assert.ok(calls.includes('pane list --workspace CHILD --json'))
     assert.ok(!calls.some(c => /^pane (split|create)/.test(c) || c.includes('move') || c.includes('--focus')), calls.join('\n'))
     const manifest = JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8'))
     assert.deepEqual(manifest.workers.map(w => w.paneID), ['CREATED'])
+  }
+})
+
+test('a supported Kelpi collapses the parent during the single background create', t => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }], { collapseParent: true })
+  t.after(() => fs.rmSync(s.home, { recursive: true, force: true }))
+  const { status, stdout, stderr, calls } = spawn(s)
+  assert.equal(status, 0, stderr)
+  assert.equal(stdout.trim(), 'CREATED:w1')
+  assert.deepEqual(calls.filter(c => c.startsWith('workspace create ')), [
+    'workspace create --help',
+    `workspace create --parent WS --name w1 --path ${s.home} --no-repo --json --collapse-parent`
+  ])
+})
+
+test('a newer CLI keeps the nested child already confirmed by an older daemon', t => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }], {
+    collapseParent: true, olderDaemon: true
+  })
+  t.after(() => fs.rmSync(s.home, { recursive: true, force: true }))
+  const { status, stdout, stderr, calls } = spawn(s)
+  assert.equal(status, 0, stderr)
+  assert.equal(stdout.trim(), 'CREATED:w1')
+  assert.equal(stderr.trim(), COLLAPSE_WARNING)
+  assert.deepEqual(calls.filter(c => c.startsWith('workspace create ')), [
+    'workspace create --help',
+    `workspace create --parent WS --name w1 --path ${s.home} --no-repo --json --collapse-parent`
+  ])
+  assert.equal(calls.some(c => c.startsWith('workspace delete')), false)
+  const manifest = JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8'))
+  assert.deepEqual(manifest.workers.map(w => w.paneID), ['CREATED'])
+})
+
+test('a create failure leaves the previous result and manifest alone without retrying', t => {
+  for (const [createError, errorParent] of [
+    ['create reply was lost', ''],
+    ['terminal startup failed', 'WS']
+  ]) {
+    const s = stub([{ id: 'WS', name: 'Warm pool' }], { collapseParent: true, createError, errorParent })
+    t.after(() => fs.rmSync(s.home, { recursive: true, force: true }))
+    const results = path.join(s.home, '.kelpi-swarm', 'results')
+    fs.mkdirSync(results, { recursive: true })
+    fs.writeFileSync(path.join(results, 'w1.md'), 'previous result')
+    const { status, stderr, calls } = spawn(s)
+    assert.equal(status, 1)
+    assert.equal(stderr.trim(), `${createError}\nKelpi did not create the child workspace; no worker was registered`)
+    assert.deepEqual(calls.filter(c => c.startsWith('workspace create ')), [
+      'workspace create --help',
+      `workspace create --parent WS --name w1 --path ${s.home} --no-repo --json --collapse-parent`
+    ])
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'))).workers, [])
+    assert.equal(fs.readFileSync(path.join(results, 'w1.md'), 'utf8'), 'previous result')
+    assert.equal(calls.some(c => c.startsWith('pane send')), false)
   }
 })
 

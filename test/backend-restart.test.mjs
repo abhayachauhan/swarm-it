@@ -278,3 +278,35 @@ test('a space at a shell wrap boundary is preserved before the launch is submitt
  api.terminal.send=async(p,text,o)=>{const r=await send(p,text,o);if(o?.bare){const cut=text.indexOf(' and ')+1;api.captureStore.c1='$ '+text.slice(0,cut)+'\n'+text.slice(cut);}return r;};
  const {typeResumeLine}=await import('../backend/restart.mjs');assert.equal((await typeResumeLine(api,'c1',"claude --model opus 'Read /tmp/summary.md and follow it.'",async()=>{})).ok,true);assert.deepEqual(keys(api),['enter']);
 });
+
+for (const agent of ['claude', 'codex']) {
+    test(`maintenance resumes the exact ${agent} session and verifies the returning composer`, async () => {
+        const api = setup({ screen: agent === 'codex' ? codexScreen() : claudeScreen(),
+            pane: { agent, isActiveWorkspace: false, workingDirectory: '/wt/c1' } });
+        api.terminal.read = async () => ({ text: api.captureStore.c1, revision: 9, altScreen: true });
+        const key = api.terminal.sendKey;
+        api.terminal.sendKey = async (id, name) => {
+            await key(id, name);
+            if (name === 'enter') {
+                api.paneList[0].agentSessionID = SID;
+                api.captureStore.c1 = agent === 'codex' ? codexScreen() : claudeScreen();
+            }
+        };
+        const original = { ...api.paneList[0] };
+        const run = await restartAgent(api, createStore(api), 'c1', {
+            ...noSleep, maintenance: original, executable: `/tools/${agent}`
+        });
+        assert.deepEqual(await run.finished, { ok: true, paneID: 'c1', session: SID, resumed: true });
+        assert.deepEqual(sent(api).slice(-2), ['/exit', `'/tools/${agent}' ${agent === 'codex' ? 'resume' : '--resume'} ${SID}`]);
+    });
+}
+
+test('maintenance refuses to quit when the idle composer changes at the final read', async () => {
+    const api = setup({ pane: { isActiveWorkspace: false, workingDirectory: '/wt/c1' } });
+    api.terminal.read = async () => ({ text: claudeScreen('draft entered while updating'), revision: 10, altScreen: true });
+    const original = { ...api.paneList[0] };
+    const run = await restartAgent(api, createStore(api), 'c1', { ...noSleep, maintenance: original });
+    assert.equal((await run.finished).code, 'SESSION_CHANGED');
+    assert.deepEqual(sent(api), []);
+    assert.equal(api.paneList[0].agentSessionID, SID);
+});

@@ -79,7 +79,7 @@ export async function bootApp(options = {}) {
         layout: options.layout,
         openView: options.openView,
         context: options.context || {paneID:'test-pane'},
-        ui: { getPaneChrome: async () => { throw new AppError('Presenter-only API'); }, reveal: async paneID => { reveals.push(paneID); if (options.revealFails) throw new AppError(options.revealFails); } },
+        ui: { ...options.ui, getPaneChrome: async () => { throw new AppError('Presenter-only API'); }, reveal: async paneID => { reveals.push(paneID); if (options.revealFails) throw new AppError(options.revealFails); } },
     };
     const window = { kelpi: api, addEventListener(name, fn) { (listeners[name] ??= []).push(fn); }, focus() {} };
     const dispatch = (name, event = {}) => {

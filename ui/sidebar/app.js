@@ -3,6 +3,7 @@
 (() => {
     const L = globalThis.SwarmLogic;
     const api = window.kelpi;
+    const rightSidebar = api.context?.viewID === 'local.swarm-view.rail' && !api.context?.paneID;
     const $ = id => document.getElementById(id);
     const refs = { head: $('head'), panel: $('panel'), list: $('list'), footer: $('footer') };
     const SNAPSHOT_EVENTS = ['local.swarm-view.snapshot', 'snapshot'];
@@ -28,7 +29,6 @@
     let notice = '', noticeTimer = null, pointerActive = false, renderPending = false, busy = false, disposed = false;
     let wideBusy = false, widePaneID = null;
     let releaseTimer = null;
-    let focusBusy = false, lastFocusPane = null, lastFocusAt = -Infinity;
     const disposers = [];
     const guard = L.createButtonGuard();
     let unlockTimer = null;
@@ -46,7 +46,7 @@
         const selection = focusedQuestion ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
         const hadFocus = !!app && app.contains(document.activeElement);
         if (app) app.setAttribute('style', `font-size: ${textSize}px`);
-        L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog, questionDrafts }, handlers);
+        L.render(document, refs, { snapshot, ui, notice, receivedAtMs, nowMs, guard, autoLog, questionDrafts, rightSidebar, docked: api.context?.viewID === 'local.swarm-view.rail-left' }, handlers);
         markOverflow();
         if (focusedQuestion) {
             for (const input of document.querySelectorAll('[data-question-key]')) if (input.getAttribute('data-question-key') === focusedQuestion) {
@@ -111,7 +111,7 @@
         const accepted = L.acceptSnapshot(snapshot, next);
         if (accepted === snapshot) return;
         snapshot = accepted; receivedAtMs = Date.now();
-        ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui));
+        ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui, rightSidebar));
         // The duration menu belongs to the off state.
         if (ui.autoMenuOpen && snapshot.autoApprove && snapshot.autoApprove.on) ui = { ...ui, autoMenuOpen: false };
         const pendingDrafts = new Set((snapshot.codexQuestions || []).flatMap(r => r.questions.map(q => `${r.threadID}:${r.requestID}:${q.id}`)));
@@ -177,34 +177,39 @@
         else setNotice(`${label}: this Kelpi cannot reveal a pane from the rail.`);
     }
 
+    let docking = false;
+    async function dockAgents(layout = 'workspace-agents') {
+        if (docking || disposed) return;
+        const uiAPI = api.ui;
+        if (typeof uiAPI?.selectView !== 'function') return setNotice('This Kelpi build cannot dock Agents below Workspaces.');
+        docking = true;
+        try {
+            await uiAPI.selectView('sidebar.primary', `local.swarm-view.${layout}`);
+            const chrome = await uiAPI.getChrome?.();
+            if (chrome?.sidebars?.right?.visible && chrome.sidebars.right.viewID === 'local.swarm-view.rail') {
+                await uiAPI.executeChromeCommand('kelpi.sidebar.right');
+            }
+        } catch (cause) { setNotice(`Dock Agents: ${cause instanceof Error ? cause.message : String(cause)}`); }
+        finally { docking = false; }
+    }
+
     const handlers = {
         onTerminalSize: size => { void run('Terminal text', { command: `${L.CMD}agent-appearance`, args: { size } }); },
-        onFocusAgent: async paneID => {
-            if (disposed || focusBusy || (lastFocusPane === paneID && Date.now() - lastFocusAt < 400)) return;
-            focusBusy = true; lastFocusPane = paneID; lastFocusAt = Date.now();
-            try {
-                if (typeof api.ui?.reveal !== 'function') { setNotice('This Kelpi cannot reveal a terminal from Agents.'); return; }
-                ui = { ...ui, selectedPaneID: paneID }; draw();
-                await api.ui.reveal(paneID);
-                if (disposed) return;
-                if (typeof api.layout?.zoom !== 'function') { setNotice('Use Kelpi’s pane zoom control to focus this terminal.'); return; }
-                let native;
-                try { native = await api.snapshot?.(); } catch { setNotice('Terminal opened; use its native zoom control because the layout could not be read.'); return; }
-                if (disposed) return;
-                const workspace = (native?.state?.workspaces || native?.workspaces || []).find(w => [...(w.panes || []), ...(w.parkedPanes || [])].some(p => p.id === paneID));
-                if (!workspace) { setNotice('Terminal opened; use its native zoom control on this Kelpi version.'); return; }
-                const zoomed = workspace.zoomedPaneID ?? workspace.zoomed_pane_id;
-                if (workspace && workspace.panes.length <= 1) { setNotice('This workspace already has one terminal.'); return; }
-                if (zoomed && zoomed !== paneID) await api.layout.zoom(zoomed);
-                if (disposed) return;
-                const result = await api.layout.zoom(paneID);
-                if (result?.zoomedPaneID === null) setNotice('Split layout restored.');
-            } catch (error) { setNotice(`Focus: ${error.message}`); }
-            finally { focusBusy = false; }
+        onTools: () => { ui = { ...ui, toolsOpen: !ui.toolsOpen }; draw(); },
+        onPriorityToggle: () => { ui = { ...ui, priorityOpen: !ui.priorityOpen, priorityAll: false }; draw(); },
+        onPriorityMore: () => { ui = { ...ui, priorityAll: true }; draw(); },
+        onPriorityOpen: entry => {
+            ui = L.setRailFocused({ ...ui, selectedPaneID: entry.paneID }, true, Date.now());
+            draw();
+            const row = [...(snapshot?.agents || []), ...(snapshot?.workers || [])].find(value => value.paneID === entry.paneID);
+            if (row?.paneClosed) void openWorker(entry.paneID);
+            else reveal(entry.paneID, 'Priority');
         },
-        onScope: all => { if ((ui.directory !== false) === all) return; ui = { ...ui, directory: all }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
+        onSidebarSpace: moreAgents => { void dockAgents(moreAgents ? 'agents-more-room' : 'workspace-agents'); },
+        onDockAgents: () => { void dockAgents(); },
+        onScope: all => { if ((ui.directory !== false) === all) return; ui = { ...ui, directory: all }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui, rightSidebar)); savePreferences(); draw(); },
         onDisplay: () => { ui = L.markLayout({ ...ui, displayOpen: !ui.displayOpen }, Date.now()); draw(); },
-        onAgentSelect: paneID => { const row = snapshot?.agents?.find(w => w.paneID === paneID); if (row?.paneClosed) { void openWorker(paneID); return; } ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now()); draw(); reveal(paneID, 'Agent'); },
+        onAgentSelect: paneID => { const row = [...(snapshot?.agents || []), ...(snapshot?.workers || [])].find(w => w.paneID === paneID); if (row?.paneClosed) { void openWorker(paneID); return; } ui = L.setRailFocused({ ...ui, selectedPaneID: paneID }, true, Date.now()); draw(); reveal(paneID, 'Agent'); },
         onOpenWide: async () => {
             if (wideBusy || disposed) return;
             if (typeof api.openView !== 'function') { setNotice('Open Agents from the pane view picker for a wider view.'); return; }
@@ -227,9 +232,9 @@
             const closed = new Set(ui.collapsedSections || []);
             if (closed.has(key)) closed.delete(key); else closed.add(key);
             ui = { ...ui, collapsedSections: [...closed] };
-            ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw();
+            ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui, rightSidebar)); savePreferences(); draw();
         },
-        onToggleDone: () => { ui = { ...ui, doneOpen: !ui.doneOpen }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui)); savePreferences(); draw(); },
+        onToggleDone: () => { ui = { ...ui, doneOpen: !ui.doneOpen }; ui = L.reconcile(ui, L.agentSnapshot(snapshot, ui, rightSidebar)); savePreferences(); draw(); },
         onTextSize: delta => { textSize = Math.max(13, Math.min(20, textSize + delta)); savePreferences(); draw(); },
         onQuestionChoice: (item, option) => { void run('Answer Codex', { command: `${L.CMD}answer-codex-question`, args: { itemID: item.id, promptHash: item.promptHash, option } }); },
         onTrustFolder: item => { void run('Trust folder', { command: `${L.CMD}trust-folder`, args: { itemID: item.id, promptHash: item.promptHash, confirm: true } }); },
@@ -308,7 +313,7 @@
         const target = event.target;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
         if (event.target?.closest?.('button, a, input, textarea, select')) return;
-        const out = L.reduceKey(ui, L.agentSnapshot(snapshot, ui), { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, nowMs: Date.now() });
+        const out = L.reduceKey(ui, L.agentSnapshot(snapshot, ui, rightSidebar), { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, nowMs: Date.now() });
         if (!out.handled) return;
         event.preventDefault();
         ui = out.ui;
@@ -340,7 +345,7 @@
     // The backend's focus-rail command asks this view to take the keyboard.
     function onFocusRequest() {
         try { window.focus(); $('app').focus({ preventScroll: true }); } catch { /* best effort */ }
-        ui = L.reconcile(L.setRailFocused(ui, true, Date.now()), L.agentSnapshot(snapshot, ui));
+        ui = L.reconcile(L.setRailFocused(ui, true, Date.now()), L.agentSnapshot(snapshot, ui, rightSidebar));
         draw();
     }
 
@@ -356,7 +361,7 @@
     function tick() {
         if (!snapshot || disposed) return;
         const now = Date.now();
-        for (const worker of L.agentSnapshot(snapshot, ui).workers) {
+        for (const worker of L.agentSnapshot(snapshot, ui, rightSidebar).workers) {
             const node = document.querySelector(`[data-elapsed-pane="${CSS.escape(worker.paneID)}"]`);
             if (node) node.textContent = L.formatElapsed(L.elapsedNow(worker, receivedAtMs, now));
         }
@@ -380,6 +385,9 @@
         ui = { ...ui, directory: display.directory, collapsedSections: display.collapsedSections, doneOpen: display.doneOpen };
         for (const name of SNAPSHOT_EVENTS) disposers.push(api.events.on(name, event => adopt(event.data)));
         disposers.push(api.events.on(FOCUS_EVENT, onFocusRequest));
+        if (rightSidebar) {
+            for (const name of ['dock-agents', 'local.swarm-view.dock-agents']) disposers.push(api.events.on(name, () => { void dockAgents(); }));
+        }
         disposers.push(api.events.on('gap', () => { void loadState(); }));
         disposers.push(api.events.on('services.invalidated', () => { void loadState(); }));
         // A narrower rail wraps a clamped command further: measure the overflow again whenever the list is resized.

@@ -9,11 +9,20 @@
   "contributes": {
     "views": [
       { "id": "local.swarm-view.rail", "title": "Agents", "entry": "ui/sidebar/index.html", "stateVersion": 1, "placements": ["sidebar.secondary", "pane"] },
+      { "id": "local.swarm-view.rail-left", "title": "Agents", "entry": "ui/sidebar/index.html", "stateVersion": 1, "placements": ["local.swarm-view.left-agents", "local.swarm-view.more-agents"] },
       { "id": "local.swarm-view.brief", "title": "Workspace brief", "entry": "ui/brief/index.html", "stateVersion": 1, "placements": ["pane"] },
       { "id": "local.swarm-view.thread", "title": "Swarm thread", "entry": "ui/thread/index.html", "stateVersion": 1, "placements": ["pane"] },
       { "id": "local.swarm-view.run", "title": "Run suggested command", "entry": "ui/run/index.html", "stateVersion": 1, "placements": ["pane"] }
     ],
     "containers": [
+      { "id": "local.swarm-view.workspace-agents", "title": "Workspaces and Agents", "placements": ["sidebar.primary"], "layout": "column", "slots": [
+        { "id": "local.swarm-view.left-workspaces", "title": "Workspaces", "defaultView": "kelpi.workspaces", "weight": 2 },
+        { "id": "local.swarm-view.left-agents", "title": "Agents", "defaultView": "local.swarm-view.rail-left", "weight": 1 }
+      ] },
+      { "id": "local.swarm-view.agents-more-room", "title": "Workspaces and Agents (more Agents)", "placements": ["sidebar.primary"], "layout": "column", "slots": [
+        { "id": "local.swarm-view.more-workspaces", "title": "Workspaces", "defaultView": "kelpi.workspaces", "weight": 1 },
+        { "id": "local.swarm-view.more-agents", "title": "Agents", "defaultView": "local.swarm-view.rail-left", "weight": 2 }
+      ] },
       { "id": "local.swarm-view.brief-toolbar", "title": "Toolbar", "placements": ["topbar"], "bandHeights": { "topbar": 32 }, "layout": "column", "slots": [
         { "id": "local.swarm-view.brief-toolbar-main", "title": "Toolbar", "defaultView": "kelpi.topbar", "weight": 1 }
       ] }
@@ -30,6 +39,9 @@
       { "id": "local.swarm-view.handoff.pane", "command": "local.swarm-view.request-handoff", "placement": "pane", "group": "Swarm", "order": 20, "when": { "pane.type": "shell" } }
     ],
     "commands": [
+      { "id": "local.swarm-view.dock-agents", "title": "Put Agents below Workspaces" },
+      { "id": "local.swarm-view.clean-completed", "title": "Clean finished swarm workers" },
+      { "id": "local.swarm-view.update-agents", "title": "Update idle Claude and Codex sessions" },
       { "id": "local.swarm-view.agent-appearance", "title": "Agents: set terminal text size" },
       { "id": "local.swarm-view.fresh-session", "title": "Fresh session and continue (summarise context)", "icon": "restart" },
       { "id": "local.swarm-view.focus-rail", "title": "Swarm: focus thread rail", "shortcut": "ctrl+alt+j" },
@@ -68,6 +80,8 @@
       { "id": "local.swarm-view.permissions", "title": "Swarm auto-approve: allow safe Claude and Codex permission requests while Auto is on", "service": "kelpi.agent.permissions", "version": 1, "methods": ["decide"] }
     ],
     "items": [
+      { "id": "local.swarm-view.clean", "placement": "statusbar", "text": "Clean", "tooltip": "Close finished swarm workers", "tone": "default", "command": "local.swarm-view.clean-completed" },
+      { "id": "local.swarm-view.update", "placement": "statusbar", "text": "Update", "tooltip": "Update idle Claude and Codex sessions", "tone": "default", "command": "local.swarm-view.update-agents" },
       { "id": "local.swarm-view.counts", "placement": "statusbar", "text": "Swarm 0/0/0", "tooltip": "Swarm: waiting / running / finished", "tone": "default", "command": "local.swarm-view.focus-rail" }
     ],
     "settings": {

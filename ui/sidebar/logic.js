@@ -92,7 +92,7 @@
      *   done:    no rows, only `count`: how many workers finished (done or error).
      * Archived workers are omitted everywhere.
      */
-    const agentSnapshot = (snapshot, ui) => !snapshot ? snapshot : { ...snapshot, doneOpen: !!ui.doneOpen, collapsedSections: ui.collapsedSections || [], ...(snapshot.agents && ui.directory !== false ? { workers: snapshot.agents.map(w => ({...w, nativeNavigation: !w.paneClosed})), orchestrator: null, otherSwarms: [] } : {}) };
+    const agentSnapshot = (snapshot, ui, allAgents = false) => !snapshot ? snapshot : { ...snapshot, doneOpen: !!ui.doneOpen, collapsedSections: ui.collapsedSections || [], ...(snapshot.agents && (allAgents || ui.directory !== false) ? { workers: snapshot.agents.map(w => ({...w, nativeNavigation: !w.paneClosed})), orchestrator: null, otherSwarms: [] } : {}) };
     function sections(snapshot) {
         if (!snapshot) return [];
         const needs = [];
@@ -616,6 +616,10 @@
         // Name the worker; the pane id stays available as a tooltip.
         const pane = h(doc, 'div', 'att-pane', opts.title || String(item.paneID ?? '').slice(0, 8));
         pane.setAttribute('title', String(item.paneID ?? ''));
+        const indicator = h(doc, 'span', 'dot dot-error');
+        indicator.setAttribute('role', 'img');
+        indicator.setAttribute('aria-label', 'Needs your attention');
+        pane.append(indicator);
         root.append(pane);
         const unrecognised = item.approvable === false;
         const nativeQuestion = item.nativeQuestion;
@@ -710,9 +714,21 @@
         node.dataset.state = row.activity === 'idle' && !isFinished(row) ? 'idle' : row.state;
         if (row.parent) node.dataset.parent = row.parent;
         const top = h(doc, 'span', 'row-top');
-        top.append(h(doc, 'span', `dot dot-${!isFinished(row) && (row.activity === 'idle' || row.state === 'waiting') ? 'idle' : row.state}`));
+        const controls = view.docked ? h(doc, 'span', 'docked-actions') : top;
+        const showControls = !view.docked || view.ui.toolsOpen || view.ui.closeAsk?.paneID === row.paneID;
+        if (view.docked) node.dataset.docked = 'true';
+        const status = !isFinished(row) && (row.activity === 'idle' || row.state === 'waiting') ? 'idle' : row.state;
+        const dot = h(doc, 'span', `dot dot-${status}`);
+        dot.setAttribute('role', 'img');
+        dot.setAttribute('aria-label', { done: 'Done', running: 'Running', error: 'Failed', idle: 'Idle' }[status] ?? status);
+        dot.setAttribute('title', dot.getAttribute('aria-label'));
+        if (row.agent === 'codex' || row.agent === 'claude') {
+            const mark = h(doc, 'span', 'agent-mark', row.agent === 'codex' ? '>_' : '✳');
+            mark.dataset.agent = row.agent;
+            mark.setAttribute('aria-hidden', 'true');
+            top.append(mark);
+        }
         const name = h(doc, 'span', 'name', row.label || row.paneID);
-        name.setAttribute('title', row.label || row.paneID);
         top.append(name);
         if (!row.directory || (row.activity === 'running' && !isFinished(row) && Number.isFinite(row.elapsedSeconds))) {
             const time = h(doc, 'span', 'time', formatElapsed(elapsedNow(row, view.receivedAtMs, view.nowMs)));
@@ -720,9 +736,9 @@
             time.setAttribute('title', row.directory ? 'Time in the current run' : 'Time since this worker started');
             top.append(time);
         }
-        if (isFinished(row) && !row.directory && (!row.paneClosed || row.state === 'done')) {
-            top.append(button(doc, 'Open result', 'btn', () => (handlers.onOpenResult || handlers.onOpen)(row.paneID)));
-        } else if (!row.directory) {
+        if (showControls && isFinished(row) && !row.directory && (!row.paneClosed || row.state === 'done')) {
+            controls.append(button(doc, 'Open result', 'btn', () => (handlers.onOpenResult || handlers.onOpen)(row.paneID)));
+        } else if (showControls && !row.directory) {
             const asked = view.ui && view.ui.closeAsk && view.ui.closeAsk.paneID === row.paneID;
             {
                 const actions = h(doc, 'span', 'row-actions row-hover');
@@ -737,16 +753,20 @@
                 } else {
                     actions.append(button(doc, 'Stop', 'btn', () => handlers.onCloseAsk(row.paneID), 'Stop this worker (X)'));
                 }
-                top.append(actions);
+                controls.append(actions);
             }
         }
-        if (row.directory || row.nativeNavigation) top.append(button(doc, 'Focus / split', 'btn row-hover', () => handlers.onFocusAgent?.(row.paneID), `Focus ${row.label || row.paneID} or restore its split layout`));
-        node.append(top);
         const details = agentDetails(row);
-        node.append(h(doc, 'div', 'agent-meta', details.meta));
-        if (details.task) node.append(h(doc, 'span', 'last', details.task));
-        node.addEventListener('click', () => (row.directory || (!!view.snapshot?.agents && view.ui.directory !== false) ? handlers.onAgentSelect || handlers.onSelect : handlers.onSelect)(row.paneID));
-        node.addEventListener('dblclick', () => row.directory || row.nativeNavigation ? handlers.onFocusAgent?.(row.paneID) : handlers.onOpen(row.paneID));
+        name.setAttribute('title', [row.label || row.paneID, details.meta, details.task].filter(Boolean).join(' · '));
+        const task = details.task ? h(doc, 'span', 'last', details.task) : null;
+        if (task && !view.docked) top.append(task);
+        top.append(dot);
+        node.append(top);
+        if (view.docked) {
+            if (task) node.append(task);
+            if (showControls && !row.directory) node.append(controls);
+        }
+        node.addEventListener('click', () => (handlers.onAgentSelect || handlers.onSelect)(row.paneID));
         scopeControls(node, row.paneID);
         return node;
     }
@@ -771,7 +791,7 @@
         if (!on) toggle.setAttribute('aria-expanded', ui.autoMenuOpen ? 'true' : 'false');
         const nodes = [toggle];
         const count = auto ? auto.logCount : 0;
-        if (count) {
+        if (count && !view.rightSidebar) {
             const link = button(doc, 'log', 'btn btn-link', () => handlers.onAutoLogToggle(), `Auto-approved (${count}): click to ${ui.autoLogOpen ? 'hide' : 'show'} the log`);
             link.setAttribute('aria-expanded', ui.autoLogOpen ? 'true' : 'false');
             nodes.push(link);
@@ -859,9 +879,11 @@
      */
     function buildHead(doc, view, handlers) {
         const { snapshot, ui } = view;
-        const home = button(doc, '⌂ Coordinator', 'btn btn-home', () => handlers.onHome(),
-            snapshot && snapshot.orchestrator ? `Back to the coordinator pane (${snapshot.orchestrator.label})` : 'No coordinator pane known yet: closes the worker view');
-        const nodes = [home];
+        const nodes = [];
+        if (!view.rightSidebar) {
+            nodes.push(button(doc, '⌂ Coordinator', 'btn btn-home', () => handlers.onHome(),
+                snapshot && snapshot.orchestrator ? `Back to the coordinator pane (${snapshot.orchestrator.label})` : 'No coordinator pane known yet: closes the worker view'));
+        }
         const warnings = warningsOf(snapshot);
         if (warnings.length) {
             const warn = button(doc, `⚠ ${warnings.length}`, 'btn btn-warn', () => handlers.onWarnings(), warnings.join('\n'));
@@ -946,9 +968,69 @@
         return cards;
     }
 
+    function priorityEntries(snapshot) {
+        const agents = new Map([...(snapshot?.workers || []), ...(snapshot?.agents || [])].map(row => [row.paneID, row]));
+        const items = (snapshot?.priority || snapshot?.attention || []).filter(item => !item.handledAt &&
+            (item.type === 'Request' || (item.type === 'Complete' && agents.get(item.paneID)?.state === 'done')));
+        const byTime = (a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''));
+        const requests = items.filter(item => item.type === 'Request').sort(byTime);
+        const finished = items.filter(item => item.type === 'Complete').sort((a, b) => byTime(b, a));
+        const seen = new Set();
+        return [...requests, ...finished].flatMap(item => {
+            if (seen.has(item.paneID)) return [];
+            seen.add(item.paneID);
+            const row = agents.get(item.paneID);
+            return [{ paneID: item.paneID, label: row?.label || item.paneLabel || (snapshot.orchestrator?.paneID === item.paneID ? snapshot.orchestrator.label : item.paneID),
+                agent: row?.agent || item.agent, request: item.type === 'Request', createdAt: item.createdAt }];
+        });
+    }
+
+    function buildPriority(doc, view, handlers) {
+        const entries = priorityEntries(view.snapshot);
+        if (!entries.length) return null;
+        const box = h(doc, 'div', 'priority');
+        if (view.rightSidebar) box.setAttribute('data-needs-you', view.ui.priorityOpen === true ? 'open' : 'closed');
+        const toggle = button(doc, view.rightSidebar ? 'Needs you' : 'Priority', 'priority-toggle', () => handlers.onPriorityToggle?.());
+        if (view.rightSidebar && !view.ui.priorityOpen) {
+            for (const [request, status] of [[true, 'error'], [false, 'done']]) {
+                if (!entries.some(entry => entry.request === request)) continue;
+                const dot = h(doc, 'span', `dot dot-${status}`);
+                dot.setAttribute('aria-hidden', 'true');
+                toggle.append(dot);
+            }
+        }
+        toggle.append(h(doc, 'span', 'priority-count', String(entries.length)));
+        toggle.setAttribute('aria-expanded', view.ui.priorityOpen === true ? 'true' : 'false');
+        box.append(toggle);
+        if (view.ui.priorityOpen) for (const entry of entries.slice(0, view.ui.priorityAll ? entries.length : 5)) {
+            const row = button(doc, entry.label, 'priority-row', () => handlers.onPriorityOpen?.(entry));
+            const time = Date.parse(entry.createdAt);
+            const age = Number.isFinite(time) ? formatElapsed(Math.max(0, ((view.nowMs ?? Date.now()) - time) / 1000)) : '';
+            const detail = entry.request ? 'Needs you' : age ? `Finished ${age} ago` : 'Finished';
+            row.append(h(doc, 'span', 'priority-detail', [entry.agent === 'codex' ? 'Codex' : entry.agent === 'claude' ? 'Claude' : '', detail].filter(Boolean).join(' · ')));
+            const dot = h(doc, 'span', `dot dot-${entry.request ? 'error' : 'done'}`);
+            dot.setAttribute('aria-hidden', 'true');
+            row.append(dot);
+            box.append(row);
+        }
+        if (view.ui.priorityOpen && !view.ui.priorityAll && entries.length > 5) {
+            box.append(button(doc, `Show ${entries.length - 5} more`, 'priority-toggle', () => handlers.onPriorityMore?.()));
+        }
+        return box;
+    }
+
     function render(doc, refs, view, handlers) {
         const { snapshot, ui } = view;
-        if (refs.head) { refs.head.replaceChildren(...buildHead(doc, view, handlers)); refs.head.setAttribute('title', KEY_HINT); }
+        if (refs.head) {
+            const tools = view.docked ? button(doc, 'Tools', 'btn tools-toggle', () => handlers.onTools?.()) : null;
+            tools?.setAttribute('aria-expanded', ui.toolsOpen ? 'true' : 'false');
+            refs.head.replaceChildren(...(tools ? [tools] : []), ...(!view.docked || ui.toolsOpen ? buildHead(doc, view, handlers) : []));
+            if (view.docked && ui.toolsOpen) refs.head.append(
+                button(doc, 'More Workspaces', 'btn', () => handlers.onSidebarSpace?.(false)),
+                button(doc, 'More Agents', 'btn', () => handlers.onSidebarSpace?.(true))
+            );
+            refs.head.setAttribute('title', KEY_HINT);
+        }
         if (refs.panel) refs.panel.replaceChildren(...buildPanel(doc, view, handlers));
 
         // Approve and Deny lock for a moment after a card appears, changes or moves (see createButtonGuard).
@@ -957,9 +1039,9 @@
         (view.guard || defaultGuard).observe(requests, requests.length ? nowMs : 0);
 
         const directory = snapshot?.agents && view.ui.directory !== false;
-        const displaySnapshot = agentSnapshot(snapshot, view.ui);
+        const displaySnapshot = agentSnapshot(snapshot, view.ui, view.rightSidebar);
         const list = [];
-        if (snapshot) {
+        if (snapshot && !view.rightSidebar && (!view.docked || ui.toolsOpen)) {
             const fleet = h(doc, 'div', 'fleet');
             if (snapshot.agents) {
                 for (const [label, all] of [['All agents', true], ['This swarm', false]]) {
@@ -974,11 +1056,14 @@
             if (view.ui.displayOpen) {
                 const options = h(doc, 'div', 'display-controls');
                 options.append(button(doc, 'A−', 'btn', () => handlers.onTextSize?.(-1), 'Smaller agent text'), button(doc, 'A+', 'btn', () => handlers.onTextSize?.(1), 'Larger agent text'), button(doc, 'Terminal 17px', 'btn', () => handlers.onTerminalSize?.(17), 'Set terminal text to 17px'), button(doc, 'Open wide', 'btn', () => handlers.onOpenWide?.(), 'Open Agents in a resizable workspace pane'));
+                options.append(button(doc, 'Dock below Workspaces', 'btn', () => handlers.onDockAgents?.()));
                 fleet.append(options);
             }
             if (refs.head) refs.head.append(fleet); else list.push(fleet);
 
         }
+        const priority = buildPriority(doc, view, handlers);
+        if (priority) list.push(priority);
         list.push(...buildCodexQuestions(doc, snapshot, view.questionDrafts || {}, handlers));
         if (!snapshot) {
             list.push(h(doc, 'p', 'empty', 'Connecting...'));
@@ -1020,6 +1105,6 @@
         reduceKey, attentionEffect, describeResult, displayCommand, statusLine, reviewEffect, buildSectionHead,
         AUTO_DEFAULT_HOURS, formatClock, autoLabel, autoEndedText, autoNotes, autoAlerts, autoOnEffect, autoOffEffect, autoLogEffect, autoLogClearEffect, buildAutoControls, buildAutoLog,
         nextNineAm, autoChoices, autoChoiceEffect, groupColor, fromTag, swarmSummary, buildOtherSwarms, buildWaitingRow, buildStoppedRow, buildSwarmTag,
-        KEY_HINT, warningsOf, buildCodexQuestions, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,
+        KEY_HINT, warningsOf, priorityEntries, buildCodexQuestions, buildAttentionItem, buildThreadRow, buildRequestRow, buildHead, buildPanel, render,
     };
 })();
