@@ -1,0 +1,592 @@
+// The floor policy's reading of a command line as a shell would split it: real words with their quotes kept apart, redirections
+// taken off, wrappers (sudo, env, bash -c, xargs, ...) looked through. The older token rules in autoapprove.mjs delete quotes and
+// split on spaces, so they cannot tell `--value 'a --help b'` from a real option, and they never see a word that a redirection is
+// glued to (`terraform</dev/null apply`). This reads each word once, and fails closed: whatever it cannot read with certainty, or
+// cannot tell the meaning of, is left for the user when it touches aws, terraform, terragrunt or tofu.
+import { NEVER_AUTO_APPROVE as KELPI_RULES } from './kelpi-policy.mjs';
+import { AWS_READ_OPS } from './aws-read-ops.mjs';
+
+export const TERRAFORM_RULE = 'terraform apply or destroy';
+export const AWS_RULE = 'aws write';
+export const SETTINGS_RULE = 'agent settings write';
+export const VARIABLE_RULE = 'command word is a variable';
+export const PIPED_RULE = 'piped or heredoc into a shell or interpreter';
+
+const TERRAFORM_TOOLS = new Set(['terraform', 'terragrunt', 'tofu']);
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+/** Words that come before a command without being it: `then terraform apply`, `{ aws s3 rm …; }`. */
+const KEYWORDS = new Set(['!', 'if', 'then', 'elif', 'else', 'do', 'while', 'until', '{', 'coproc']);
+/** zsh runs `=rm` as rm and the Mac's file names ignore case (`Terraform` is /usr/local/bin/terraform). */
+const base = text => String(text).split('/').pop().replace(/^=+/, '').toLowerCase();
+
+// ---------------------------------------------------------------------------------------------------------------- reading words
+
+/**
+ * @typedef {{ text: string, dynamic: boolean, glob: boolean, quoted: boolean }} Word
+ *   text: the word with its quotes taken off. dynamic: a `$` expansion, substitution, backtick or process substitution is in it,
+ *   so the real word is only known when the shell runs. glob: an unquoted `* ? [ {` is in it. quoted: any quoting at all.
+ */
+
+/**
+ * Split a shell command line into its simple commands, each a list of words (substitutions and subshells inside are read too, as
+ * commands of their own). Redirections are taken off the word list. A heredoc body is skipped when its delimiter is quoted (nothing
+ * in it runs) and searched for substitutions when it is not. `failed` is true when the text cannot be followed with certainty: an
+ * unclosed quote, substitution or heredoc, or nesting deeper than any real command.
+ * @returns {{ commands: Word[][], failed: boolean }}
+ */
+export function lexShell(source) {
+    const p = { src: String(source), i: 0, commands: [], failed: false };
+    parse(p, null, 0);
+    return { commands: p.commands, failed: p.failed };
+}
+
+const MAX_DEPTH = 24;
+const NAME_START = /[A-Za-z_]/;
+const NAME_CHAR = /[A-Za-z0-9_]/;
+
+function parse(p, close, depth) {
+    const { src } = p;
+    if (depth > MAX_DEPTH) { p.failed = true; p.i = src.length; return; }
+    let words = [];
+    let cur = null;
+    let redirect = null;
+    let parens = 0;
+    const heredocs = [];
+    const add = text => { cur ??= { text: '', dynamic: false, glob: false, quoted: false }; cur.text += text; };
+    const endWord = () => {
+        if (!cur) return;
+        const word = cur;
+        cur = null;
+        // `{ …; }`, `[ -f x ]` and `[[ -f x ]]` are shell syntax, not patterns.
+        if (word.glob && /^(?:\{|\}|\[\[?|\]\]?)$/.test(word.text)) word.glob = false;
+        if (redirect) {
+            if (redirect.heredoc) heredocs.push({ delimiter: word.text, quoted: word.quoted, strip: redirect.strip });
+            redirect = null;
+            return;
+        }
+        words.push(word);
+    };
+    const endCommand = () => { endWord(); redirect = null; if (words.length) p.commands.push(words); words = []; };
+    // Everything a `$(`, a backtick or a `${` holds is read as commands of its own, in place.
+    const nested = (start, kind) => {
+        add(''); cur.dynamic = true;
+        if (kind === '`') {
+            let end = start + 1;
+            while (end < src.length && src[end] !== '`') end += src[end] === '\\' ? 2 : 1;
+            if (end >= src.length) { p.failed = true; p.i = src.length; return; }
+            const body = src.slice(start + 1, end).replace(/\\([`$\\])/g, '$1');
+            const sub = { src: body, i: 0, commands: p.commands, failed: false };
+            parse(sub, null, depth + 1);
+            if (sub.failed) p.failed = true;
+            cur.text += src.slice(start, end + 1);
+            p.i = end + 1;
+        } else if (kind === '$(') {
+            p.i = start + 2;
+            parse(p, ')', depth + 1);
+            cur.text += src.slice(start, p.i);
+        } else {
+            p.i = start + 2;
+            skipBraced(p, depth);
+            cur.text += src.slice(start, p.i);
+        }
+    };
+    const readHeredocs = () => {
+        for (const h of heredocs) {
+            let body = '';
+            let found = false;
+            while (p.i < src.length) {
+                const nl = src.indexOf('\n', p.i);
+                const line = src.slice(p.i, nl < 0 ? src.length : nl);
+                p.i = nl < 0 ? src.length : nl + 1;
+                if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delimiter) { found = true; break; }
+                body += `${line}\n`;
+            }
+            if (!found) { p.failed = true; return; }
+            if (!h.quoted) scanBody(p, body, depth);
+        }
+        heredocs.length = 0;
+    };
+
+    while (p.i < src.length && !p.failed) {
+        const c = src[p.i];
+        if (c === '\n') { endCommand(); p.i += 1; readHeredocs(); continue; }
+        if (c === ' ' || c === '\t' || c === '\r') { endWord(); p.i += 1; continue; }
+        // A `#` that starts a word is a comment to the end of the line (the older token rules still read its words, which only leaves more).
+        if (c === '#' && cur === null) { while (p.i < src.length && src[p.i] !== '\n') p.i += 1; continue; }
+        if (c === '\\') {
+            if (src[p.i + 1] === '\n') { p.i += 2; continue; }
+            add(src[p.i + 1] ?? ''); cur.quoted = true; p.i += 2; continue;
+        }
+        if (c === "'") {
+            const end = src.indexOf("'", p.i + 1);
+            if (end < 0) { p.failed = true; break; }
+            add(src.slice(p.i + 1, end)); cur.quoted = true; p.i = end + 1; continue;
+        }
+        if (c === '"') { add(''); cur.quoted = true; p.i += 1; doubleQuoted(p, cur, depth); continue; }
+        if (c === '`') { nested(p.i, '`'); continue; }
+        if (c === '$') {
+            const d = src[p.i + 1];
+            if (d === '(') { nested(p.i, '$('); continue; }
+            if (d === '{') { nested(p.i, '${'); continue; }
+            if (d === "'") {
+                let end = p.i + 2;
+                while (end < src.length && src[end] !== "'") end += src[end] === '\\' ? 2 : 1;
+                if (end >= src.length) { p.failed = true; break; }
+                add(src.slice(p.i, end + 1)); cur.dynamic = true; cur.quoted = true; p.i = end + 1; continue;
+            }
+            if (d === '"') { add(''); cur.quoted = true; p.i += 2; doubleQuoted(p, cur, depth); continue; }
+            if (d !== undefined && (NAME_START.test(d) || /[0-9@*#?$!-]/.test(d))) {
+                let end = p.i + 2;
+                if (NAME_START.test(d)) while (end < src.length && NAME_CHAR.test(src[end])) end += 1;
+                add(src.slice(p.i, end)); cur.dynamic = true; p.i = end; continue;
+            }
+            add('$'); p.i += 1; continue;
+        }
+        if (c === '<' || c === '>' || (c === '&' && src[p.i + 1] === '>')) {
+            if ((c === '<' || c === '>') && src[p.i + 1] === '(') {
+                // A process substitution is a word the shell fills in, and a command of its own.
+                add(''); cur.dynamic = true;
+                const start = p.i;
+                p.i += 2;
+                parse(p, ')', depth + 1);
+                cur.text += src.slice(start, p.i);
+                continue;
+            }
+            // `2>file`: the digits are the operator's file descriptor, not a word.
+            if (cur && !cur.quoted && /^[0-9]+$/.test(cur.text)) cur = null; else endWord();
+            const op = /^(?:&>>|&>|<<<|<<-|<<|<>|<&|<|>>|>&|>\||>)/.exec(src.slice(p.i, p.i + 3))[0];
+            p.i += op.length;
+            redirect = { heredoc: op === '<<' || op === '<<-', strip: op === '<<-' };
+            continue;
+        }
+        if (c === ';' || c === '|' || c === '&') { endCommand(); p.i += 1; continue; }
+        if (c === '(') { endCommand(); parens += 1; p.i += 1; continue; }
+        if (c === ')') {
+            endCommand(); p.i += 1;
+            if (parens > 0) parens -= 1;
+            else if (close === ')') return;
+            continue;
+        }
+        if (c === '*' || c === '?' || c === '[' || c === '{') add(c), cur.glob = true;
+        else add(c);
+        p.i += 1;
+    }
+    endCommand();
+    if (close !== null && !p.failed) p.failed = true;
+}
+
+/** The inside of a double-quoted string: only `$`, backtick and backslash mean anything. Adds to `word` up to the closing quote. */
+function doubleQuoted(p, word, depth) {
+    const { src } = p;
+    while (p.i < src.length) {
+        const c = src[p.i];
+        if (c === '"') { p.i += 1; return; }
+        if (c === '\\') {
+            const d = src[p.i + 1] ?? '';
+            if (d === '\n') { p.i += 2; continue; }
+            word.text += /[$`"\\]/.test(d) ? d : `\\${d}`;
+            p.i += 2; continue;
+        }
+        if (c === '`') {
+            let end = p.i + 1;
+            while (end < src.length && src[end] !== '`') end += src[end] === '\\' ? 2 : 1;
+            if (end >= src.length) { p.failed = true; p.i = src.length; return; }
+            const sub = { src: src.slice(p.i + 1, end).replace(/\\([`$\\])/g, '$1'), i: 0, commands: p.commands, failed: false };
+            parse(sub, null, depth + 1);
+            if (sub.failed) p.failed = true;
+            word.dynamic = true; word.text += src.slice(p.i, end + 1); p.i = end + 1; continue;
+        }
+        if (c === '$' && src[p.i + 1] === '(') {
+            const start = p.i;
+            p.i += 2;
+            parse(p, ')', depth + 1);
+            word.dynamic = true; word.text += src.slice(start, p.i); continue;
+        }
+        if (c === '$' && src[p.i + 1] === '{') {
+            const start = p.i;
+            p.i += 2;
+            skipBraced(p, depth);
+            word.dynamic = true; word.text += src.slice(start, p.i); continue;
+        }
+        if (c === '$' && src[p.i + 1] !== undefined && (NAME_START.test(src[p.i + 1]) || /[0-9@*#?$!-]/.test(src[p.i + 1]))) {
+            let end = p.i + 2;
+            if (NAME_START.test(src[p.i + 1])) while (end < src.length && NAME_CHAR.test(src[end])) end += 1;
+            word.dynamic = true; word.text += src.slice(p.i, end); p.i = end; continue;
+        }
+        word.text += c; p.i += 1;
+    }
+    p.failed = true;
+}
+
+/** `${…}`: a parameter expansion, which can hold a substitution (`${X:-$(terraform apply)}`). `p.i` is just after the `{`. */
+function skipBraced(p, depth) {
+    const { src } = p;
+    let level = 1;
+    while (p.i < src.length) {
+        const c = src[p.i];
+        if (c === '\\') { p.i += 2; continue; }
+        if (c === "'") { const end = src.indexOf("'", p.i + 1); if (end < 0) break; p.i = end + 1; continue; }
+        if (c === '"') { p.i += 1; doubleQuoted(p, { text: '' }, depth); continue; }
+        if (c === '`') { let end = p.i + 1; while (end < src.length && src[end] !== '`') end += src[end] === '\\' ? 2 : 1; p.i = end + 1; continue; }
+        if (c === '$' && src[p.i + 1] === '(') { p.i += 2; parse(p, ')', depth + 1); continue; }
+        if (c === '$' && src[p.i + 1] === '{') { p.i += 2; level += 1; continue; }
+        if (c === '}') { p.i += 1; level -= 1; if (level === 0) return; continue; }
+        p.i += 1;
+    }
+    p.failed = true;
+}
+
+/** An unquoted heredoc body expands like a double-quoted string: read only the substitutions in it as commands. */
+function scanBody(p, body, depth) {
+    const sub = { src: body, i: 0, commands: p.commands, failed: false };
+    while (sub.i < body.length && !sub.failed) {
+        const c = body[sub.i];
+        if (c === '\\') { sub.i += 2; continue; }
+        if (c === '$' && (body[sub.i + 1] === '(' || body[sub.i + 1] === '{')) {
+            sub.i += 2;
+            if (body[sub.i - 1] === '(') parse(sub, ')', depth + 1); else skipBraced(sub, depth);
+            continue;
+        }
+        if (c === '`') {
+            let end = sub.i + 1;
+            while (end < body.length && body[end] !== '`') end += body[end] === '\\' ? 2 : 1;
+            if (end >= body.length) { sub.failed = true; break; }
+            const inner = { src: body.slice(sub.i + 1, end).replace(/\\([`$\\])/g, '$1'), i: 0, commands: p.commands, failed: false };
+            parse(inner, null, depth + 1);
+            if (inner.failed) sub.failed = true;
+            sub.i = end + 1; continue;
+        }
+        sub.i += 1;
+    }
+    if (sub.failed) p.failed = true;
+}
+
+// ---------------------------------------------------------------------------------------------------------- looking through wrappers
+
+/** Commands that run another command, and the options of theirs that take the next word as a value. */
+const WRAPPERS = new Map([
+    ['sudo', new Set(['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-T', '-U', '-R', '--user', '--group', '--chdir', '--host', '--prompt', '--role', '--type', '--other-user', '--close-from', '--command-timeout'])],
+    ['doas', new Set(['-u', '-C'])],
+    ['env', new Set(['-u', '-C', '-P', '--unset', '--chdir'])],
+    ['nice', new Set(['-n', '--adjustment'])],
+    ['ionice', new Set(['-c', '-n', '-p', '-P', '-u', '--class', '--classdata'])],
+    ['nohup', new Set()], ['setsid', new Set()], ['command', new Set()], ['builtin', new Set()], ['chronic', new Set()], ['unbuffer', new Set()],
+    ['exec', new Set(['-a'])],
+    ['time', new Set(['-f', '-o', '--format', '--output'])],
+    ['stdbuf', new Set(['-i', '-o', '-e', '--input', '--output', '--error'])],
+    ['timeout', new Set(['-s', '-k', '--signal', '--kill-after'])],
+    ['caffeinate', new Set(['-t', '-w'])]
+]);
+const XARGS_VALUES = new Set(['-a', '-d', '-E', '-e', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--max-args', '--max-procs', '--max-lines', '--max-chars']);
+const PARALLEL_VALUES = new Set(['-j', '-n', '-N', '-S', '-a', '-P', '-L', '-C', '--jobs', '--max-args', '--sshlogin', '--arg-file', '--colsep', '--delay', '--timeout', '--results', '--joblog']);
+const SSH_VALUES = new Set(['-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l', '-m', '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w']);
+const WATCH_VALUES = new Set(['-n', '--interval']);
+const EXEC_FLAGS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+/** Tools that run what follows a `--` on their command line: `op run -- aws …`, `chamber exec svc -- aws …`. */
+const DASHDASH_TOOLS = new Set(['op', 'saml2aws', 'doppler', 'chamber', 'assume', 'granted', 'aws-sso', 'leapp', 'envchain', 'dotenv']);
+
+/**
+ * Every command a simple command ends up running, looking through assignments, keywords, wrappers, `bash -c "…"`, `ssh host …`,
+ * `watch …`, `aws-vault exec p -- …`, `xargs …`, `find -exec …`. Each result is `{ name, exe, args, stdin }`: the command, its
+ * words, and whether xargs, parallel or find supplies more arguments that cannot be read here; or `{ dynamicExe }` for a command
+ * word only the shell can fill in.
+ */
+function invocations(words, out, depth = 0, stdin = false) {
+    if (depth > 8) { out.push({ dynamicExe: true, stdin }); return; }
+    let i = 0;
+    for (;;) {
+        while (i < words.length && ((ASSIGNMENT.test(words[i].text) && !words[i].quoted) || KEYWORDS.has(words[i].text))) i += 1;
+        if (i >= words.length) return;
+        const exe = words[i];
+        if (exe.dynamic) { out.push({ dynamicExe: true, stdin }); return; }
+        const name = base(exe.text);
+        const wrapperValues = WRAPPERS.get(name);
+        if (wrapperValues) {
+            let j = i + 1;
+            for (; j < words.length; j += 1) {
+                const t = words[j].text;
+                if (words[j].dynamic) break;
+                if (t === '--') { j += 1; break; }
+                if (!t.startsWith('-') || t === '-') break;
+                if (name === 'command' && /^-[A-Za-z]*[vV]/.test(t)) return;
+                if (wrapperValues.has(t)) j += 1;
+            }
+            if (name === 'timeout' && j < words.length) j += 1;
+            i = j;
+            continue;
+        }
+        const rest = words.slice(i + 1);
+        if (SHELLS.has(name)) {
+            const at = rest.findIndex(w => /^-[A-Za-z]*c[A-Za-z]*$/.test(w.text));
+            const before = at < 0 ? [] : rest.slice(0, at);
+            if (at >= 0 && before.every(w => w.text.startsWith('-') || w.text.startsWith('+'))) {
+                const script = rest[at + 1];
+                if (script !== undefined) subCommands(script.text, out, depth + 1, stdin);
+                return;
+            }
+        } else if (name === 'ssh') {
+            let j = 0;
+            while (j < rest.length && rest[j].text.startsWith('-')) j += SSH_VALUES.has(rest[j].text) ? 2 : 1;
+            if (j + 1 < rest.length) subCommands(rest.slice(j + 1).map(w => w.text).join(' '), out, depth + 1, stdin);
+        } else if (name === 'watch') {
+            let j = 0;
+            while (j < rest.length && rest[j].text.startsWith('-')) j += WATCH_VALUES.has(rest[j].text) ? 2 : 1;
+            if (j < rest.length) subCommands(rest.slice(j).map(w => w.text).join(' '), out, depth + 1, stdin);
+        } else if (name === 'xargs' || name === 'gxargs') {
+            let j = 0;
+            while (j < rest.length && rest[j].text.startsWith('-')) j += XARGS_VALUES.has(rest[j].text) ? 2 : 1;
+            invocations(rest.slice(j), out, depth + 1, true);
+            return;
+        } else if (name === 'parallel') {
+            let j = 0;
+            while (j < rest.length && rest[j].text.startsWith('-')) j += PARALLEL_VALUES.has(rest[j].text) ? 2 : 1;
+            invocations(rest.slice(j), out, depth + 1, true);
+            // Whatever follows `:::` is read as arguments of that command, so any protected word anywhere is the command.
+            for (const w of rest) if (isProtected(base(w.text))) out.push({ name: base(w.text), exe: w, args: [], stdin: true });
+            return;
+        } else if (name === 'find' || name === 'gfind') {
+            for (let k = 0; k < rest.length; k += 1) {
+                if (!EXEC_FLAGS.has(rest[k].text)) continue;
+                let end = k + 1;
+                while (end < rest.length && rest[end].text !== ';' && rest[end].text !== '+') end += 1;
+                invocations(rest.slice(k + 1, end), out, depth + 1, true);
+                k = end;
+            }
+        } else if (name === 'aws-vault') {
+            const at = rest.findIndex(w => w.text === 'exec');
+            if (at >= 0) {
+                const dash = rest.findIndex((w, k) => k > at && w.text === '--');
+                const positional = rest.findIndex((w, k) => k > at && !w.text.startsWith('-'));
+                const from = dash >= 0 ? dash + 1 : positional >= 0 ? positional + 1 : rest.length;
+                invocations(rest.slice(from), out, depth + 1, stdin);
+            }
+            return;
+        } else if (DASHDASH_TOOLS.has(name)) {
+            const dash = rest.findIndex(w => w.text === '--');
+            if (dash >= 0) invocations(rest.slice(dash + 1), out, depth + 1, stdin);
+        }
+        out.push({ name, exe, args: rest, stdin });
+        return;
+    }
+}
+
+/** A command line held in one string (`bash -c "…"`, what ssh runs remotely): read as commands, and left whole when it cannot be read. */
+function subCommands(text, out, depth, stdin) {
+    const lexed = lexShell(text);
+    if (lexed.failed) { out.push({ unreadable: true, text, stdin }); return; }
+    for (const words of lexed.commands) invocations(words, out, depth, stdin);
+}
+
+const isProtected = name => name === 'aws' || TERRAFORM_TOOLS.has(name);
+
+// --------------------------------------------------------------------------------------------------------------------- terraform
+
+const TERRAFORM_VERBS = new Set(['apply', 'destroy', 'apply-all', 'destroy-all']);
+/** Verbs that read or only write a plan: a word the shell fills in after one of these cannot turn the command into an apply. */
+const TERRAFORM_SAFE = new Set(['plan', 'validate', 'fmt', 'init', 'show', 'output', 'version', 'providers', 'graph', 'get']);
+
+/** The floor rule an invocation of terraform, terragrunt or tofu breaks, or null. `args` are its words after the tool name. */
+function terraformRule(args, stdin) {
+    if (stdin) return TERRAFORM_RULE;
+    if (args.some(a => !a.dynamic && !a.glob && TERRAFORM_VERBS.has(a.text))) return TERRAFORM_RULE;
+    if (!args.some(a => a.dynamic || a.glob)) return null;
+    // `terraform "$ACTION"` or `terraform $(echo apply)`: the verb is only known when the shell runs it. A plain verb that reads, written
+    // out before any word the shell fills in, settles it (`terraform plan -var "x=$X"`).
+    const verb = args.findIndex(a => !a.text.startsWith('-') || a.dynamic || a.glob);
+    if (verb >= 0 && !args[verb].dynamic && !args[verb].glob && TERRAFORM_SAFE.has(args[verb].text) && args.slice(0, verb).every(a => !a.dynamic && !a.glob)) return null;
+    return TERRAFORM_RULE;
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------ aws
+
+/** Global options of the AWS CLI with no value, and with a value in the next word (or attached with `=`). */
+const AWS_FLAGS = new Set(['--debug', '--no-verify-ssl', '--no-paginate', '--no-sign-request', '--no-cli-pager', '--no-cli-auto-prompt', '--cli-auto-prompt', '--version', '--help']);
+const AWS_VALUES = new Set(['--endpoint-url', '--output', '--query', '--profile', '--region', '--color', '--ca-bundle', '--cli-read-timeout', '--cli-connect-timeout', '--cli-binary-format']);
+const S3_URL = /^s3:\/\//i;
+/** A word the shell fills in cannot be an `s3://` URL when what is written before the expansion rules that out: `/tmp/$X`, `./$X`, `~/$X`. */
+const surelyLocal = word => /^(?:\/|\.\/|\.\.\/|~)/.test(word.text);
+
+/**
+ * The floor rule an `aws` call breaks, or null: only a call that is known to read passes. `args` are the words after `aws`.
+ * A service or operation that is not on the AWS CLI's own list of reads, one the shell fills in, or an option this does not know in
+ * front of the service, is a write. `--help` and `help` count only in the place the CLI reads them, never inside a value.
+ */
+function awsRule(args, stdin) {
+    if (stdin) return AWS_RULE;
+    let i = 0;
+    while (i < args.length && args[i].text.startsWith('-')) {
+        const word = args[i];
+        if (word.dynamic) return AWS_RULE;
+        const eq = word.text.indexOf('=');
+        const name = eq > 0 ? word.text.slice(0, eq) : word.text;
+        if (AWS_FLAGS.has(name)) i += 1;
+        else if (AWS_VALUES.has(name)) i += eq > 0 ? 1 : 2;
+        else return AWS_RULE;
+    }
+    if (i >= args.length) return null;
+    const words = args.slice(i);
+    const [serviceWord, opWord] = words;
+    if (serviceWord.dynamic || serviceWord.glob) return AWS_RULE;
+    const service = serviceWord.text;
+    if (service === 'help') return null;
+    if (opWord === undefined) return AWS_RULE;
+    if (opWord.text === 'help' || opWord.text === '--help') return null;
+    if (opWord.dynamic || opWord.glob || opWord.text.startsWith('-')) return AWS_RULE;
+    const op = opWord.text;
+    if (words[2] !== undefined && !words[2].dynamic && (words[2].text === '--help' || words[2].text === 'help')) return null;
+    if (service === 'configure') return ['list', 'get', 'list-profiles'].includes(op) ? null : AWS_RULE;
+    if (service === 'sso' && (op === 'login' || op === 'logout')) return null;
+    if (service === 's3') {
+        if (op === 'ls' || op === 'presign') return null;
+        if (op !== 'cp' && op !== 'sync') return AWS_RULE;
+        // A download only: the first operand is the one s3:// URL, the rest are local, and nothing is deleted. A bare `-` is stdin or stdout.
+        const rest = words.slice(2);
+        if (rest.some(w => w.text.startsWith('--delete'))) return AWS_RULE;
+        const operands = rest.filter(w => w.text === '-' || !w.text.startsWith('-'));
+        const first = operands[0];
+        if (first === undefined || first.dynamic || first.glob || !S3_URL.test(first.text)) return AWS_RULE;
+        if (operands.slice(1).some(w => S3_URL.test(w.text) || ((w.dynamic || w.glob) && !surelyLocal(w)))) return AWS_RULE;
+        return null;
+    }
+    const known = AWS_READ_OPS.get(service);
+    if (known === undefined) return AWS_RULE;
+    return op === 'wait' || known.has(op) ? null : AWS_RULE;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- the rest of the floor
+
+/** Commands whose arguments are plain text or file names, so an `aws` or `terraform` among them is a word, not a command. */
+const PLAIN_TEXT = new Set(['grep', 'egrep', 'fgrep', 'rg', 'echo', 'printf', 'cat', 'head', 'tail', 'wc', 'ls', 'cd', 'man', 'which', 'type', 'test', 'stat', 'du', 'diff',
+    'git', 'gh', 'cp', 'mv', 'rm', 'ln', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown', 'tar', 'zip', 'unzip', 'open', 'code', 'vim', 'nvim', 'vi', 'nano', 'less', 'more',
+    'sed', 'awk', 'sort', 'uniq', 'cut', 'tr', 'tee', 'jq', 'yq', 'tree', 'find', 'gfind', 'rsync', 'scp', 'file', 'basename', 'dirname', 'realpath', 'readlink', 'pwd', 'true', 'false']);
+const SERVICES_WITH_RULES = new Set(['s3', 'configure', 'sso']);
+const PROGRAM_OPTIONS = new Set(['--pre', '--hostname-bin']);
+
+/**
+ * `claude` and `codex` subcommands that write the agent's own settings (MCP servers, plugins, config), which stay with the user as
+ * a settings write whoever asks. `kelpi install-hooks` is caught by Kelpi's own rule (see kelpiFloorRule).
+ */
+function agentSettingsRule(name, args) {
+    if (name !== 'claude' && name !== 'codex') return null;
+    const words = args.filter(a => !a.text.startsWith('-'));
+    const [first, second] = words.map(w => w.text);
+    if (args.slice(0, 3).some(a => a.dynamic)) return SETTINGS_RULE;
+    if (name === 'claude' && first === 'config') return SETTINGS_RULE;
+    if (first === 'mcp') return ['add', 'add-json', 'add-from-claude-desktop', 'remove', 'reset-project-choices', 'login', 'logout'].includes(second) ? SETTINGS_RULE : null;
+    if (name === 'claude' && (first === 'plugin' || first === 'plugins')) return ['install', 'uninstall', 'enable', 'disable', 'update', 'marketplace'].includes(second) ? SETTINGS_RULE : null;
+    return null;
+}
+
+/** `strict` is false for a string that is probably data (JSON, prose) and not a command line: a command word the shell would have to fill in then proves nothing. */
+function invocationRule(inv, strict) {
+    if (inv.unreadable) return strict && /\baws\b/i.test(inv.text) ? AWS_RULE : strict && /\b(?:terraform|terragrunt|tofu)\b/i.test(inv.text) ? TERRAFORM_RULE : null;
+    if (inv.dynamicExe) return strict ? VARIABLE_RULE : null;
+    // `/usr/local/bin/a?s s3 rm`: a pattern in the command word expands to whatever file matches it.
+    if (inv.exe.glob && strict) return 'shell expansion builds a word';
+    const { name, args, stdin } = inv;
+    if (name === 'aws') return awsRule(args, stdin);
+    if (TERRAFORM_TOOLS.has(name)) return terraformRule(args, stdin);
+    const settings = agentSettingsRule(name, args);
+    if (settings) return settings;
+    // `rg --pre terraform x apply` runs `terraform apply` on the searched file, whatever the pattern looks like.
+    for (let k = 0; k < args.length; k += 1) {
+        const eq = args[k].text.indexOf('=');
+        const option = eq > 0 ? args[k].text.slice(0, eq) : args[k].text;
+        if (!PROGRAM_OPTIONS.has(option)) continue;
+        const value = eq > 0 ? { text: args[k].text.slice(eq + 1), dynamic: args[k].dynamic } : args[k + 1];
+        if (!value) continue;
+        if (value.dynamic) return VARIABLE_RULE;
+        if (base(value.text) === 'aws') return AWS_RULE;
+        if (TERRAFORM_TOOLS.has(base(value.text))) return TERRAFORM_RULE;
+    }
+    if (PLAIN_TEXT.has(name)) return null;
+    // A command not named here (`op run aws …`, `docker run x aws …`): an `aws` or `terraform` word among its arguments may be the real command.
+    for (let k = 0; k < args.length; k += 1) {
+        const word = base(args[k].text);
+        if (args[k].quoted && /\s/.test(args[k].text)) continue;
+        if (word === 'aws') {
+            const service = args[k + 1];
+            if (service === undefined || args[k + 2] === undefined) continue;
+            if (!service.dynamic && !AWS_READ_OPS.has(service.text) && !SERVICES_WITH_RULES.has(service.text)) continue;
+            const rule = awsRule(args.slice(k + 1), stdin);
+            if (rule) return rule;
+        } else if (TERRAFORM_TOOLS.has(word) && args[k].text === args[k].text.toLowerCase()) {
+            const rule = terraformRule(args.slice(k + 1), stdin);
+            if (rule) return rule;
+        }
+    }
+    return null;
+}
+
+/**
+ * The floor rule a command line breaks when read word by word, or null. Called on the command with only heredoc bodies of cat and
+ * tee removed; the older token rules read the same command separately. A line that cannot be read is left when it names aws or
+ * terraform at all, unless `strict` is false (a string field of an MCP call, which is data more often than a command line: then only
+ * a call to aws, terraform, terragrunt, tofu or the agent's own settings counts, never a command word that merely looks unreadable).
+ */
+export function floorExecRule(source, strict = true) {
+    const lexed = lexShell(source);
+    if (lexed.failed) return !strict ? null : /\baws\b/i.test(source) ? AWS_RULE : /\b(?:terraform|terragrunt|tofu)\b/i.test(source) ? TERRAFORM_RULE : null;
+    for (const words of lexed.commands) {
+        const found = [];
+        invocations(words, found);
+        for (const inv of found) {
+            const rule = invocationRule(inv, strict);
+            if (rule) return rule;
+        }
+    }
+    return null;
+}
+
+// ------------------------------------------------------------------------------------------------------------------------- Kelpi's rules
+
+/**
+ * A redirection operator glued to the word before it (`kelpi>/dev/null`, `cat<in`, `a&>b`), but not a file descriptor's own digits
+ * (`2>&1`): the operator is spaced off, its target stays attached. Kelpi's own, copied: kelpi-policy.mjs does not export it.
+ */
+const GLUED = /(?=&?[<>])(?<=[^\s<>&])(?<!(?:^|[\s;&|()])[0-9]+)&?(?:<<<|<<-?|<>|>>|>\||[<>])/g;
+const spaced = form => form.replace(GLUED, ' $&');
+/** The same four readings of a command as Kelpi's `segments`, each also with glued redirections spaced off. */
+function kelpiSegments(text) {
+    const dollars = text.replace(/\$(?=["'])/g, '');
+    const redirections = dollars.replace(/([<>])&|&(?=>)/g, '$1').replace(/>\|/g, '>');
+    const substitutions = redirections.replace(/\$\(/g, '$ ').replace(/\)/g, ' ').replace(/`([^`]*)`?/g, '$ $1 ');
+    const forms = [dollars, text, redirections, substitutions];
+    return [...new Set([...forms, ...forms.map(spaced)])].flatMap(form => form
+        .replace(/["'\\]/g, '')
+        .split(/&&|\|\||[;|&\n`]|\$\(|[()]/)
+        .map(segment => segment.trim().split(/\s+/).filter(Boolean))
+        .filter(tokens => tokens.length > 0));
+}
+const KELPI_FLOOR = ['piped or heredoc into a shell or interpreter', 'kelpi install-hooks']
+    .map(name => KELPI_RULES.find(rule => rule.name === name))
+    .filter(Boolean);
+if (KELPI_FLOOR.length !== 2) throw new Error('kelpi-policy.mjs no longer has the rules the floor reuses');
+
+/**
+ * Kelpi's own rules for code fed to a shell or interpreter on stdin (`curl … | sh`, `bash < file`, `python3 <<EOF`) and for
+ * `kelpi install-hooks`, run on the readings of the command Kelpi uses. Returns the floor rule name or null.
+ */
+export function kelpiFloorRule(command) {
+    const lines = command.split('\n').map(line => line.trim());
+    for (const text of new Set([command, lines.join(' '), lines.join('')])) {
+        for (const tokens of kelpiSegments(text)) {
+            // Kelpi's wrappers do not include sudo: `… | sudo bash` is read as `bash` too.
+            const bare = withoutPrivilegeWrappers(tokens);
+            for (const rule of KELPI_FLOOR) if (rule.test(tokens, text) || (bare && rule.test(bare, text))) return rule.name === 'kelpi install-hooks' ? SETTINGS_RULE : PIPED_RULE;
+        }
+    }
+    return null;
+}
+const EXTRA_WRAPPERS = new Set(['sudo', 'doas', 'pkexec', 'ionice', 'setsid', 'chronic', 'unbuffer']);
+/** The tokens with leading sudo-like wrappers and their options taken off, or null when there are none. */
+function withoutPrivilegeWrappers(tokens) {
+    let i = 0;
+    while (i < tokens.length && EXTRA_WRAPPERS.has(base(tokens[i]))) {
+        const values = WRAPPERS.get(base(tokens[i]));
+        i += 1;
+        while (i < tokens.length && tokens[i].startsWith('-')) i += values?.has(tokens[i]) ? 2 : 1;
+    }
+    return i > 0 && i < tokens.length ? tokens.slice(i) : null;
+}

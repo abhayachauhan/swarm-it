@@ -10,6 +10,7 @@ import { actionableWorker, ownedRequestPane, otherSwarmPane } from './store.mjs'
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
 import { inertCurlBodies, inertQuoted, quietGrepPatterns, quietHeredocs, unrollLoops } from './floor-helpers.mjs';
+import { floorExecRule, kelpiFloorRule } from './floor-exec.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -359,7 +360,7 @@ export const supersededBy = (store, item) => store.attention.some(o => o !== ite
 // apply or destroy and AWS writes. Besides those two rules, a command whose real words the shell only builds at run time stays left,
 // because it could spell either of them.
 export const FLOOR_RULES = new Set(['terraform apply or destroy', 'aws write', 'command word is a variable', 'alias or eval', 'shell expansion builds a word',
-    'shell fed generated code', 'command word from a substitution', 'ANSI-C escape', 'env -S']);
+    'shell fed generated code', 'command word from a substitution', 'ANSI-C escape', 'env -S', 'git -c alias', 'git config from the environment']);
 
 /** Which policy answers: `floor` (the default) or `careful`, the full never list and Kelpi's example policy. Set SWARM_AUTO_APPROVE_POLICY=careful for the old behaviour. */
 export const POLICY_ENV = 'SWARM_AUTO_APPROVE_POLICY';
@@ -380,7 +381,8 @@ const FLOOR_SETTINGS = /\.claude[^/\s'"]*\/(?:settings[^/\s'"]*\.json|hooks(?:\/
 const SETTINGS_MENTION = /\.claude|\.codex|\.mcp\.json|claude_config_dir|codex_home/i;
 /** A hidden path part spelled with a glob or brace (`~/.cl*de`, `~/.{claude,x}`, `~/[.]claude`): it could be any of them. */
 const HIDDEN_PATTERN = /(?:^|\/)(?:\.[^/]*[*?[{]|\[)/;
-const mentions = word => SETTINGS_MENTION.test(word) || HIDDEN_PATTERN.test(word);
+/** A word that is just `[` or `[[` is the shell's test command (`[ -f x ]`), not a glob; `[` starting a longer path part still is. */
+const mentions = word => SETTINGS_MENTION.test(word) || (word !== '[' && word !== '[[' && HIDDEN_PATTERN.test(word));
 /** A redirection into one of those paths, read on the raw text so no tokenizing can split it off: `>| ~/.claude/x`. */
 const SETTINGS_REDIRECT = /[<>]\s*[|&]?\s*["']?[^\s;|&()]*(?:\.claude|\.codex|\.mcp\.json|\.[^/\s]*[*?[{])/i;
 const SETTINGS_READERS = new Set(['cat', 'ls', 'grep', 'jq', 'head', 'tail', 'wc', 'diff', 'stat', 'file']);
@@ -404,17 +406,28 @@ function settingsWrite(tokens) {
 /** A path that names an agent settings file, in any case. */
 export const settingsPath = path => typeof path === 'string' && FLOOR_SETTINGS.test(path);
 
-/** The floor rule a command breaks, or null. Reads each line of a wrapped command the way neverAutoApprove does. */
-export function floorRule(command) {
-    if (typeof command !== 'string' || !command) return null;
+/** The settings half of the floor: the rule when the text writes, or mentions in a way that could write, an agent settings file. */
+function settingsRule(command) {
     // Read before quotes are made inert: a quoted path to a settings file is still that file.
     const raw = command.replace(/\\\r?\n/g, '');
     if (SETTINGS_REDIRECT.test(raw)) return FLOOR_SETTINGS_RULE;
     for (const text of [raw, raw.split('\n').map(l => l.trim()).join(' ')]) {
         for (const tokens of segments(text)) if (settingsWrite(tokens)) return FLOOR_SETTINGS_RULE;
     }
+    return null;
+}
+
+/**
+ * The floor rule a command breaks, or null. Reads each line of a wrapped command the way neverAutoApprove does. `shell` is false for
+ * the one line an MCP call is flattened into, which is not a shell command line: only the token rules read it.
+ */
+export function floorRule(command, shell = true) {
+    if (typeof command !== 'string' || !command) return null;
+    const settings = settingsRule(command);
+    if (settings) return settings;
     // Quoted grep patterns and commit messages hold text, not commands; so do quoted heredoc bodies written by cat or tee.
-    command = inertCurlBodies(quietGrepPatterns(inertQuoted(quietHeredocs(command))));
+    const heredocFree = quietHeredocs(command);
+    command = inertCurlBodies(quietGrepPatterns(inertQuoted(heredocFree)));
     const joined = command.replace(/\\\r?\n/g, '');
     const lines = joined.split('\n').map(l => l.trim());
     for (const text of [joined, lines.join(' '), lines.join('')]) {
@@ -423,7 +436,24 @@ export function floorRule(command) {
             if (rule) return rule.name;
         }
     }
-    return null;
+    // The rules above read quote-stripped tokens. These read the command as a shell splits it (quotes kept, redirections taken off,
+    // wrappers looked through), which is how a hidden aws, terraform, terragrunt or tofu call is told from a word; and Kelpi's own
+    // rules for code fed to a shell or interpreter and for `kelpi install-hooks`.
+    return shell ? floorExecRule(heredocFree.replace(/\\\r?\n/g, '')) ?? kelpiFloorRule(joined) : null;
+}
+
+/**
+ * The floor's answer for the text of one command: `{ rule }` when it breaks a rule, `{ tooLong: true }` when the loops in it unroll
+ * past MAX_REQUEST_TEXT (the rules would read it for longer than Kelpi waits), or null. A loop is read as the commands it runs.
+ */
+export function floorCheck(text, shell = true) {
+    const rule = floorRule(text, shell);
+    if (rule) return { rule };
+    const unrolled = unrollLoops(text);
+    if (unrolled === text) return null;
+    if (unrolled.length > MAX_REQUEST_TEXT) return { tooLong: true };
+    const unrolledRule = floorRule(unrolled, shell);
+    return unrolledRule ? { rule: unrolledRule } : null;
 }
 
 /** The floor policy: every Bash, Monitor, file and MCP request is answered unless it breaks a floor rule. */
@@ -436,11 +466,47 @@ export function judgeFloor(toolName, toolInput) {
     if (typeof text !== 'string' || !text.trim()) return { allow: false, text: '', reason: `no ${field}`, code: 'NO_INPUT' };
     if (text.length > MAX_REQUEST_TEXT) return { allow: false, text, reason: 'too long to check', code: 'TOO_LONG' };
     if (toolName === 'Bash' || toolName === 'Monitor' || mcp) {
-        const rule = floorRule(text) ?? floorRule(unrollLoops(text));
-        if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule };
+        const check = floorCheck(text, !mcp) ?? (mcp ? mcpFloor(toolName, input) : null);
+        if (check?.tooLong) return { allow: false, text, reason: 'too long to check', code: 'TOO_LONG' };
+        if (check) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: check.rule };
     }
     if (WRITES.has(toolName) && settingsPath(input.file_path)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
     return { allow: true, text };
+}
+
+/** Words beyond MCP_CHANGE_WORDS that say a tool puts something in a file. */
+const FILE_WRITE_WORDS = new Set(['append', 'replace', 'overwrite', 'mkdir', 'touch', 'link', 'symlink', 'truncate', 'store', 'persist', 'dump', 'export',
+    'sync', 'rewrite', 'change', 'open', 'new', 'make', 'generate', 'output', 'write']);
+/** A field that says where a file is: `path`, `file_path`, `filePath`, `filename`, `destination`, `target`, `dir`, `output`, `uri`. */
+const PATH_FIELD = /(?:path|file|filename|dest|destination|target|dir|directory|folder|output|out|location|uri)s?$/i;
+/** Every string value in a tool's input, however deep, keys left out. */
+function stringValues(value, out = []) {
+    if (typeof value === 'string') out.push(value);
+    else if (value !== null && typeof value === 'object') for (const inner of Object.values(value)) stringValues(inner, out);
+    return out;
+}
+/** The strings held under a path-like key, however deep: `{ args: { filePath: '…' } }`, `{ paths: ['…'] }`. */
+function pathValues(value, out = [], named = false) {
+    if (typeof value === 'string') { if (named) out.push(value); } else if (value !== null && typeof value === 'object') {
+        for (const [key, inner] of Object.entries(value)) pathValues(inner, out, Array.isArray(value) ? named : PATH_FIELD.test(key));
+    }
+    return out;
+}
+/**
+ * What an MCP call adds to the floor, read from its structured input instead of the one flattened line. The flattened line lets one
+ * field fake a reader segment for another (`{"content":"; cat ","path":"~/.claude/settings.json"}` reads as a `cat`, which is
+ * exempt, and `; echo ` before an `aws s3 rm` makes the `aws` a word). So each string value is checked on its own for a settings
+ * path and as a command line (one that cannot be read as shell is data, not a command), and a tool that does not plainly only read
+ * has the fields that say where it writes checked for a settings path, whatever the other fields hold.
+ */
+function mcpFloor(toolName, input) {
+    for (const value of stringValues(input)) {
+        const rule = settingsRule(value) ?? floorExecRule(value, false);
+        if (rule) return { rule };
+    }
+    const words = mcpWords(String(toolName).split('__').pop());
+    const onlyReads = words.some(w => MCP_READ_WORDS.has(w)) && !words.some(w => MCP_CHANGE_WORDS.has(w) || FILE_WRITE_WORDS.has(w));
+    return !onlyReads && pathValues(input).some(mentions) ? { rule: FLOOR_SETTINGS_RULE } : null;
 }
 
 /**
@@ -499,12 +565,15 @@ export async function run(api, store, now = Date.now()) {
         // Both never lists, as the provider applies: the screen fallback must not be the weaker path.
         // The same policy as the provider: the floor rules by default, both full lists under SWARM_AUTO_APPROVE_POLICY=careful.
         const never = approvePolicy() === 'floor'
-            ? (floorRule(item.command ?? '') ?? floorRule(unrollLoops(item.command ?? '')))
-            : neverAutoApprove(item.command ?? '') ?? kelpiNever(item.command ?? '');
+            ? floorCheck(item.command ?? '')
+            : (rule => (rule ? { rule } : null))(neverAutoApprove(item.command ?? '') ?? kelpiNever(item.command ?? ''));
         if (never) {
             if (!a.seenNever.has(item.id)) {
                 a.seenNever.add(item.id); a.skipped += 1; changed = true;
-                await appendLog(store, { at: iso(now), ...describePane(store, item.paneID), paneID: item.paneID, command: item.command ?? '', ok: false, skipped: true, reason: NEVER_REASON, rule: never, code: 'NEVER', source: 'screen' });
+                await appendLog(store, {
+                    at: iso(now), ...describePane(store, item.paneID), paneID: item.paneID, command: item.command ?? '', ok: false, skipped: true, source: 'screen',
+                    ...(never.tooLong ? { reason: 'too long to check', code: 'TOO_LONG' } : { reason: NEVER_REASON, rule: never.rule, code: 'NEVER' })
+                });
             }
             continue;
         }
