@@ -580,22 +580,56 @@ function mcpFloor(toolName, input) {
  */
 export async function judgeFloorRequest(toolName, toolInput, fs = PATH_FS) {
     const judged = judgeFloor(toolName, toolInput);
-    if (!judged.allow || !WRITES.has(toolName)) return judged;
-    const text = judged.text;
-    const settings = { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
-    if (!text.startsWith('/')) return { allow: false, text, reason: 'not an absolute path', code: 'PATH' };
-    if (text.split('/').some(s => s === '.' || s === '..')) return { allow: false, text, reason: 'a path with . or .. in it', code: 'PATH' };
-    const landed = await realPath(text, fs);
+    if (!judged.allow) return judged;
+    // A Write lands where its file_path says; an MCP tool that writes, moves or copies files lands where its path fields say.
+    const targets = WRITES.has(toolName) ? [judged.text] : mcpWriteTargets(toolName, toolInput);
+    if (targets.length > MAX_WRITE_TARGETS) return { allow: false, text: judged.text, reason: `writes to more than ${MAX_WRITE_TARGETS} files, too many to check`, code: 'PATH' };
+    for (const target of targets) {
+        const refusal = await landing(target, judged.text, fs);
+        if (refusal) return refusal;
+    }
+    return judged;
+}
+
+/** At most this many destinations of one MCP call are followed; the lookups of more would not finish inside Kelpi's deadline. */
+const MAX_WRITE_TARGETS = 4;
+/** Words of an MCP tool's name that say it puts a file somewhere or removes one: `write_file`, `edit_file`, `move_file`, `copy`, `create_directory`. */
+const FS_WRITE_WORDS = new Set(['write', 'edit', 'append', 'move', 'copy', 'rename', 'mkdir', 'touch', 'truncate', 'link', 'symlink', 'save', 'store', 'put', 'replace',
+    'overwrite', 'patch', 'create', 'insert', 'modify', 'delete', 'remove', 'unlink', 'extract', 'unzip', 'download', 'export', 'dump', 'output', 'chmod', 'chown']);
+/**
+ * The local file or folder names an MCP file-writing tool puts something in: the strings under its path-like fields that read as a place on
+ * this machine (a URL, a bare word such as a branch name, or an id is not one). A `file://` URL is its path. Nothing for a tool that does not
+ * plainly write, or that is not an MCP tool.
+ */
+function mcpWriteTargets(toolName, input) {
+    if (typeof toolName !== 'string' || !/^mcp__./.test(toolName)) return [];
+    if (!mcpWords(toolName.split('__').pop()).some(word => FS_WRITE_WORDS.has(word))) return [];
+    const places = [];
+    for (const value of pathValues(input)) {
+        let place = value;
+        if (/^file:\/\//i.test(value)) { try { place = decodeURI(value.slice(7)); } catch { place = value.slice(7); } }
+        if (/^[a-z][a-z0-9+.-]*:/i.test(place) || !(/[/\\]/.test(place) || place.startsWith('~') || /\.[A-Za-z0-9]{1,8}$/.test(place))) continue;
+        if (!places.includes(place)) places.push(place);
+    }
+    return places;
+}
+/** Where one write lands: null when it is fine, or the refusal for an absolute-path, `.`/`..`, symlink, settings-file or hard-link problem. `text` is what the prompt shows. */
+async function landing(path, text, fs) {
+    if (!path.startsWith('/')) return { allow: false, text, reason: 'not an absolute path', code: 'PATH' };
+    if (path.split('/').some(s => s === '.' || s === '..')) return { allow: false, text, reason: 'a path with . or .. in it', code: 'PATH' };
+    const landed = await realPath(path, fs);
     if (!landed.path) return { allow: false, text, reason: landed.reason, code: landed.code };
-    if (settingsPath(landed.path)) return settings;
+    if (settingsPath(landed.path)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
     if (typeof fs.stat === 'function') {
         try {
-            if ((await lookup(fs.stat, landed.path, performance.now() + PATH_CHECK_MS)).nlink > 1) return { allow: false, text, reason: 'writes to a file with more than one name (hard link)', code: 'HARDLINK' };
+            const found = await lookup(fs.stat, landed.path, performance.now() + PATH_CHECK_MS);
+            // A folder's link count is its sub-folders and the two entries every folder has, not a second name.
+            if (found.nlink > 1 && !(typeof found.isDirectory === 'function' && found.isDirectory())) return { allow: false, text, reason: 'writes to a file with more than one name (hard link)', code: 'HARDLINK' };
         } catch (error) {
             if (!MISSING.has(error.code)) return { allow: false, text, reason: `could not tell where it writes (${error.code ?? message(error)})`, code: 'PATH' };
         }
     }
-    return judged;
+    return null;
 }
 
 /**

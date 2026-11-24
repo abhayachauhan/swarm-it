@@ -171,6 +171,59 @@ test('finding 3: standard and privilege wrappers are looked through in any order
         'echo hi | command sudo -u root tee /tmp/x']);
 });
 
+test('finding 4: an MCP tool that writes, moves or copies a file is followed to where the file lands, as Write is', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'floor2-')));
+    try {
+        await mkdir(join(root, 'home', '.claude'), { recursive: true });
+        await mkdir(join(root, 'repo'));
+        const settings = join(root, 'home', '.claude', 'settings.json');
+        await writeFile(settings, '{}');
+        await symlink(settings, join(root, 'repo', 'notes.json'));
+        await symlink(join(root, 'home', '.claude'), join(root, 'repo', 'cfg'));
+        await link(settings, join(root, 'repo', 'hard.json'));
+        await writeFile(join(root, 'repo', 'plain.txt'), 'x');
+        const { api, dispose } = await start();
+        try {
+            const mcp = (tool, input) => judge(api, request(`mcp__filesystem__${tool}`, input));
+            const settingsLeft = left(SETTINGS);
+            // The reviewer's: a symlink to an agent settings file, written through an MCP tool, was approved without any file system lookup.
+            assert.deepEqual(await mcp('write_file', { path: join(root, 'repo', 'notes.json'), content: 'x' }), settingsLeft, 'symlink to the file');
+            assert.deepEqual(await mcp('edit_file', { path: join(root, 'repo', 'cfg', 'settings.json'), edits: [] }), settingsLeft, 'symlinked folder');
+            assert.deepEqual(await mcp('move_file', { source: join(root, 'repo', 'plain.txt'), destination: join(root, 'repo', 'notes.json') }), settingsLeft, 'move onto a link');
+            assert.deepEqual(await mcp('copy_file', { src: join(root, 'repo', 'plain.txt'), dest: join(root, 'repo', 'cfg', 'settings.json') }), settingsLeft, 'copy into a linked folder');
+            assert.deepEqual(await mcp('write_file', { args: { filePath: join(root, 'repo', 'notes.json') }, content: 'x' }), settingsLeft, 'a path field nested in the input');
+            assert.deepEqual(await mcp('write_file', { path: `file://${join(root, 'repo', 'notes.json')}`, content: 'x' }), settingsLeft, 'a file:// URL');
+            assert.deepEqual(await mcp('write_file', { path: join(root, 'repo', 'hard.json'), content: 'x' }), [ABSTAIN, 'HARDLINK', undefined, 'writes to a file with more than one name (hard link)']);
+            assert.deepEqual(await mcp('write_file', { path: 'repo/x.json', content: 'x' }), [ABSTAIN, 'PATH', undefined, 'not an absolute path']);
+            assert.deepEqual(await mcp('write_file', { path: '~/notes.txt', content: 'x' }), [ABSTAIN, 'PATH', undefined, 'not an absolute path']);
+            assert.deepEqual(await mcp('write_file', { path: `${root}/repo/../repo/x.json`, content: 'x' }), [ABSTAIN, 'PATH', undefined, 'a path with . or .. in it']);
+            // A second destination is checked too, and so is every one of them, up to four.
+            assert.deepEqual(await mcp('copy_files', { paths: [join(root, 'repo', 'plain.txt'), join(root, 'repo', 'notes.json')] }), settingsLeft, 'second of several');
+            assert.deepEqual(await mcp('copy_files', { paths: Array.from({ length: 5 }, (_, n) => join(root, 'repo', `f${n}.txt`)) }),
+                [ABSTAIN, 'PATH', undefined, 'writes to more than 4 files, too many to check']);
+            // What stays approved: ordinary files, new files, folders that exist, reads, and fields that are not places on this machine.
+            for (const [tool, input] of [
+                ['write_file', { path: join(root, 'repo', 'plain.txt'), content: 'x' }],
+                ['write_file', { path: join(root, 'repo', 'new', 'file.txt'), content: 'x' }],
+                ['create_directory', { path: join(root, 'repo') }],
+                ['move_file', { source: join(root, 'repo', 'plain.txt'), destination: join(root, 'repo', 'other.txt') }],
+                ['read_file', { path: join(root, 'repo', 'plain.txt') }],
+                ['get_file_info', { path: join(root, 'repo', 'notes.json') }],
+                ['upload_file', { uri: 'https://example.com/a.png' }],
+                ['create_release', { target: 'main', name: 'v1' }],
+                ['save_note', { title: 'x', folder: 'inbox', body: 'y' }]
+            ]) assert.deepEqual(await mcp(tool, input), approved, tool);
+            assert.deepEqual(await judge(api, request('mcp__slack__slack_send_message', { channel: 'C1', text: 'hi' })), approved);
+        } finally { dispose(); }
+        // A landing place that cannot be told is left: this is the same lookup Write makes, with the same limits.
+        const denied = { realpath: () => Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' })), lstat: () => Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' })) };
+        const unresolved = await AA.judgeFloorRequest('mcp__filesystem__write_file', { path: '/x/y.txt', content: 'z' }, denied);
+        assert.equal(unresolved.allow, false);
+        assert.equal(unresolved.code, 'PATH');
+        assert.equal(unresolved.reason, 'could not tell where it writes (EACCES)');
+    } finally { await import('node:fs/promises').then(({ rm }) => rm(root, { recursive: true, force: true })); }
+});
+
 test('finding 5: an MCP call with an executable and an args array is judged as the one command line it stands for', async () => {
     const run = input => request('mcp__x__run', input);
     const UNREADABLE = AA.UNREADABLE_EXEC_RULE;
