@@ -211,6 +211,8 @@ test('finding 4: an MCP tool that writes, moves or copies a file is followed to 
             assert.deepEqual(await mcp('move_file', { source: join(root, 'repo', 'settings.json'), destination: join(root, 'repo', 'cfg') }), settingsLeft, 'into a linked settings folder');
             // The rules folder of Codex is named with a slash after it, so a folder called `rules` moved into a linked `.codex` is caught too.
             assert.deepEqual(await mcp('copy_file', { src: join(root, 'repo', 'rules'), dest: join(root, 'repo', 'codex-link') }), settingsLeft, 'a rules folder into a linked .codex');
+            // The rules folder itself, reached through a link, ends with no slash after it either.
+            assert.deepEqual(await mcp('create_directory', { path: join(root, 'repo', 'codex-link', 'rules') }), settingsLeft, 'the rules folder as the destination');
             // A name with a read word and a word that changes a file is not a plain read: `get_and_extract`, `read_then_chmod`.
             for (const tool of ['get_and_extract', 'read_then_unzip', 'list_and_chmod', 'get_and_chown', 'read_and_unlink']) {
                 assert.deepEqual(await mcp(tool, { path: join(root, 'repo', 'notes.json') }), settingsLeft, tool);

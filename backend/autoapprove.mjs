@@ -639,7 +639,8 @@ async function landing(path, text, fs, names = []) {
     if (path.split('/').some(s => s === '.' || s === '..')) return { allow: false, text, reason: 'a path with . or .. in it', code: 'PATH' };
     const landed = await realPath(path, fs);
     if (!landed.path) return { allow: false, text, reason: landed.reason, code: landed.code };
-    if (settingsPath(landed.path)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
+    // The slash is for `.codex/rules`: the settings pattern names that folder with one after it, and a path that ends there has none.
+    if ([landed.path, `${landed.path}/`].some(settingsPath)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
     if (typeof fs.stat === 'function') {
         try {
             const found = await lookup(fs.stat, landed.path, performance.now() + PATH_CHECK_MS);
