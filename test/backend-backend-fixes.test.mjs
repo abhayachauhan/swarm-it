@@ -115,14 +115,14 @@ test('the never-auto-approve list matches every rule, in any segment and across 
 test('with Auto on, a command on the list is left as a card, logged as skipped once; manual Approve still works', async () => {
     const { api, dispose } = await start();
     await api.command('auto-approve', { on: true });
-    api.captureStore.w1 = prompt('npm ci && sudo make install');
+    api.captureStore.w1 = prompt('npm ci && terraform apply');
     await sleep(120);
     assert.equal(api.callsTo('terminal.sendKey').length, 0, 'no Enter');
     const card = dispose.store.attention.find(i => i.type === 'Request' && i.paneID === 'w1' && !i.handledAt);
     assert.ok(card, 'the card is left for the user');
     const { entries } = await api.command('auto-approve-log', {});
     assert.equal(entries.length, 1, 'logged once, not every scan');
-    assert.deepEqual([entries[0].ok, entries[0].reason, entries[0].command], [false, NEVER_REASON, 'npm ci && sudo make install']);
+    assert.deepEqual([entries[0].ok, entries[0].reason, entries[0].command], [false, NEVER_REASON, 'npm ci && terraform apply']);
     const auto = (await api.command('get-state', { workspaceID: 'ws1' })).snapshot.autoApprove;
     assert.deepEqual([auto.approved, auto.skipped, auto.failed], [0, 1, 0]);
     assert.deepEqual(await api.command('approve', { itemID: card.id, promptHash: card.promptHash }), { ok: true, itemID: card.id });
