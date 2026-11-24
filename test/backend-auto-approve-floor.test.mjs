@@ -124,6 +124,37 @@ test('floor: file, Monitor and MCP requests are approved; a floor rule inside th
     dispose();
 });
 
+test('floor: writes to agent settings files stay with the user; reads and other ~/.claude files are approved', async () => {
+    const { api, dispose } = await start();
+    const left = [ABSTAIN, 'NEVER', AA.FLOOR_SETTINGS_RULE, AA.NEVER_REASON];
+    for (const command of [
+        'sed -i "" s/ask/allow/ ~/.claude/settings.json',
+        'cp /tmp/s.json /Users/x/.claude/settings.local.json',
+        'echo "{}" > "$HOME/.claude/settings.json"',
+        'jq ".permissions.allow += [\\"Bash\\"]" ~/.claude/settings.json > /tmp/s && mv /tmp/s ~/.claude/settings.json',
+        'cat > ~/.claude/hooks/bash-guards.sh <<\'EOF\'\nexit 0\nEOF',
+        'rm ~/.claude/hooks/bash-guards.sh',
+        'node edit.mjs .claude/settings.json',
+        'printf x >> ~/.codex/config.toml',
+        'vim .mcp.json',
+        'CLAUDE_CONFIG_DIR=/tmp/c claude',
+        'mv /tmp/x ~/.claude.json'
+    ]) assert.deepEqual(await judge(api, bash(command)), left, command);
+    for (const [tool, path] of [['Write', '/Users/x/.claude/settings.json'], ['Edit', '/Users/x/repo/.claude/settings.local.json'],
+        ['Write', '/Users/x/.claude/hooks/guard.sh'], ['Edit', '/Users/x/.codex/config.toml'], ['Write', '/Users/x/repo/.mcp.json']]) {
+        assert.deepEqual(await judge(api, request(tool, { file_path: path, content: 'x', old_string: 'a', new_string: 'b' })), left, path);
+    }
+    for (const command of ['cat ~/.claude/settings.json', 'jq .permissions ~/.claude/settings.json', 'grep -n ask ~/.claude/settings.json',
+        'ls ~/.claude/hooks/', 'echo note >> ~/.claude/projects/p/memory/MEMORY.md', 'git -C ~/repos/swarm-it log']) {
+        assert.deepEqual(await judge(api, bash(command)), [ALLOW, 'OK', undefined, undefined], command);
+    }
+    for (const path of ['/Users/x/.claude/projects/p/memory/note.md', '/Users/x/.claude/skills/s/SKILL.md', '/Users/x/repo/CLAUDE.md']) {
+        assert.deepEqual(await judge(api, request('Write', { file_path: path, content: 'x' })), [ALLOW, 'OK', undefined, undefined], path);
+    }
+    assert.deepEqual(await judge(api, request('Read', { file_path: '/Users/x/.claude/settings.json' })), [ALLOW, 'OK', undefined, undefined]);
+    dispose();
+});
+
 test('floor: questions, unknown tools, empty input, long input and a Codex request that is not a verified Bash pane stay with the user', async () => {
     const { api, dispose } = await start();
     const tool = name => `auto-approve does not answer ${name} requests`;

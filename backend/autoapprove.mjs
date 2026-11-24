@@ -365,9 +365,28 @@ export const FLOOR_RULES = new Set(['terraform apply or destroy', 'aws write', '
 export const POLICY_ENV = 'SWARM_AUTO_APPROVE_POLICY';
 export const approvePolicy = (env = process.env) => (String(env[POLICY_ENV] ?? '').trim().toLowerCase() === 'careful' ? 'careful' : 'floor');
 
+/**
+ * Agent settings files stay with the user under the floor too (agreed 24 Nov), so an agent cannot change its own permission
+ * rules: Claude and Codex settings and config, ~/.claude.json, .mcp.json and the hooks folders that run on every command.
+ * Narrower than Kelpi's `agent settings write`, which covers all of ~/.claude (memory, skills, plans).
+ */
+export const FLOOR_SETTINGS_RULE = 'agent settings write';
+const FLOOR_SETTINGS = /\.claude[^/\s'"]*\/(?:settings[^/\s'"]*\.json|hooks(?:\/|$|['"\s]))|\.claude\.json|\.codex\/(?:config\.toml|rules\/|hooks)|\.mcp\.json|CLAUDE_CONFIG_DIR|CODEX_HOME/;
+/** Commands that may name a settings file and still only read it, when nothing is redirected. */
+const SETTINGS_READERS = new Set(['cat', 'ls', 'grep', 'rg', 'jq', 'head', 'tail', 'less', 'wc', 'diff', 'stat', 'file']);
+const settingsWrite = tokens => tokens.some(x => FLOOR_SETTINGS.test(x))
+    && !(SETTINGS_READERS.has(String(tokens[0] ?? '').split('/').pop()) && !tokens.some(x => /[<>]/.test(x)));
+/** A file tool aimed at an agent settings file. */
+export const settingsPath = path => typeof path === 'string' && FLOOR_SETTINGS.test(path);
+
 /** The floor rule a command breaks, or null. Reads each line of a wrapped command the way neverAutoApprove does. */
 export function floorRule(command) {
     if (typeof command !== 'string' || !command) return null;
+    // Read before quotes are made inert: a quoted path to a settings file is still that file.
+    const raw = command.replace(/\\\r?\n/g, '');
+    for (const text of [raw, raw.split('\n').map(l => l.trim()).join(' ')]) {
+        for (const tokens of segments(text)) if (settingsWrite(tokens)) return FLOOR_SETTINGS_RULE;
+    }
     // Quoted grep patterns and commit messages hold text, not commands; so do quoted heredoc bodies written by cat or tee.
     command = inertCurlBodies(quietGrepPatterns(inertQuoted(quietHeredocs(command))));
     const joined = command.replace(/\\\r?\n/g, '');
@@ -394,6 +413,7 @@ export function judgeFloor(toolName, toolInput) {
         const rule = floorRule(text) ?? floorRule(unrollLoops(text));
         if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule };
     }
+    if (WRITES.has(toolName) && settingsPath(input.file_path)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
     return { allow: true, text };
 }
 
