@@ -104,22 +104,38 @@ registered=1
 
 FORMAT="Write the result as markdown with three headings, ## Goal, ## Done and ## Next. Goal is one plain sentence saying what you were asked to do. Done is at most three short bullets saying what is now true or what you found, in plain words, with no code, file dumps or tool narration. Next is at most two bullets of what a human must decide or do, or the words Nothing pending. Keep the whole file under 80 words."
 
+report=
+if [ "$agent" = claude ]; then
+  [ -z "$parent_session" ] || report=" Your coordinator is the Claude Code session $parent_session. Load SendMessage with ToolSearch query select:SendMessage, then send it one-line messages that start with $label: when you are blocked, when you find something that changes the plan, and once at the very end after the result file is written, saying done and the result path. Never send more than one message a minute, and never send to any other session. Always write the result file even if a send fails."
+else
+  # Codex has no SendMessage: its result file and swarm-wait are the only report.
+  [ -z "$parent_session" ] || echo "note: Codex workers cannot message $parent_session; rely on swarm-wait" >&2
+fi
+# The prompt goes in a file and the typed command reads it. A line typed before the new shell's line
+# editor starts is cut at the terminal's 1024-byte limit (macOS MAX_CANON), which left a long prompt
+# with no closing quote and the worker never started (2026-11-24).
+# One file per spawn, so two spawns that share a label cannot swap prompts before their shells start.
+PROMPTS="$HOME/.kelpi-swarm/prompts"
+mkdir -p "$PROMPTS"
+find "$PROMPTS" -name '*.txt' -mtime +1 -delete 2>/dev/null || true
+promptFile=$(mktemp "$PROMPTS/$label.XXXXXX") || bad "cannot write the worker prompt file"
+mv "$promptFile" "$promptFile.txt" && promptFile=$promptFile.txt
+[[ $promptFile != *"'"* ]] || bad "the prompt file path cannot contain a single quote"
+printf '%s\n' "Do the task in $task. $FORMAT Write the result to $RES/$label.md.${report} Reply done." >"$promptFile"
+# Single-quoted so a home folder with spaces still reaches cat as one argument.
+prompt="\"\$(cat '$promptFile')\""
+
 # Give the new shell a moment to draw its prompt before typing into it.
 sleep 2
 # cd explicitly: the split's --path did not reach the new shell in a live test.
 if [ "$agent" = claude ]; then
   effortArg=
   [ -z "$effort" ] || effortArg="--effort $effort "
-  # Built only from validated plain words, so it is safe inside the double-quoted prompt.
-  report=
-  [ -z "$parent_session" ] || report=" Your coordinator is the Claude Code session $parent_session. Load SendMessage with ToolSearch query select:SendMessage, then send it one-line messages that start with $label: when you are blocked, when you find something that changes the plan, and once at the very end after the result file is written, saying done and the result path. Never send more than one message a minute, and never send to any other session. Always write the result file even if a send fails."
-  kelpi pane send --target "$pane" "cd $dir && claude -p --permission-mode $mode --model $model ${effortArg}\"Do the task in $task. $FORMAT Write the result to $RES/$label.md.${report} Reply done.\"" >/dev/null
+  kelpi pane send --target "$pane" "cd $dir && claude -p --permission-mode $mode --model $model ${effortArg}${prompt}" >/dev/null
 else
-  # Codex has no SendMessage: its result file and swarm-wait are the only report.
-  [ -z "$parent_session" ] || echo "note: Codex workers cannot message $parent_session; rely on swarm-wait" >&2
   modelArg= effortArg=
   [ -z "$model" ] || modelArg="--model $model "
   [ -z "$effort" ] || effortArg="-c model_reasoning_effort=$effort "
-  kelpi pane send --target "$pane" "cd $dir && codex --sandbox workspace-write --add-dir $RES --ask-for-approval $mode ${modelArg}${effortArg}\"Do the task in $task. $FORMAT Write the result to $RES/$label.md. Reply done.\"" >/dev/null
+  kelpi pane send --target "$pane" "cd $dir && codex --sandbox workspace-write --add-dir $RES --ask-for-approval $mode ${modelArg}${effortArg}${prompt}" >/dev/null
 fi
 echo "$pane:$label"
