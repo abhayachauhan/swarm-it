@@ -138,14 +138,25 @@ test('floor: writes to agent settings files stay with the user; reads and other 
         'printf x >> ~/.codex/config.toml',
         'vim .mcp.json',
         'CLAUDE_CONFIG_DIR=/tmp/c claude',
-        'mv /tmp/x ~/.claude.json'
+        'mv /tmp/x ~/.claude.json',
+        // Read widely and fail closed: a cd, a glob, odd case, a link, a `..` or a reader that runs a program.
+        'cd ~/.claude && echo {} > settings.json',
+        'cp /tmp/x ~/.CLAUDE/Settings.json',
+        'cp /tmp/x ~/.claude/sett*.json',
+        'ln -sf /tmp/x ~/.claude/settings.json',
+        'cp /tmp/x ~/.claude/projects/../settings.json',
+        'rg --pre ./run.sh pattern ~/.claude/settings.json',
+        'echo note >> ~/.claude/projects/p/memory/MEMORY.md',
+        'node ~/.claude/skills/x/run.mjs ~/.claude/settings.json'
     ]) assert.deepEqual(await judge(api, bash(command)), left, command);
     for (const [tool, path] of [['Write', '/Users/x/.claude/settings.json'], ['Edit', '/Users/x/repo/.claude/settings.local.json'],
         ['Write', '/Users/x/.claude/hooks/guard.sh'], ['Edit', '/Users/x/.codex/config.toml'], ['Write', '/Users/x/repo/.mcp.json']]) {
         assert.deepEqual(await judge(api, request(tool, { file_path: path, content: 'x', old_string: 'a', new_string: 'b' })), left, path);
     }
     for (const command of ['cat ~/.claude/settings.json', 'jq .permissions ~/.claude/settings.json', 'grep -n ask ~/.claude/settings.json',
-        'ls ~/.claude/hooks/', 'echo note >> ~/.claude/projects/p/memory/MEMORY.md', 'git -C ~/repos/swarm-it log']) {
+        'ls ~/.claude/hooks/', 'git -C ~/repos/swarm-it log', '~/.claude/skills/swarm-it/swarm-wait P1:w1',
+        'node ~/.claude/skills/swarm-it/manifest-writer.mjs prune', 'bash ~/.claude/hooks/bash-guards.test.sh',
+        '~/.claude/bin/codex-review ~/repos/x main standard /tmp/out.md']) {
         assert.deepEqual(await judge(api, bash(command)), [ALLOW, 'OK', undefined, undefined], command);
     }
     for (const path of ['/Users/x/.claude/projects/p/memory/note.md', '/Users/x/.claude/skills/s/SKILL.md', '/Users/x/repo/CLAUDE.md']) {
@@ -153,6 +164,34 @@ test('floor: writes to agent settings files stay with the user; reads and other 
     }
     assert.deepEqual(await judge(api, request('Read', { file_path: '/Users/x/.claude/settings.json' })), [ALLOW, 'OK', undefined, undefined]);
     dispose();
+});
+
+test('floor: a file write is followed to where it lands; a symlink, hard link, odd case or .. to a settings file is left', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'floor-')));
+    fs.mkdirSync(path.join(root, 'home', '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'repo'));
+    const settings = path.join(root, 'home', '.claude', 'settings.json');
+    fs.writeFileSync(settings, '{}');
+    fs.symlinkSync(settings, path.join(root, 'repo', 'notes.json'));
+    fs.symlinkSync(path.join(root, 'home', '.claude'), path.join(root, 'repo', 'cfg'));
+    fs.linkSync(settings, path.join(root, 'repo', 'hard.json'));
+    fs.writeFileSync(path.join(root, 'repo', 'plain.txt'), 'x');
+    const { api, dispose } = await start();
+    const write = file => judge(api, request('Write', { file_path: file, content: 'x' }));
+    assert.deepEqual(await write(path.join(root, 'repo', 'notes.json')), [ABSTAIN, 'NEVER', AA.FLOOR_SETTINGS_RULE, AA.NEVER_REASON], 'symlink to the file');
+    assert.deepEqual(await write(path.join(root, 'repo', 'cfg', 'settings.json')), [ABSTAIN, 'NEVER', AA.FLOOR_SETTINGS_RULE, AA.NEVER_REASON], 'symlinked folder');
+    assert.deepEqual(await write(path.join(root, 'repo', 'hard.json')), [ABSTAIN, 'HARDLINK', undefined, 'writes to a file with more than one name (hard link)']);
+    assert.deepEqual(await write('/Users/x/.CLAUDE/Settings.json'), [ABSTAIN, 'NEVER', AA.FLOOR_SETTINGS_RULE, AA.NEVER_REASON], 'odd case');
+    assert.deepEqual(await write(`${root}/repo/../home/.claude/settings.json`), [ABSTAIN, 'NEVER', AA.FLOOR_SETTINGS_RULE, AA.NEVER_REASON], 'named directly');
+    assert.deepEqual(await write(`${root}/repo/../repo/x.json`), [ABSTAIN, 'PATH', undefined, 'a path with . or .. in it']);
+    assert.deepEqual(await write('repo/x.json'), [ABSTAIN, 'PATH', undefined, 'not an absolute path']);
+    assert.deepEqual(await write(path.join(root, 'repo', 'plain.txt')), [ALLOW, 'OK', undefined, undefined]);
+    assert.deepEqual(await write(path.join(root, 'repo', 'new', 'file.txt')), [ALLOW, 'OK', undefined, undefined]);
+    dispose();
+    fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('floor: questions, unknown tools, empty input, long input and a Codex request that is not a verified Bash pane stay with the user', async () => {

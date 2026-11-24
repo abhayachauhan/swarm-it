@@ -371,12 +371,25 @@ export const approvePolicy = (env = process.env) => (String(env[POLICY_ENV] ?? '
  * Narrower than Kelpi's `agent settings write`, which covers all of ~/.claude (memory, skills, plans).
  */
 export const FLOOR_SETTINGS_RULE = 'agent settings write';
-const FLOOR_SETTINGS = /\.claude[^/\s'"]*\/(?:settings[^/\s'"]*\.json|hooks(?:\/|$|['"\s]))|\.claude\.json|\.codex\/(?:config\.toml|rules\/|hooks)|\.mcp\.json|CLAUDE_CONFIG_DIR|CODEX_HOME/;
-/** Commands that may name a settings file and still only read it, when nothing is redirected. */
-const SETTINGS_READERS = new Set(['cat', 'ls', 'grep', 'rg', 'jq', 'head', 'tail', 'less', 'wc', 'diff', 'stat', 'file']);
-const settingsWrite = tokens => tokens.some(x => FLOOR_SETTINGS.test(x))
-    && !(SETTINGS_READERS.has(String(tokens[0] ?? '').split('/').pop()) && !tokens.some(x => /[<>]/.test(x)));
-/** A file tool aimed at an agent settings file. */
+const FLOOR_SETTINGS = /\.claude[^/\s'"]*\/(?:settings[^/\s'"]*\.json|hooks(?:\/|$|['"\s]))|\.claude\.json|\.codex\/(?:config\.toml|rules\/|hooks)|\.mcp\.json|claude_config_dir|codex_home/i;
+/**
+ * A shell command is read more widely and fails closed: a word naming a .claude, .codex or .mcp.json path in any case (so a
+ * `cd` there, a glob, a `..`, `ln` or `cp` into it all count) leaves the command, unless the command only reads, or the word
+ * is the script being run (`~/.claude/skills/x/run`, `node ~/.claude/skills/x.mjs`). Running a script is not writing it.
+ */
+const SETTINGS_MENTION = /\.claude|\.codex|\.mcp\.json|claude_config_dir|codex_home/i;
+const SETTINGS_READERS = new Set(['cat', 'ls', 'grep', 'jq', 'head', 'tail', 'wc', 'diff', 'stat', 'file']);
+const SCRIPT_RUNNERS = new Set(['node', 'bash', 'sh', 'zsh', 'python', 'python3']);
+const wordBase = word => String(word ?? '').split('/').pop();
+function settingsWrite(tokens) {
+    // `X=… cmd`: an assignment is not the command being run, so it is never exempt.
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(String(tokens[0] ?? ''))) return tokens.some(x => SETTINGS_MENTION.test(x));
+    const script = SCRIPT_RUNNERS.has(wordBase(tokens[0])) && !String(tokens[1] ?? '').startsWith('-') ? 1 : 0;
+    if (!tokens.some((x, i) => i > script && SETTINGS_MENTION.test(x))) return false;
+    const reads = SETTINGS_READERS.has(wordBase(tokens[0])) && !tokens.some(x => /[<>]/.test(x));
+    return !reads;
+}
+/** A path that names an agent settings file, in any case. */
 export const settingsPath = path => typeof path === 'string' && FLOOR_SETTINGS.test(path);
 
 /** The floor rule a command breaks, or null. Reads each line of a wrapped command the way neverAutoApprove does. */
@@ -415,6 +428,31 @@ export function judgeFloor(toolName, toolInput) {
     }
     if (WRITES.has(toolName) && settingsPath(input.file_path)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
     return { allow: true, text };
+}
+
+/**
+ * The floor for one request, with a file write followed to where it lands, as judgeRequest does: an absolute path with no
+ * `.` or `..`, symlinks resolved, not a second name (hard link) for another file. A write that lands on a settings file, or
+ * whose landing place cannot be told, is left for the user.
+ */
+export async function judgeFloorRequest(toolName, toolInput, fs = PATH_FS) {
+    const judged = judgeFloor(toolName, toolInput);
+    if (!judged.allow || !WRITES.has(toolName)) return judged;
+    const text = judged.text;
+    const settings = { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
+    if (!text.startsWith('/')) return { allow: false, text, reason: 'not an absolute path', code: 'PATH' };
+    if (text.split('/').some(s => s === '.' || s === '..')) return { allow: false, text, reason: 'a path with . or .. in it', code: 'PATH' };
+    const landed = await realPath(text, fs);
+    if (!landed.path) return { allow: false, text, reason: landed.reason, code: landed.code };
+    if (settingsPath(landed.path)) return settings;
+    if (typeof fs.stat === 'function') {
+        try {
+            if ((await lookup(fs.stat, landed.path, performance.now() + PATH_CHECK_MS)).nlink > 1) return { allow: false, text, reason: 'writes to a file with more than one name (hard link)', code: 'HARDLINK' };
+        } catch (error) {
+            if (!MISSING.has(error.code)) return { allow: false, text, reason: `could not tell where it writes (${error.code ?? message(error)})`, code: 'PATH' };
+        }
+    }
+    return judged;
 }
 
 /**
@@ -664,7 +702,7 @@ export async function decide(store, args, now = Date.now(), mono = performance.n
             tool, source: 'provider', ...fields
         });
         const leave = (reason, code, extra = {}) => { a.skipped += 1; entry({ ok: false, skipped: true, reason, code, ...extra }); return ABSTAIN; };
-        const judged = approvePolicy() === 'floor' ? judgeFloor(args.toolName, args.toolInput) : await judgeRequest(args.toolName, args.toolInput, a.fs);
+        const judged = approvePolicy() === 'floor' ? await judgeFloorRequest(args.toolName, args.toolInput, a.fs) : await judgeRequest(args.toolName, args.toolInput, a.fs);
         // Turned off while a path was being looked up: off means abstain, unlogged.
         if (!a.on) return ABSTAIN;
         text = judged.text;
