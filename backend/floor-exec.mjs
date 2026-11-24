@@ -695,13 +695,13 @@ export function runsFile(source, targets = []) {
     for (const inv of calls) {
         if (inv.unreadable || inv.dynamicExe) return true;
         const { name, exe, args } = inv;
-        if (name === 'source' || exe.text === '.' || exe.text.includes('/')) return true;
+        if (name === 'source' || exe.text === '.' || exe.text.includes('/') || names.some(n => same(exe.text, n))) return true;
         if ((SHELLS.has(name) || INTERPRETER_NAMES.test(name)) && args.some(a => !a.text.startsWith('-'))) return true;
         if (!FILE_HANDLERS.has(name) && args.some(a => names.some(n => same(a.text, n)))) return true;
     }
     return false;
 }
-const COPIERS = new Set(['cp', 'mv', 'ln', 'install']);
+const COPIERS = new Set(['cp', 'mv', 'ln', 'install', 'rsync', 'scp']);
 
 // ------------------------------------------------------------------------------------------------------------------------- Kelpi's rules
 
