@@ -110,3 +110,81 @@ test('finding 1: the real choice and end time are saved by the command, and a re
     assert.deepEqual([ended.on, ended.until, ended.ended?.reason], [false, null, 'expired']);
     after.dispose();
 });
+
+const STATE = 'terraform state change';
+const DEPLOY = 'aws deploy';
+
+test('finding 2: an atlantis apply, import or state comment is left in a command and in an MCP string, atlantis plan is not', async () => {
+    await leftBy([
+        ['gh pr comment 123 --body "atlantis apply"', TERRAFORM],
+        ["gh pr comment 123 --body 'atlantis apply -d infra/prod'", TERRAFORM],
+        ["gh pr comment 123 --body-file - <<'EOF'\natlantis apply\nEOF", TERRAFORM],
+        ['gh pr comment 123 --body "Atlantis  Apply"', TERRAFORM],
+        ['echo "atlantis apply" | gh pr comment 1 -F -', TERRAFORM],
+        ['gh pr comment 1 -b "atlantis import aws_s3_bucket.b b"', STATE],
+        ['gh pr comment 1 -b "atlantis state rm aws_s3_bucket.b"', STATE]
+    ]);
+    await approve([
+        'gh pr comment 123 --body "atlantis plan"',
+        'gh pr comment 123 --body "atlantis plan -d infra/prod"',
+        'echo "the atlantis server is up"',
+        'gh pr view 123'
+    ]);
+    const comment = body => request('mcp__github__add_issue_comment', { owner: 'o', repo: 'infrastructure', issue_number: 5, body });
+    await expectAll([[{ body: 'atlantis apply' }, TERRAFORM], [{ body: 'ok\natlantis apply -p prod' }, TERRAFORM], [{ body: 'atlantis import a b' }, STATE]],
+        rule => left(rule), input => comment(input.body));
+    await expectAll([[{ body: 'atlantis plan' }], [{ body: 'looks good' }]], () => approved, input => comment(input.body));
+});
+
+test('finding 6: code handed to an interpreter that spells aws, terraform, terragrunt or tofu out as a string is left', async () => {
+    await leftBy([
+        [`node -e "require('child_process').spawnSync('terraform', ['apply','-auto-approve'])"`, TERRAFORM],
+        [`node -e 'execFileSync("/usr/local/bin/terraform", ["apply"])'`, TERRAFORM],
+        [`python3 -c 'import subprocess; subprocess.run(("aws","s3","rm","s3://b/k","--recursive"))'`, AWS],
+        [`python3 -c 'import subprocess; subprocess.run(["terragrunt", "run-all", "apply"])'`, TERRAFORM],
+        [`ruby -e 'system("tofu", "apply")'`, TERRAFORM],
+        [`perl -e 'system("terraform", "destroy")'`, TERRAFORM],
+        [`deno eval 'new Deno.Command("aws", {args:["s3","rm","x"]}).outputSync()'`, AWS],
+        [`bun -e "Bun.spawnSync(['terraform','apply'])"`, TERRAFORM]
+    ]);
+    await approve([
+        'node -e "console.log(1 + 1)"',
+        `python3 -c 'print("hello")'`,
+        'node script.js aws',
+        `python3 -c 'print("terraform is a tool")'`,
+        `node -e "console.log('awscli')"`
+    ]);
+});
+
+test('finding 9: AWS deploys without the aws CLI are left, and so is a push to an ECR registry', async () => {
+    const ecr = '123456789012.dkr.ecr.ap-southeast-2.amazonaws.com';
+    await leftBy([
+        ['cdk deploy', DEPLOY], ['cdk deploy --all --require-approval never', DEPLOY], ['npx cdk destroy MyStack', DEPLOY],
+        ['cdk bootstrap aws://123456789012/ap-southeast-2', DEPLOY], ['cdk --profile p deploy Stack', DEPLOY], ['pnpm dlx aws-cdk@2 deploy', DEPLOY],
+        ['bash -c "cdk deploy"', DEPLOY], ['cdk "$ACTION"', DEPLOY], ['echo Stack | xargs cdk', DEPLOY],
+        ['sam deploy --guided', DEPLOY], ['sam delete', DEPLOY], ['sam sync --stack-name x', DEPLOY],
+        [`docker push ${ecr}/app:1`, DEPLOY], [`docker image push ${ecr}/app:1`, DEPLOY], [`docker buildx build --push -t ${ecr}/app:1 .`, DEPLOY],
+        ['docker push public.ecr.aws/x/app:1', DEPLOY], ['docker push "$IMAGE"', DEPLOY], ['podman push $IMAGE', DEPLOY],
+        ['copilot svc deploy', DEPLOY], ['copilot deploy --name x', DEPLOY], ['eb deploy', DEPLOY], ['eb terminate prod', DEPLOY],
+        ['amplify publish', DEPLOY], ['amplify push --yes', DEPLOY]
+    ]);
+    await approve([
+        'cdk synth', 'cdk diff MyStack', 'npx cdk diff', 'cdk diff "$STACK"', 'sam build', 'sam validate',
+        'docker push myrepo/app:1', 'docker push ghcr.io/org/app:1', `docker build -t ${ecr}/app:1 .`, `docker tag app ${ecr}/app:1`,
+        'copilot svc ls', 'eb status', 'amplify status', 'git commit -m "cdk deploy in CI"', 'echo cdk deploy', 'grep -rn "sam deploy" docs'
+    ]);
+});
+
+test('finding 9: Terraform commands that change state without an apply are left, reads of state are not', async () => {
+    await leftBy([
+        ['terraform import aws_s3_bucket.b b', STATE], ['terragrunt import x y', STATE], ['tofu state rm aws_s3_bucket.b', STATE],
+        ['terraform state mv a b', STATE], ['terraform state push errored.tfstate', STATE], ['terraform state replace-provider a b', STATE],
+        ['terraform taint aws_instance.x', STATE], ['terraform untaint aws_instance.x', STATE], ['terraform force-unlock abc', STATE],
+        ['terraform -chdir=infra state rm x', STATE], ['cd infra && terraform import a b', STATE],
+        ['terraform apply', TERRAFORM], ['terragrunt destroy', TERRAFORM]
+    ]);
+    await approve([
+        'terraform state list', 'terraform state show aws_s3_bucket.b', 'terraform state pull', 'terraform plan', 'terraform output',
+        'terraform validate', 'terraform fmt', 'terraform init', 'echo terraform import'
+    ]);
+});

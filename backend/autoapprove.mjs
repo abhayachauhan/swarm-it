@@ -10,7 +10,7 @@ import { actionableWorker, ownedRequestPane, otherSwarmPane } from './store.mjs'
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
 import { inertCurlBodies, inertQuoted, quietGrepPatterns, stripHeredocs, unrollLoops } from './floor-helpers.mjs';
-import { commandIndex, floorExecRule, kelpiFloorRule, runsFile } from './floor-exec.mjs';
+import { atlantisRule, commandIndex, floorExecRule, interpreterProgramRule, kelpiFloorRule, runsFile } from './floor-exec.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -429,8 +429,8 @@ function settingsRule(command) {
  */
 export function floorRule(command, shell = true) {
     if (typeof command !== 'string' || !command) return null;
-    const settings = settingsRule(command);
-    if (settings) return settings;
+    const early = atlantisRule(command) ?? (shell ? interpreterProgramRule(command) : null) ?? settingsRule(command);
+    if (early) return early;
     // Quoted grep patterns and commit messages hold text, not commands; so do quoted heredoc bodies written by cat or tee.
     const { text: heredocFree, written } = stripHeredocs(command);
     // Unless the same command also runs a file: `cat > p.sh <<'EOF' … EOF` then `bash p.sh` runs what was written, so each body is read as
@@ -592,7 +592,7 @@ function joinedExecRule(program, args) {
  */
 function mcpFloor(toolName, input) {
     for (const { value, command } of stringEntries(input)) {
-        const rule = settingsRule(value) ?? floorExecRule(value, command);
+        const rule = settingsRule(value) ?? atlantisRule(value) ?? floorExecRule(value, command);
         if (rule) return { rule };
     }
     const exec = structuredExecRule(input);

@@ -7,7 +7,11 @@ import { NEVER_AUTO_APPROVE as KELPI_RULES } from './kelpi-policy.mjs';
 import { AWS_READ_OPS } from './aws-read-ops.mjs';
 
 export const TERRAFORM_RULE = 'terraform apply or destroy';
+/** `terraform import`, `state rm`, `taint`, `force-unlock` and the other commands that change state without applying a plan. */
+export const STATE_RULE = 'terraform state change';
 export const AWS_RULE = 'aws write';
+/** `cdk deploy`, `sam deploy`, `docker push` to an ECR host and the other ways to change AWS without the aws CLI. */
+export const DEPLOY_RULE = 'aws deploy';
 export const SETTINGS_RULE = 'agent settings write';
 export const VARIABLE_RULE = 'command word is a variable';
 export const PIPED_RULE = 'piped or heredoc into a shell or interpreter';
@@ -402,6 +406,9 @@ const isProtected = name => name === 'aws' || TERRAFORM_TOOLS.has(name);
 // --------------------------------------------------------------------------------------------------------------------- terraform
 
 const TERRAFORM_VERBS = new Set(['apply', 'destroy', 'apply-all', 'destroy-all']);
+/** Commands that change state without applying a plan: `import`, `taint`, `untaint`, `force-unlock`, and `state rm|mv|push|replace-provider`. */
+const TERRAFORM_STATE_VERBS = new Set(['import', 'taint', 'untaint', 'force-unlock']);
+const TERRAFORM_STATE_SUBVERBS = new Set(['rm', 'mv', 'push', 'replace-provider']);
 /** Verbs that read or only write a plan: a word the shell fills in after one of these cannot turn the command into an apply. */
 const TERRAFORM_SAFE = new Set(['plan', 'validate', 'fmt', 'init', 'show', 'output', 'version', 'providers', 'graph', 'get']);
 
@@ -409,12 +416,72 @@ const TERRAFORM_SAFE = new Set(['plan', 'validate', 'fmt', 'init', 'show', 'outp
 function terraformRule(args, stdin) {
     if (stdin) return TERRAFORM_RULE;
     if (args.some(a => !a.dynamic && !a.glob && TERRAFORM_VERBS.has(a.text))) return TERRAFORM_RULE;
+    const plain = args.map(a => (a.dynamic || a.glob ? '' : a.text));
+    const state = plain.indexOf('state');
+    if (plain.some(w => TERRAFORM_STATE_VERBS.has(w)) || (state >= 0 && plain.slice(state + 1).some(w => TERRAFORM_STATE_SUBVERBS.has(w)))) return STATE_RULE;
     if (!args.some(a => a.dynamic || a.glob)) return null;
     // `terraform "$ACTION"` or `terraform $(echo apply)`: the verb is only known when the shell runs it. A plain verb that reads, written
     // out before any word the shell fills in, settles it (`terraform plan -var "x=$X"`).
     const verb = args.findIndex(a => !a.text.startsWith('-') || a.dynamic || a.glob);
     if (verb >= 0 && !args[verb].dynamic && !args[verb].glob && TERRAFORM_SAFE.has(args[verb].text) && args.slice(0, verb).every(a => !a.dynamic && !a.glob)) return null;
     return TERRAFORM_RULE;
+}
+
+/** A pull request comment that tells Atlantis (the infrastructure repos' Terraform runner) to apply, import or change state. `atlantis plan` is not one. */
+const ATLANTIS_COMMAND = /\batlantis\s+(apply|import|state)\b/i;
+/**
+ * The floor rule an `atlantis apply`, `atlantis import` or `atlantis state` anywhere in the text breaks, or null. Read on the raw text,
+ * before quotes, heredocs and commit messages are made inert: `gh pr comment 1 --body "atlantis apply"` is a command to Atlantis,
+ * whatever tool posts it, so it is also read in every string value of an MCP call.
+ */
+export function atlantisRule(text) {
+    const found = ATLANTIS_COMMAND.exec(String(text));
+    return found ? (found[1].toLowerCase() === 'apply' ? TERRAFORM_RULE : STATE_RULE) : null;
+}
+
+// ------------------------------------------------------------------------------------------------------ AWS deploys without the aws CLI
+
+/**
+ * Tools that change AWS without going through the aws CLI: the words of theirs that deploy, delete or publish, and the words that only
+ * read (a word the shell fills in after one of those cannot turn the call into a deploy). Matched as a word anywhere in the arguments, as
+ * the terraform verbs are, so `cdk --profile p deploy Stack` and `npx cdk deploy` are caught.
+ */
+const DEPLOY_TOOLS = new Map([
+    ['cdk', { verbs: ['deploy', 'destroy', 'bootstrap', 'watch', 'rollback', 'import'],
+        safe: ['synth', 'synthesize', 'diff', 'list', 'ls', 'doctor', 'docs', 'doc', 'context', 'metadata', 'notices', 'version', 'acknowledge', 'ack', 'init', 'flags'] }],
+    ['sam', { verbs: ['deploy', 'delete', 'sync', 'package', 'publish'], safe: ['build', 'validate', 'local', 'logs', 'list', 'init', 'traces', 'version'] }],
+    ['copilot', { verbs: ['deploy', 'delete'], safe: ['ls', 'show', 'status', 'logs', 'package', 'version', 'help'] }],
+    ['eb', { verbs: ['deploy', 'create', 'terminate', 'swap', 'clone'], safe: ['list', 'status', 'events', 'logs', 'open', 'console', 'health', 'printenv', 'use', 'init'] }],
+    ['amplify', { verbs: ['publish', 'push', 'delete', 'remove'], safe: ['status', 'help', 'version', 'pull', 'console'] }]
+].map(([name, spec]) => [name, { verbs: new Set(spec.verbs), safe: new Set(spec.safe) }]));
+/** The deploy tool a word names, or null: the lower-case name, `aws-cdk` as `cdk`, a package version (`aws-cdk@2`) taken off. */
+const deployTool = text => {
+    const name = base(String(text).replace(/@[^/]*$/, ''));
+    return DEPLOY_TOOLS.get(name === 'aws-cdk' ? 'cdk' : name) ?? null;
+};
+const MENTIONS_DEPLOY = /\b(?:aws-cdk|cdk|sam|copilot|eb|amplify|docker|podman|nerdctl|buildah|finch)\b/i;
+
+/** The floor rule a call of one of those tools breaks, or null. */
+function deployToolRule(spec, args, stdin) {
+    if (stdin) return DEPLOY_RULE;
+    if (args.some(a => !a.dynamic && !a.glob && spec.verbs.has(a.text))) return DEPLOY_RULE;
+    if (!args.some(a => a.dynamic || a.glob)) return null;
+    const verb = args.findIndex(a => !a.text.startsWith('-') || a.dynamic || a.glob);
+    if (verb >= 0 && !args[verb].dynamic && !args[verb].glob && spec.safe.has(args[verb].text) && args.slice(0, verb).every(a => !a.dynamic && !a.glob)) return null;
+    return DEPLOY_RULE;
+}
+
+const CONTAINER_TOOLS = new Set(['docker', 'podman', 'nerdctl', 'buildah', 'finch']);
+/** An Amazon ECR registry: a private one (`123456789012.dkr.ecr.ap-southeast-2.amazonaws.com`) or the public one. */
+const ECR_HOST = /\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com|public\.ecr\.aws/i;
+/**
+ * A push to Amazon ECR: `docker push`, `docker image push`, `docker buildx build --push` or `--output type=registry` that names an ECR registry,
+ * or whose image name the shell fills in (it may be one). A push to any other registry stays approved.
+ */
+function containerPushRule(args, stdin) {
+    const pushes = args.some(a => !a.dynamic && !a.glob && (a.text === 'push' || /^--push(?:=true)?$/.test(a.text) || /type=registry/i.test(a.text)));
+    if (!pushes) return null;
+    return stdin || args.some(a => a.dynamic || a.glob || ECR_HOST.test(a.text)) ? DEPLOY_RULE : null;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------ aws
@@ -587,8 +654,16 @@ function invocationRule(inv, strict, source) {
     const { name, args, stdin } = inv;
     if (name === 'aws') return awsRule(args, stdin);
     if (TERRAFORM_TOOLS.has(name)) return terraformRule(args, stdin);
+    const deploy = deployTool(inv.exe.text);
+    if (deploy) return deployToolRule(deploy, args, stdin);
+    if (CONTAINER_TOOLS.has(name)) {
+        const push = containerPushRule(args, stdin);
+        if (push) return push;
+    }
     const settings = agentSettingsRule(name, args);
     if (settings) return settings;
+    const literal = literalProgramRule(inv);
+    if (literal) return literal;
     // `rg --pre terraform x apply` runs `terraform apply` on the searched file, whatever the pattern looks like.
     for (let k = 0; k < args.length; k += 1) {
         const eq = args[k].text.indexOf('=');
@@ -605,7 +680,7 @@ function invocationRule(inv, strict, source) {
     // command, and a quoted argument that names one may be a command line the tool runs (`docker run x sh -c "aws …"`).
     for (let k = 0; k < args.length; k += 1) {
         if (args[k].quoted && /\s/.test(args[k].text)) {
-            if (!MENTIONS_TOOL.test(args[k].text)) continue;
+            if (!MENTIONS_TOOL.test(args[k].text) && !MENTIONS_DEPLOY.test(args[k].text)) continue;
             const inner = lexShell(args[k].text);
             if (inner.failed) {
                 const unreadable = unreadableRule(args[k].text, strict);
@@ -634,11 +709,42 @@ function invocationRule(inv, strict, source) {
         } else if (TERRAFORM_TOOLS.has(word) && args[k].text === args[k].text.toLowerCase()) {
             const rule = terraformRule(args.slice(k + 1), stdin);
             if (rule) return rule;
+        } else if (args[k].text === args[k].text.toLowerCase() && deployTool(args[k].text)) {
+            // `npx cdk deploy`, `pnpm dlx aws-cdk@2 deploy`, `docker run img sam deploy`.
+            const rule = deployToolRule(deployTool(args[k].text), args.slice(k + 1), stdin);
+            if (rule) return rule;
         }
     }
     return null;
 }
 const MENTIONS_TOOL = /\b(?:aws|terraform|terragrunt|tofu)\b/i;
+/** A quoted string literal that is exactly one of the programs, or the path to it: `'terraform'`, `"aws"`, `` `/usr/local/bin/tofu` ``. */
+const LITERAL_PROGRAM = /(["'`])(?:[^"'`]*\/)?(aws|terraform|terragrunt|tofu)\1/i;
+/**
+ * Code handed to an interpreter (`node -e`, `python3 -c`, `ruby -e`, `deno eval`) that spells the program out as a string, as in
+ * `spawnSync('terraform', ['apply'])` or `subprocess.run(("aws", "s3", "rm", …))`: the argument list is not words the shell can see, so the
+ * program's name alone leaves the call.
+ */
+function literalProgramRule(inv) {
+    if (!INTERPRETER_NAMES.test(inv.name)) return null;
+    const literal = inv.args.map(a => LITERAL_PROGRAM.exec(a.text)?.[2]).find(Boolean);
+    return literal === undefined ? null : literal.toLowerCase() === 'aws' ? AWS_RULE : TERRAFORM_RULE;
+}
+/** The rule an interpreter call in the command breaks by naming the program as a string, or null. Read before the settings rule, whose
+ *  glob reading of `['apply']` would otherwise leave the same call under the wrong name. */
+export function interpreterProgramRule(source) {
+    const lexed = lexShell(source);
+    if (lexed.failed) return null;
+    for (const words of lexed.commands) {
+        const found = [];
+        invocations(words, found);
+        for (const inv of found) {
+            const rule = inv.unreadable || inv.dynamicExe ? null : literalProgramRule(inv);
+            if (rule) return rule;
+        }
+    }
+    return null;
+}
 /** A string that cannot be read as shell: a command line that names a protected tool is left (in data, only one that starts as a call to it). */
 function unreadableRule(text, strict) {
     if (strict ? !MENTIONS_TOOL.test(text) : !text.split(/[;&|\n(]+/).some(part => STARTS_AS_TOOL.test(part))) return null;
