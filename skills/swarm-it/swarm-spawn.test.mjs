@@ -46,8 +46,9 @@ function spawn({ home, bin, task }, args = ['w1', task, '--path', home]) {
 
 /** The typed command reads its prompt from a file; put the file's text back so assertions see the whole prompt. */
 function expandPrompt(call) {
-  return call.replace(/"\$\(cat ([^)]+)\)"/, (_, file) => `"${fs.readFileSync(file, 'utf8').trimEnd()}"`)
+  return call.replace(/"\$\(cat '([^']+)'\)"/, (_, file) => `"${fs.readFileSync(file, 'utf8').trimEnd()}"`)
 }
+const promptFileOf = typed => typed.match(/"\$\(cat '([^']+)'\)"$/)?.[1]
 
 test('shell metacharacters in the label, task, dir, mode or model are refused before anything runs', () => {
   const s = stub([{ id: 'WS', name: 'Warm pool' }])
@@ -145,12 +146,33 @@ test('the typed command stays under the 1024-byte terminal line limit and reads 
     assert.equal(out.status, 0, out.stderr)
     const typed = out.typed.filter(c => c.startsWith('pane send')).at(-1).replace(/^pane send --target \S+ /, '')
     assert.ok(Buffer.byteLength(typed) < 700, `${agent}: ${Buffer.byteLength(typed)} bytes typed: ${typed}`)
-    assert.ok(typed.endsWith(`"$(cat ${s.home}/.kelpi-swarm/prompts/${label}.txt)"`), typed)
-    const prompt = fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'prompts', `${label}.txt`), 'utf8')
+    const file = promptFileOf(typed)
+    assert.ok(file?.startsWith(`${s.home}/.kelpi-swarm/prompts/${label}.`) && file.endsWith('.txt'), typed)
+    const prompt = fs.readFileSync(file, 'utf8')
     assert.ok(prompt.startsWith(`Do the task in ${s.task}. Write the result as markdown`), prompt)
     assert.ok(prompt.trimEnd().endsWith('Reply done.'), prompt)
     assert.equal(prompt.includes('Your coordinator is the Claude Code session repos-a9.'), agent === 'claude', prompt)
   }
+})
+
+test('two spawns with the same label keep separate prompt files, and a real shell reads one with spaces in its path', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const other = path.join(s.home, 'other-task.md')
+  fs.writeFileSync(other, 'Other task\n')
+  const first = spawn(s, ['same', s.task, '--path', s.home])
+  const second = spawn(s, ['same', other, '--path', s.home])
+  assert.equal(first.status + second.status, 0, first.stderr + second.stderr)
+  const fileA = promptFileOf(first.typed.filter(c => c.startsWith('pane send')).at(-1))
+  const fileB = promptFileOf(second.typed.filter(c => c.startsWith('pane send')).at(-1))
+  assert.notEqual(fileA, fileB)
+  assert.ok(fs.readFileSync(fileA, 'utf8').startsWith(`Do the task in ${s.task}.`), 'the first worker keeps its own task')
+  assert.ok(fs.readFileSync(fileB, 'utf8').startsWith(`Do the task in ${other}.`))
+  // The typed form must survive a real shell even when the path has a space in it.
+  const spaced = path.join(s.home, 'a b', 'prompt.txt')
+  fs.mkdirSync(path.dirname(spaced), { recursive: true })
+  fs.writeFileSync(spaced, 'Do the task in x. Reply done.\n')
+  const echoed = spawnSync('zsh', ['-fc', `printf '%s' "$(cat '${spaced}')"`], { encoding: 'utf8' })
+  assert.equal(echoed.stdout, 'Do the task in x. Reply done.')
 })
 
 test('a Codex worker is not told to message the parent session and the coordinator is warned', () => {

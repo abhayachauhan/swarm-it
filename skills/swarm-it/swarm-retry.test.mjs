@@ -43,7 +43,7 @@ function run(script, s, args) {
   const log = path.join(s.home, 'calls.log')
   // The typed command reads its prompt from a file; put the file's text back so assertions see the whole prompt.
   const calls = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [])
-    .map(call => call.replace(/"\$\(cat ([^)]+)\)"/, (_, file) => `"${fs.readFileSync(file, 'utf8').trimEnd()}"`))
+    .map(call => call.replace(/"\$\(cat '([^']+)'\)"/, (_, file) => `"${fs.readFileSync(file, 'utf8').trimEnd()}"`))
   fs.rmSync(log, { force: true })
   return { ...out, calls }
 }
