@@ -71,12 +71,14 @@ const AWS_TEXT_TOOLS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'echo', 'printf'
  * words may be anything. After a text tool (grep, echo, cat, ls, cd) `aws` is only a word.
  */
 export function awsWrites(tokens) {
-    const index = tokens.findIndex(t => t === 'aws' || t.endsWith('/aws'));
     const word = commandWord(tokens);
-    const direct = word !== undefined && base(word) === 'aws';
-    const start = direct ? tokens.indexOf(word) : index;
-    if (start < 0) return false;
-    if (!direct && AWS_TEXT_TOOLS.has(base(word ?? ''))) return false;
+    if (word !== undefined && base(word) === 'aws') return awsCall(tokens, tokens.indexOf(word), true);
+    if (AWS_TEXT_TOOLS.has(base(word ?? ''))) return false;
+    // Every `aws` word counts, not just the first: `xargs echo aws aws s3 rm`.
+    return tokens.some((t, i) => (t === 'aws' || t.endsWith('/aws')) && awsCall(tokens, i, false));
+}
+/** One `aws` word at `start` in the segment: whether the call after it may change state. `direct`: it is the command run. */
+function awsCall(tokens, start, direct) {
     const rest = tokens.slice(start + 1);
     // Global options come before the service; the first two other words are the service and the operation.
     const words = [];

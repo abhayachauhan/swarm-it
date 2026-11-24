@@ -55,6 +55,7 @@ const FLOOR_LEFT = [
     ['aws ec2', 'aws write'],
     ['xargs aws s3 rm', 'aws write'],
     ['echo x | aws s3 cp - s3://bucket/key --profile p', 'aws write'],
+    ['xargs echo aws aws s3 rm', 'aws write'],
     ['bash -c "aws ec2 request-spot-fleet --profile p"', 'aws write'],
     ['/usr/local/bin/aws ec2 create-tags --resources i-1', 'aws write'],
     ['R=rm; $R -rf x', 'command word is a variable'],
