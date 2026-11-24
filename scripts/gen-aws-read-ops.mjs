@@ -26,7 +26,7 @@ const EXCLUDED = new Set([
 /** Operations that mint a credential, token, session or link: left for the user, except the few people run all day. A `list-` or `describe-` is never one. */
 // A qualifier may follow (`get-credentials-for-identity`, `get-tokens-from-refresh-token`, `get-workload-access-token-for-jwt`). A URL that only
 // downloads data (`get-download-url-for-layer`, `get-assessment-report-url`) is a read, so it stays.
-const MINTS = /^get-.*(?:credentials|access-token|auth-token|federation-token|presigned-url|access-details|login-url|embed-url|upload-url|oauth2-token|payment-token|tokens)(?:-(?:for|from)-[a-z0-9-]+)?$/;
+const MINTS = /^get-.*(?:credentials|access-token|auth-token|federation-token|presigned-url|access-details|login-url|embed-url|upload-url|oauth2-token|payment-token|tokens|session-url|signed-[a-z0-9-]*url)(?:-(?:for|from)-[a-z0-9-]+)?$/;
 const KEEP_MINTS = new Set(['codeartifact get-authorization-token', 'ecr get-authorization-token', 'ecr-public get-authorization-token', 'sso get-role-credentials']);
 /** Commands the AWS CLI adds on top of its service models that only read. */
 const CUSTOM = { logs: ['tail'], eks: ['get-token'], ecr: ['get-login-password'], cloudtrail: ['validate-logs'] };

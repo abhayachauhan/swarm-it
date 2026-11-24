@@ -144,12 +144,16 @@ test('finding 10: read-looking AWS operations that send, mint or change somethin
         ['license-manager', 'checkout-license'], ['license-manager', 'checkout-borrow-license'], ['lightsail', 'get-instance-access-details'], ['lakeformation', 'get-temporary-glue-table-credentials'],
         // A minter whose name ends in a qualifier (`-for-identity`, `-from-refresh-token`) is still a minter.
         ['cognito-identity', 'get-credentials-for-identity'], ['cognito-idp', 'get-tokens-from-refresh-token'], ['bedrock-agentcore', 'get-workload-access-token-for-jwt'],
-        ['bedrock-agentcore', 'get-workload-access-token-for-user-id'], ['cloudwatchomni', 'get-space-credentials-for-organization']]) {
+        ['bedrock-agentcore', 'get-workload-access-token-for-user-id'], ['cloudwatchomni', 'get-space-credentials-for-organization'],
+        // A session or signed link is minted for the caller, like a presigned URL.
+        ['kinesis-video-archived-media', 'get-hls-streaming-session-url'], ['kinesis-video-archived-media', 'get-dash-streaming-session-url'], ['m2', 'get-signed-bluinsights-url']]) {
         assert.equal(AWS_READ_OPS.get(service)?.has(op) ?? false, false, `${service} ${op}`);
     }
     for (const [service, op] of [['ec2', 'describe-instances'], ['s3api', 'list-objects-v2'], ['ssm', 'get-parameter'], ['logs', 'filter-log-events'], ['dynamodb', 'scan'],
         ['ecs', 'describe-tasks'], ['cloudwatch', 'get-metric-data'], ['iam', 'get-role'], ['sts', 'assume-role'], ['logs', 'tail'], ['eks', 'get-token'], ['sqs', 'get-queue-url'],
-        ['sso', 'get-role-credentials'], ['codeartifact', 'get-authorization-token']]) {
+        ['sso', 'get-role-credentials'], ['codeartifact', 'get-authorization-token'],
+        // Reading something that already exists is a read, even a secret or a download link.
+        ['secretsmanager', 'get-secret-value'], ['ecr', 'get-download-url-for-layer'], ['apigateway', 'get-api-key']]) {
         assert.equal(AWS_READ_OPS.get(service)?.has(op), true, `${service} ${op}`);
     }
 });
