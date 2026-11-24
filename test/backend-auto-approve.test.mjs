@@ -84,7 +84,7 @@ test('a saved off stays off after a restart, a saved on stays on, and the log su
     restarted();
 });
 
-test('turning on with no hours never expires, and an expiry by explicit hours does not save an off', async () => {
+test('turning on with no hours never expires, and an expiry by explicit hours keeps its end time so a reload stays off', async () => {
     const { api, dispose } = await start({ storage: new Map() });
     const before = dispose.store;
     const t0 = Date.now();
@@ -100,6 +100,7 @@ test('turning on with no hours never expires, and an expiry by explicit hours do
     assert.equal(AA.expireIfDue(before, t0 + twelveHours + 60000, m0 + twelveHours + 60000), true, 'explicit hours still expire');
     assert.deepEqual([before.auto.on, before.auto.ended.reason], [false, 'expired']);
     assert.equal(api.storageMap.get('autoApproveEnabled'), true, 'an expiry is not the user turning it off');
+    assert.match(api.storageMap.get('autoApproveUntil'), /^\d{4}-\d{2}-\d{2}T/, 'the end time of the window stays saved with the choice');
     dispose();
 });
 

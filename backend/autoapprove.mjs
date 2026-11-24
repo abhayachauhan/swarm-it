@@ -16,6 +16,8 @@ export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
 /** The user's saved on/off choice; absent means on. */
 export const ENABLED_KEY = 'autoApproveEnabled';
+/** The ISO end of a timed window saved with the choice, or null for no end time. */
+export const UNTIL_KEY = 'autoApproveUntil';
 export const MAX_HOURS = 24 * 7;
 /** Rate guard: a pane that gets more than RATE_MAX auto-approvals within RATE_WINDOW_MS is paused (its card is left). */
 export const RATE_MAX = Number(process.env.SWARM_AUTO_RATE_MAX) || 30;
@@ -255,20 +257,36 @@ export function createState() {
 const validEntry = e => e && typeof e === 'object' && typeof e.at === 'string' && typeof e.paneID === 'string';
 
 /** Load the persisted log and the saved on/off choice. Missing or malformed values fall back to an empty log, and
- *  Auto approve is on (no end time) unless the user's saved choice is exactly off. */
+ *  Auto approve is on (no end time) unless the user's saved choice is exactly off. A timed window saved with the choice
+ *  is kept: still ahead, it carries on with the time left; passed, Auto approve stays off and says it expired. */
 export async function load(store, now = Date.now(), mono = performance.now()) {
     try {
         const raw = await store.api.storage.get(LOG_KEY);
         store.auto.log = (Array.isArray(raw) ? raw : []).filter(validEntry).slice(-LOG_CAP);
     } catch { store.auto.log = []; }
     let saved = null;
+    let savedUntil = null;
     try { saved = await store.api.storage.get(ENABLED_KEY); } catch { /* unreadable: the default, on */ }
-    if (saved !== false) turnOn(store, null, now, mono);
+    try { savedUntil = await store.api.storage.get(UNTIL_KEY); } catch { /* unreadable: no end time */ }
+    if (saved === false) return;
+    const endAt = typeof savedUntil === 'string' ? Date.parse(savedUntil) : NaN;
+    if (Number.isFinite(endAt)) {
+        if (endAt <= now) { store.auto.ended = { reason: 'expired', at: iso(endAt) }; return; }
+        // A time further off than any window can be (the clock was set back since) is not trusted: it runs as far as a window can.
+        const left = Math.min(endAt - now, MAX_HOURS * 3600000);
+        turnOn(store, null, now, mono);
+        setUntil(store, now + left, now, mono);
+        return;
+    }
+    turnOn(store, null, now, mono);
 }
 
-/** Remember the user's choice across a reload. A failed write leaves the choice in memory only. */
+/** Remember the user's choice, and the end of a timed window, across a reload. A failed write leaves the choice in memory only. */
 export async function saveEnabled(store, enabled) {
-    try { await store.api.storage.set(ENABLED_KEY, enabled); } catch { /* the choice still lives in memory */ }
+    try {
+        await store.api.storage.set(ENABLED_KEY, enabled);
+        await store.api.storage.set(UNTIL_KEY, enabled ? store.auto.until : null);
+    } catch { /* the choice still lives in memory */ }
 }
 
 async function saveLog(store) {
