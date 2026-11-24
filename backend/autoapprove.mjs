@@ -386,11 +386,17 @@ const SETTINGS_REDIRECT = /[<>]\s*[|&]?\s*["']?[^\s;|&()]*(?:\.claude|\.codex|\.
 const SETTINGS_READERS = new Set(['cat', 'ls', 'grep', 'jq', 'head', 'tail', 'wc', 'diff', 'stat', 'file']);
 const SCRIPT_RUNNERS = new Set(['node', 'bash', 'sh', 'zsh', 'python', 'python3']);
 /** Only a skill's or a bin folder's script is exempt as the thing being run, and never one that is itself a settings path. */
-const SCRIPT_HOME = /\.claude\/(?:skills|bin|hooks)\/[^*?[{]+\.(?:sh|mjs|js|py)$|\.claude\/(?:skills|bin)\/[^*?[{.]+$/i;
+const SCRIPT_HOME = /^(?:~|\$HOME|\$\{HOME\}|\/[^=\s$`]*)\/\.claude\/(?:(?:skills|bin|hooks)\/[^=*?[{\s$`]+\.(?:sh|mjs|js|py)|(?:skills|bin)\/[^=*?[{.\s$`]+)$/i;
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const wordBase = word => String(word ?? '').split('/').pop();
 function settingsWrite(tokens) {
+    // `X=… cmd`: an assignment is not the command being run, so nothing in it is exempt.
+    if (ASSIGNMENT.test(String(tokens[0] ?? ''))) return tokens.some(mentions);
     const runner = SCRIPT_RUNNERS.has(wordBase(tokens[0])) && !String(tokens[1] ?? '').startsWith('-');
-    const exempt = i => (i === 0 || (i === 1 && runner)) && SCRIPT_HOME.test(String(tokens[i]));
+    const exempt = i => {
+        const word = String(tokens[i]);
+        return (i === 0 || (i === 1 && runner)) && SCRIPT_HOME.test(word) && !word.split('/').some(s => s === '.' || s === '..');
+    };
     if (!tokens.some((x, i) => !exempt(i) && mentions(x))) return false;
     const reads = SETTINGS_READERS.has(wordBase(tokens[0])) && !tokens.some(x => /[<>]/.test(x));
     return !reads;

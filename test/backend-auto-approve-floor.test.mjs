@@ -162,7 +162,14 @@ test('floor: writes to agent settings files stay with the user; reads and other 
         '~/.claude/skills/x/run > ~/.claude/settings.json',
         'echo exit 0 > ~/.claude/hooks/bash-guards.sh',
         'echo exit 0 >| ~/.claude/hooks/bash-guards.sh',
-        'true &> ~/.claude/hooks/guard.mjs'
+        'true &> ~/.claude/hooks/guard.mjs',
+        // Only the word being run is exempt: never an assignment, text before the path, or a `..` out of the folder.
+        'X=~/.claude/skills/a/run.sh cp /tmp/x y',
+        'CLAUDE_CONFIG_DIR=~/.claude/skills/a/run.sh claude',
+        'node x=~/.claude/skills/a/run.mjs',
+        '~/.claude/skills/../settings.json',
+        'node ~/.claude/skills/../hooks/guard.mjs',
+        'bash ~/.claude/bin/../hooks/x.sh'
     ]) assert.deepEqual(await judge(api, bash(command)), left, command);
     for (const [tool, path] of [['Write', '/Users/x/.claude/settings.json'], ['Edit', '/Users/x/repo/.claude/settings.local.json'],
         ['Write', '/Users/x/.claude/hooks/guard.sh'], ['Edit', '/Users/x/.codex/config.toml'], ['Write', '/Users/x/repo/.mcp.json']]) {
