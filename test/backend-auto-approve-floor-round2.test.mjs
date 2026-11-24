@@ -79,6 +79,9 @@ test('finding 1: a heredoc written to a file is read as shell when the same comm
         [write('terraform apply', 'make -f /tmp/payload.sh'), TERRAFORM],
         [write('aws s3 rm s3://b/k --profile p', 'crontab payload.sh', "cat > payload.sh <<'EOF'"), AWS],
         [write('terraform apply', 'awk -f /tmp/payload.sh x'), TERRAFORM],
+        // A copy, move or link gives the file another name, and running that name runs it.
+        [write('terraform apply', 'cp /tmp/payload.sh /tmp/run.mk\nmake -f /tmp/run.mk'), TERRAFORM],
+        [write('terraform apply', 'mv /tmp/payload.sh /tmp/a.sh && cp /tmp/a.sh /tmp/b.sh && crontab /tmp/b.sh'), TERRAFORM],
         // Fed to a shell on stdin, it is left by Kelpi's own rule for code piped into a shell.
         [write('terraform apply', 'bash < /tmp/payload.sh'), PIPED]
     ]);

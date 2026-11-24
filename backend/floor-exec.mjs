@@ -680,19 +680,28 @@ const FILE_HANDLERS = new Set([...PLAIN_TEXT].filter(name => name !== 'awk' && n
 export function runsFile(source, targets = []) {
     const lexed = lexShell(source);
     if (lexed.failed) return true;
-    for (const words of lexed.commands) {
-        const found = [];
-        invocations(words, found);
-        for (const inv of found) {
-            if (inv.unreadable || inv.dynamicExe) return true;
-            const { name, exe, args } = inv;
-            if (name === 'source' || exe.text === '.' || exe.text.includes('/')) return true;
-            if ((SHELLS.has(name) || INTERPRETER_NAMES.test(name)) && args.some(a => !a.text.startsWith('-'))) return true;
-            if (!FILE_HANDLERS.has(name) && args.some(a => targets.some(t => a.text === t || base(a.text) === base(t)))) return true;
+    const calls = [];
+    for (const words of lexed.commands) invocations(words, calls);
+    // A copy, move or link of a written file gives it other names (`cp p.sh q.sh`), which count as the file from then on.
+    const names = [...targets];
+    const same = (word, name) => word === name || base(word) === base(name);
+    for (let pass = 0; pass < 3; pass += 1) {
+        for (const { name, args } of calls) {
+            if (!COPIERS.has(name)) continue;
+            const operands = args.filter(a => !a.text.startsWith('-')).map(a => a.text);
+            if (operands.some(o => names.some(n => same(o, n)))) for (const o of operands) if (!names.includes(o)) names.push(o);
         }
+    }
+    for (const inv of calls) {
+        if (inv.unreadable || inv.dynamicExe) return true;
+        const { name, exe, args } = inv;
+        if (name === 'source' || exe.text === '.' || exe.text.includes('/')) return true;
+        if ((SHELLS.has(name) || INTERPRETER_NAMES.test(name)) && args.some(a => !a.text.startsWith('-'))) return true;
+        if (!FILE_HANDLERS.has(name) && args.some(a => names.some(n => same(a.text, n)))) return true;
     }
     return false;
 }
+const COPIERS = new Set(['cp', 'mv', 'ln', 'install']);
 
 // ------------------------------------------------------------------------------------------------------------------------- Kelpi's rules
 
