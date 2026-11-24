@@ -25,6 +25,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ ${#workers[@]} -gt 0 ] || { echo "no workers given" >&2; exit 1; }
+# The label names files under results/; same rule as swarm-spawn.
+for w in "${workers[@]}"; do
+  [[ ${w#*:} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${w#*:} != *..* ]] || { echo "label must be letters, digits, dot, dash or underscore: ${w#*:}" >&2; exit 1; }
+done
 
 # Spawn time (epoch seconds) of a worker, from whichever manifest lists it; empty when unknown.
 started_of() {
@@ -55,7 +59,8 @@ for ((t = 0; t < limit; t += 2)); do
         echo "NOTHING-NEW $label: worker finished earlier; nothing new"
       else
         echo "DONE $label: $(head -c 200 "$RES/$label.md" | tr '\n' ' ')"
-        [ -z "$mtime" ] || echo "$mtime" >"$RES/$label.seen"
+        # rm then noclobber: never write through a symlink left at this path.
+        if [ -n "$mtime" ]; then rm -f -- "$RES/$label.seen"; ( set -C; echo "$mtime" >"$RES/$label.seen" ) 2>/dev/null || true; fi
       fi
     elif [ -s "$EXITS/$pane.json" ]; then
       done_[$label]=1 failed=$((failed + 1)) finished=$((finished + 1))

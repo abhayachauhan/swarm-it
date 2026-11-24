@@ -131,6 +131,17 @@ test('waiting again on a result a previous swarm-wait already reported is NOTHIN
   assert.match(next.stdout, /^DONE w1: ## Goal second report/)
 })
 
+test('a label that could reach outside results/ is refused, and nothing is written there', () => {
+  const s = setup()
+  for (const label of ['../x', 'a/b', '-x', 'w1;id']) {
+    const { status, stderr, stdout } = s.run([`P1:${label}`, '--timeout', '1'])
+    assert.equal(status, 1, label)
+    assert.match(stderr, /label must be letters/)
+    assert.equal(stdout, '')
+  }
+  assert.deepEqual(fs.readdirSync(path.join(s.home, '.kelpi-swarm', 'results')), [])
+})
+
 test('a worker with no manifest entry keeps the old behaviour: any result is DONE', () => {
   const s = setup()
   fs.writeFileSync(s.result('w1'), '## Goal\nfix\n')
