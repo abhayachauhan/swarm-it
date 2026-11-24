@@ -245,6 +245,24 @@ test('finding 7: a rule the floor selects by name must be on the never list, and
     assert.match(source, /^checkFloorRules\(\);$/m, 'the check runs at the top level of the module');
 });
 
+test('finding 5: license-manager check-in-license and kms get-parameters-for-import are not on the AWS read list', async () => {
+    const { AWS_READ_OPS } = await import('../backend/aws-read-ops.mjs');
+    assert.equal(AWS_READ_OPS.get('license-manager').has('check-in-license'), false);
+    assert.equal(AWS_READ_OPS.get('kms').has('get-parameters-for-import'), false);
+    // `CheckIn` is not a `Check` anywhere on the list, and a real `Check` read stays.
+    for (const [service, ops] of AWS_READ_OPS) for (const op of ops) assert.doesNotMatch(op, /^check-in(?:-|$)/, `${service} ${op}`);
+    assert.equal(AWS_READ_OPS.get('elasticbeanstalk').has('check-dns-availability'), true);
+    await leftBy([
+        ['aws license-manager check-in-license --license-consumption-token t --profile p', AWS],
+        ['aws kms get-parameters-for-import --key-id k --wrapping-algorithm RSAES_OAEP_SHA_256 --wrapping-key-spec RSA_2048 --profile p', AWS],
+        ['aws payment-cryptography get-parameters-for-import --key-material-type TR34_KEY_BLOCK --wrapping-key-algorithm RSA_2048 --profile p', AWS]
+    ]);
+    await approve([
+        'aws license-manager get-license --license-arn arn:x --profile p', 'aws kms describe-key --key-id k --profile p',
+        'aws elasticbeanstalk check-dns-availability --cname-prefix x --profile p'
+    ]);
+});
+
 const MCP_SEND = 'mcp send or delete';
 
 test('finding 9: MCP tools that send, share or delete are left, and drafts and reads are not', async () => {
@@ -281,7 +299,10 @@ test('finding 8 and 9: under the floor a screen card for a file write is left, a
     await show(card('Create file', 'src/new.mjs'));
     await show(card('Tool use', 'Slack - slack_send_message(channel_id: "C1", message: "hi")'));
     await show(card('Tool use', 'something that names no tool'));
-    assert.equal(enters(), 0, 'none of the five gets an Enter');
+    // A word of the server's name must not make a draft of a real send, and a send word in it leaves the card.
+    await show(card('Tool use', 'Drafts - slack_send_message(channel_id: "C1", message: "hi")'));
+    await show(card('Tool use', 'Post office - search_threads(query: "x")'));
+    assert.equal(enters(), 0, 'none of the seven gets an Enter');
     await show(card('Bash command', 'git status'));
     await show(card('Tool use', 'Slack - slack_add_reaction(channel_id: "C1", name: "eyes")'));
     await show(card('Read file', 'settings.json'));
@@ -293,6 +314,8 @@ test('finding 8 and 9: under the floor a screen card for a file write is left, a
         ['src/new.mjs', false, 'PATH', undefined, 'floor'],
         ['Slack - slack_send_message(channel_id: "C1", message: "hi")', false, 'NEVER', MCP_SEND, 'floor'],
         ['something that names no tool', false, 'MCP_UNKNOWN', undefined, 'floor'],
+        ['Drafts - slack_send_message(channel_id: "C1", message: "hi")', false, 'NEVER', MCP_SEND, 'floor'],
+        ['Post office - search_threads(query: "x")', false, 'NEVER', MCP_SEND, 'floor'],
         ['git status', true, undefined, undefined, 'floor'],
         ['Slack - slack_add_reaction(channel_id: "C1", name: "eyes")', true, undefined, undefined, 'floor'],
         ['settings.json', true, undefined, undefined, 'floor']

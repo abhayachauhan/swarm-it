@@ -859,7 +859,11 @@ function screenFloor(item) {
     if (TOOL_CARD.test(String(item.promptBlock ?? ''))) {
         const open = String(item.command ?? '').indexOf('(');
         if (open <= 0) return { unreadable: true };
-        if (mcpSends(item.command.slice(0, open))) return { rule: MCP_SEND_RULE };
+        // The tool is the last word before the `(`, after the last ` - `. Only it can make a draft of the call; a send word in the server's
+        // name still leaves the card (the provider path never sees the server name here, the screen does).
+        const head = item.command.slice(0, open).trim();
+        const tool = head.split(/\s+-\s+/).pop().trim().split(/\s+/).pop();
+        if (mcpSends(tool) || mcpWords(head.slice(0, head.length - tool.length)).some(word => MCP_SEND_WORDS.has(word))) return { rule: MCP_SEND_RULE };
     }
     return floorCheck(item.command ?? '');
 }

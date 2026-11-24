@@ -8,8 +8,9 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-// The verb must be a whole word: `CheckoutLicense` (license-manager, which takes a license) is not a `Check`.
-const READ = /^(?:Describe|List|Get|BatchGet|Search|Lookup|Query|Scan|Select|Check|Validate|Simulate|Estimate|Filter|Head)(?=[A-Z0-9]|$)/;
+// The verb must be a whole word: `CheckoutLicense` (license-manager, which takes a license) is not a `Check`. `CheckIn` is not one either:
+// `CheckInLicense` releases a license. `CheckInstance...` is (the `In` is not a word of its own there).
+const READ = /^(?:Describe|List|Get|BatchGet|Search|Lookup|Query|Scan|Select|Check(?!In(?:[A-Z0-9]|$))|Validate|Simulate|Estimate|Filter|Head)(?=[A-Z0-9]|$)/;
 /** Read-looking operations that change something, send a message or mint a credential or login link. Anything not here is a read. */
 const EXCLUDED = new Set([
     'cognito-idp get-user-attribute-verification-code', // sends a verification code by email or text message
@@ -30,6 +31,8 @@ const EXCLUDED = new Set([
     'inspector get-assessment-report', 'importexport get-shipping-label', // generate a report and a shipping label
     'endusermessaging validate-notify-code-verification', // spends one of the passcode's attempts
     'payment-cryptography get-parameters-for-export', 'payment-cryptography get-parameters-for-import', // create an import or export token and certificate
+    'kms get-parameters-for-import', // returns a new import token and public key, as the payment-cryptography one does (Round 3, 24 Nov)
+    'license-manager check-in-license', // releases a license (also kept out by the READ pattern: `CheckIn` is not a `Check`)
     'gamelift get-compute-access', 'gamelift get-instance-access', 's3control get-data-access', 'kinesis-video-signaling get-ice-server-config', // temporary credentials
     'codepipeline get-job-details', 'codepipeline get-third-party-job-details', // temporary credentials and the action's secret values
     'groundstation get-agent-task-response-url', 'support get-attachment-upload-links', 'socialmessaging get-whats-app-flow-preview' // presigned upload links and a preview link
