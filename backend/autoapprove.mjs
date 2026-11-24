@@ -487,11 +487,22 @@ function stringEntries(value, out = [], command = false) {
     return out;
 }
 /** The strings held under a path-like key, however deep: `{ args: { filePath: '…' } }`, `{ paths: ['…'] }`. */
-function pathValues(value, out = [], named = false) {
-    if (typeof value === 'string') { if (named) out.push(value); } else if (value !== null && typeof value === 'object') {
-        for (const [key, inner] of Object.entries(value)) pathValues(inner, out, Array.isArray(value) ? named : PATH_FIELD.test(key));
+function pathValues(value) {
+    return pathEntries(value).map(entry => entry.value);
+}
+/** The same strings with the key each sits under (an array keeps its parent's key): `{ value, key }`. */
+function pathEntries(value, out = [], key = '', named = false) {
+    if (typeof value === 'string') { if (named) out.push({ value, key }); } else if (value !== null && typeof value === 'object') {
+        for (const [inner, item] of Object.entries(value)) pathEntries(item, out, Array.isArray(value) ? key : inner, Array.isArray(value) ? named : PATH_FIELD.test(inner));
     }
     return out;
+}
+/** A key that is plainly a file or folder on this machine (`path`, `filePath`, `destination`, `dest_path`), whatever its value looks like; `target` or `folder` may be a branch or a label. */
+const STRONG_PATH_KEY = /^(?:path|file|filename|filepath|dest|destpath|destination|destinationpath|targetpath|outputpath|outpath)s?$/;
+/** Whether an MCP tool's name plainly only reads: a reading word and no word that changes or writes anything. */
+function plainlyReads(toolName) {
+    const words = mcpWords(String(toolName).split('__').pop());
+    return words.some(w => MCP_READ_WORDS.has(w)) && !words.some(w => MCP_CHANGE_WORDS.has(w) || FILE_WRITE_WORDS.has(w));
 }
 /** A field that names the program of a structured call, and one that holds its arguments (an array of words, not a command line). */
 const EXEC_FIELD = /^(?:executable|exe|command|cmd|program|binary|bin|command_?name)$/i;
@@ -568,9 +579,7 @@ function mcpFloor(toolName, input) {
     }
     const exec = structuredExecRule(input);
     if (exec) return { rule: exec };
-    const words = mcpWords(String(toolName).split('__').pop());
-    const onlyReads = words.some(w => MCP_READ_WORDS.has(w)) && !words.some(w => MCP_CHANGE_WORDS.has(w) || FILE_WRITE_WORDS.has(w));
-    return !onlyReads && pathValues(input).some(mentions) ? { rule: FLOOR_SETTINGS_RULE } : null;
+    return !plainlyReads(toolName) && pathValues(input).some(mentions) ? { rule: FLOOR_SETTINGS_RULE } : null;
 }
 
 /**
@@ -584,8 +593,9 @@ export async function judgeFloorRequest(toolName, toolInput, fs = PATH_FS) {
     // A Write lands where its file_path says; an MCP tool that writes, moves or copies files lands where its path fields say.
     const targets = WRITES.has(toolName) ? [judged.text] : mcpWriteTargets(toolName, toolInput);
     if (targets.length > MAX_WRITE_TARGETS) return { allow: false, text: judged.text, reason: `writes to more than ${MAX_WRITE_TARGETS} files, too many to check`, code: 'PATH' };
+    const names = WRITES.has(toolName) ? [] : landingNames(toolInput);
     for (const target of targets) {
-        const refusal = await landing(target, judged.text, fs);
+        const refusal = await landing(target, judged.text, fs, names);
         if (refusal) return refusal;
     }
     return judged;
@@ -593,28 +603,38 @@ export async function judgeFloorRequest(toolName, toolInput, fs = PATH_FS) {
 
 /** At most this many destinations of one MCP call are followed; the lookups of more would not finish inside Kelpi's deadline. */
 const MAX_WRITE_TARGETS = 4;
-/** Words of an MCP tool's name that say it puts a file somewhere or removes one: `write_file`, `edit_file`, `move_file`, `copy`, `create_directory`. */
-const FS_WRITE_WORDS = new Set(['write', 'edit', 'append', 'move', 'copy', 'rename', 'mkdir', 'touch', 'truncate', 'link', 'symlink', 'save', 'store', 'put', 'replace',
-    'overwrite', 'patch', 'create', 'insert', 'modify', 'delete', 'remove', 'unlink', 'extract', 'unzip', 'download', 'export', 'dump', 'output', 'chmod', 'chown']);
 /**
- * The local file or folder names an MCP file-writing tool puts something in: the strings under its path-like fields that read as a place on
- * this machine (a URL, a bare word such as a branch name, or an id is not one). A `file://` URL is its path. Nothing for a tool that does not
- * plainly write, or that is not an MCP tool.
+ * The local file or folder names an MCP tool that does not plainly only read may put something in, move or copy something to. A string under a
+ * key that is plainly a file (`path`, `filePath`, `destination`, `dest_path`) is one whatever it holds, so a bare `notes` is a relative path and
+ * is left; under another path-like key (`target`, `folder`, `dir`) it counts only when it reads as a place on this machine, since those may
+ * hold a branch name or a label. A URL, an empty string or an id is not one. A `file://` URL is its path. Nothing for a tool that plainly
+ * only reads (`read_text_file`, `list_directory`), or that is not an MCP tool.
  */
 function mcpWriteTargets(toolName, input) {
-    if (typeof toolName !== 'string' || !/^mcp__./.test(toolName)) return [];
-    if (!mcpWords(toolName.split('__').pop()).some(word => FS_WRITE_WORDS.has(word))) return [];
+    if (typeof toolName !== 'string' || !/^mcp__./.test(toolName) || plainlyReads(toolName)) return [];
     const places = [];
-    for (const value of pathValues(input)) {
+    for (const { value, key } of pathEntries(input)) {
         let place = value;
         if (/^file:\/\//i.test(value)) { try { place = decodeURI(value.slice(7)); } catch { place = value.slice(7); } }
-        if (/^[a-z][a-z0-9+.-]*:/i.test(place) || !(/[/\\]/.test(place) || place.startsWith('~') || /\.[A-Za-z0-9]{1,8}$/.test(place))) continue;
+        if (place.trim() === '' || /^[a-z][a-z0-9+.-]*:/i.test(place)) continue;
+        const strong = STRONG_PATH_KEY.test(key.toLowerCase().replace(/[_-]/g, ''));
+        if (!strong && !(/[/\\]/.test(place) || place.startsWith('~') || /\.[A-Za-z0-9]{1,8}$/.test(place))) continue;
         if (!places.includes(place)) places.push(place);
     }
     return places;
 }
-/** Where one write lands: null when it is fine, or the refusal for an absolute-path, `.`/`..`, symlink, settings-file or hard-link problem. `text` is what the prompt shows. */
-async function landing(path, text, fs) {
+/**
+ * Names a file put into a folder may get that make it a settings file or hook there, tried when a destination turns out to be a folder. `.claude.json`
+ * and `.mcp.json` are not here: they are settings files in any folder, so they would leave every folder, and the source's own name already covers them.
+ */
+const SETTINGS_NAMES = ['settings.json', 'settings.local.json', 'hooks', 'config.toml', 'rules'];
+/** The last part of every string in a tool's input: a move or copy into a folder lands under one of these names. */
+const landingNames = input => [...new Set([...SETTINGS_NAMES, ...stringEntries(input).map(entry => posix.basename(entry.value.replace(/\/+$/, '')))].filter(Boolean))];
+/**
+ * Where one write lands: null when it is fine, or the refusal for an absolute-path, `.`/`..`, symlink, settings-file or hard-link problem.
+ * `text` is what the prompt shows. `names`, for an MCP move or copy, are the names the file may take when the destination is a folder.
+ */
+async function landing(path, text, fs, names = []) {
     if (!path.startsWith('/')) return { allow: false, text, reason: 'not an absolute path', code: 'PATH' };
     if (path.split('/').some(s => s === '.' || s === '..')) return { allow: false, text, reason: 'a path with . or .. in it', code: 'PATH' };
     const landed = await realPath(path, fs);
@@ -623,8 +643,11 @@ async function landing(path, text, fs) {
     if (typeof fs.stat === 'function') {
         try {
             const found = await lookup(fs.stat, landed.path, performance.now() + PATH_CHECK_MS);
+            const folder = typeof found.isDirectory === 'function' && found.isDirectory();
+            // Into a folder, a move or copy keeps the source's name: `mv x ~/.claude` lands on `~/.claude/x`.
+            if (folder && names.some(name => settingsPath(posix.join(landed.path, name)))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
             // A folder's link count is its sub-folders and the two entries every folder has, not a second name.
-            if (found.nlink > 1 && !(typeof found.isDirectory === 'function' && found.isDirectory())) return { allow: false, text, reason: 'writes to a file with more than one name (hard link)', code: 'HARDLINK' };
+            if (found.nlink > 1 && !folder) return { allow: false, text, reason: 'writes to a file with more than one name (hard link)', code: 'HARDLINK' };
         } catch (error) {
             if (!MISSING.has(error.code)) return { allow: false, text, reason: `could not tell where it writes (${error.code ?? message(error)})`, code: 'PATH' };
         }

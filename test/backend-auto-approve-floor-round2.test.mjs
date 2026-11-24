@@ -201,8 +201,22 @@ test('finding 4: an MCP tool that writes, moves or copies a file is followed to 
             assert.deepEqual(await mcp('copy_files', { paths: [join(root, 'repo', 'plain.txt'), join(root, 'repo', 'notes.json')] }), settingsLeft, 'second of several');
             assert.deepEqual(await mcp('copy_files', { paths: Array.from({ length: 5 }, (_, n) => join(root, 'repo', `f${n}.txt`)) }),
                 [ABSTAIN, 'PATH', undefined, 'writes to more than 4 files, too many to check']);
+            // A tool is followed unless its name plainly only reads, so a name nobody listed (`stash_file`) is checked like `write_file`.
+            assert.deepEqual(await mcp('stash_file', { path: join(root, 'repo', 'notes.json') }), settingsLeft, 'a tool name no list has');
+            assert.deepEqual(await mcp('read_and_replace', { path: join(root, 'repo', 'notes.json') }), settingsLeft, 'a read word beside a write word');
+            // Moved or copied into a folder, a file keeps its name there: the folder `.claude` gets `settings.json` or `hooks` from a file of that name.
+            assert.deepEqual(await mcp('copy_file', { src: join(root, 'repo', 'plain.txt'), dest: join(root, 'home', '.claude') }), settingsLeft, 'into the settings folder');
+            assert.deepEqual(await mcp('move_file', { source: join(root, 'repo', 'settings.json'), destination: join(root, 'repo', 'cfg') }), settingsLeft, 'into a linked settings folder');
+            // A key that is plainly a file says so whatever it holds: a bare name is a relative path, left. Under `target` or `folder` it may be a branch or a label.
+            for (const input of [{ path: 'notes' }, { destination: 'inbox' }, { filePath: 'out' }, { dest_path: 'x' }, { paths: ['notes'] }, { args: { file: 'x' } }]) {
+                assert.deepEqual(await mcp('stash_file', input), [ABSTAIN, 'PATH', undefined, 'not an absolute path'], JSON.stringify(input));
+            }
             // What stays approved: ordinary files, new files, folders that exist, reads, and fields that are not places on this machine.
             for (const [tool, input] of [
+                ['move_file', { source: join(root, 'repo', 'plain.txt'), destination: join(root, 'repo') }],
+                ['get_file', { path: 'notes' }],
+                ['stash_file', { target: 'main', name: 'v1' }],
+                ['stash_file', { path: '', note: 'unset' }],
                 ['write_file', { path: join(root, 'repo', 'plain.txt'), content: 'x' }],
                 ['write_file', { path: join(root, 'repo', 'new', 'file.txt'), content: 'x' }],
                 ['create_directory', { path: join(root, 'repo') }],
