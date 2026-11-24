@@ -542,8 +542,11 @@ function agentSettingsRule(name, args) {
     }
     return null;
 }
-/** A word the shell fills in that has no spaces of its own, so it could become a bare subcommand or verb (`$SUB`, `"$SUB"`, `$(echo mcp)`), not a sentence (`"Review $FILE now"`). */
-const nameFilledIn = word => word !== undefined && word.dynamic && !word.spaced;
+/**
+ * A word the shell fills in that could become a bare subcommand or verb: one with no spaces of its own (`$SUB`, `"$SUB"`, `$(echo mcp)`), or one
+ * whose expansion can split into several words even with a space beside it (`$SUB" "`). Not a sentence with its expansions quoted (`"Review $FILE now"`).
+ */
+const nameFilledIn = word => word !== undefined && word.dynamic && (word.splittable || !word.spaced);
 /** Global options of `claude` and `codex` that take a value, and the ones that take none. Any other option may be either. */
 const AGENT_VALUE_OPTIONS = {
     claude: new Set(['--settings', '--model', '--add-dir', '--mcp-config', '--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--tools',

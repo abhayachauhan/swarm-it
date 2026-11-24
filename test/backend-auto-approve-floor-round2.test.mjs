@@ -77,6 +77,9 @@ test('finding 2: claude and codex global options are read with their values befo
         ['claude --verbose --no-chrome --some-new-option value "$SUB" add evil', SETTINGS],
         ['claude --verbose --no-chrome --some-new-option value $(echo mcp add) evil', SETTINGS],
         ['claude --verbose --no-chrome --some-new-option value mcp "$VERB" evil', SETTINGS],
+        // A literal space beside an unquoted expansion does not stop it splitting: $SUB can be `mcp add`.
+        ['claude --verbose --no-chrome --model x $SUB" " add evil', SETTINGS],
+        ["claude --verbose --no-chrome --model x mcp $V' ' evil", SETTINGS],
         // An option value the shell fills in and does not quote can split into several words and move the subcommand.
         ['claude --verbose --no-chrome --model $M mcp list', SETTINGS],
         // (an attached value with a `$` in it is left earlier still, by the rule for a word the shell builds)
