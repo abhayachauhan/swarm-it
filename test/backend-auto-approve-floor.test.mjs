@@ -147,7 +147,22 @@ test('floor: writes to agent settings files stay with the user; reads and other 
         'cp /tmp/x ~/.claude/projects/../settings.json',
         'rg --pre ./run.sh pattern ~/.claude/settings.json',
         'echo note >> ~/.claude/projects/p/memory/MEMORY.md',
-        'node ~/.claude/skills/x/run.mjs ~/.claude/settings.json'
+        'node ~/.claude/skills/x/run.mjs ~/.claude/settings.json',
+        // Globs, braces and quotes that spell the folder, and redirects that a tokenizer could split off.
+        'cp /tmp/x ~/.cl*de/settings.json',
+        'cp /tmp/x ~/.c?aude/settings.json',
+        'cp /tmp/x ~/.{claude,x}/settings.json',
+        'cp /tmp/x ~/[.]claude/settings.json',
+        'cp /tmp/x ~/.cl"aude"/settings.json',
+        'echo {} >| ~/.claude/settings.json',
+        'echo {} &> ~/.claude/settings.json',
+        'echo {} >~/.claude/settings.json',
+        'echo {} > ~/.cl*de/settings.json',
+        '~/.claude/settings.json',
+        '~/.claude/skills/x/run > ~/.claude/settings.json',
+        'echo exit 0 > ~/.claude/hooks/bash-guards.sh',
+        'echo exit 0 >| ~/.claude/hooks/bash-guards.sh',
+        'true &> ~/.claude/hooks/guard.mjs'
     ]) assert.deepEqual(await judge(api, bash(command)), left, command);
     for (const [tool, path] of [['Write', '/Users/x/.claude/settings.json'], ['Edit', '/Users/x/repo/.claude/settings.local.json'],
         ['Write', '/Users/x/.claude/hooks/guard.sh'], ['Edit', '/Users/x/.codex/config.toml'], ['Write', '/Users/x/repo/.mcp.json']]) {

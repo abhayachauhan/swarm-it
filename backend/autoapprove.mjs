@@ -378,14 +378,20 @@ const FLOOR_SETTINGS = /\.claude[^/\s'"]*\/(?:settings[^/\s'"]*\.json|hooks(?:\/
  * is the script being run (`~/.claude/skills/x/run`, `node ~/.claude/skills/x.mjs`). Running a script is not writing it.
  */
 const SETTINGS_MENTION = /\.claude|\.codex|\.mcp\.json|claude_config_dir|codex_home/i;
+/** A hidden path part spelled with a glob or brace (`~/.cl*de`, `~/.{claude,x}`, `~/[.]claude`): it could be any of them. */
+const HIDDEN_PATTERN = /(?:^|\/)(?:\.[^/]*[*?[{]|\[)/;
+const mentions = word => SETTINGS_MENTION.test(word) || HIDDEN_PATTERN.test(word);
+/** A redirection into one of those paths, read on the raw text so no tokenizing can split it off: `>| ~/.claude/x`. */
+const SETTINGS_REDIRECT = /[<>]\s*[|&]?\s*["']?[^\s;|&()]*(?:\.claude|\.codex|\.mcp\.json|\.[^/\s]*[*?[{])/i;
 const SETTINGS_READERS = new Set(['cat', 'ls', 'grep', 'jq', 'head', 'tail', 'wc', 'diff', 'stat', 'file']);
 const SCRIPT_RUNNERS = new Set(['node', 'bash', 'sh', 'zsh', 'python', 'python3']);
+/** Only a skill's or a bin folder's script is exempt as the thing being run, and never one that is itself a settings path. */
+const SCRIPT_HOME = /\.claude\/(?:skills|bin|hooks)\/[^*?[{]+\.(?:sh|mjs|js|py)$|\.claude\/(?:skills|bin)\/[^*?[{.]+$/i;
 const wordBase = word => String(word ?? '').split('/').pop();
 function settingsWrite(tokens) {
-    // `X=… cmd`: an assignment is not the command being run, so it is never exempt.
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(String(tokens[0] ?? ''))) return tokens.some(x => SETTINGS_MENTION.test(x));
-    const script = SCRIPT_RUNNERS.has(wordBase(tokens[0])) && !String(tokens[1] ?? '').startsWith('-') ? 1 : 0;
-    if (!tokens.some((x, i) => i > script && SETTINGS_MENTION.test(x))) return false;
+    const runner = SCRIPT_RUNNERS.has(wordBase(tokens[0])) && !String(tokens[1] ?? '').startsWith('-');
+    const exempt = i => (i === 0 || (i === 1 && runner)) && SCRIPT_HOME.test(String(tokens[i]));
+    if (!tokens.some((x, i) => !exempt(i) && mentions(x))) return false;
     const reads = SETTINGS_READERS.has(wordBase(tokens[0])) && !tokens.some(x => /[<>]/.test(x));
     return !reads;
 }
@@ -397,6 +403,7 @@ export function floorRule(command) {
     if (typeof command !== 'string' || !command) return null;
     // Read before quotes are made inert: a quoted path to a settings file is still that file.
     const raw = command.replace(/\\\r?\n/g, '');
+    if (SETTINGS_REDIRECT.test(raw)) return FLOOR_SETTINGS_RULE;
     for (const text of [raw, raw.split('\n').map(l => l.trim()).join(' ')]) {
         for (const tokens of segments(text)) if (settingsWrite(tokens)) return FLOOR_SETTINGS_RULE;
     }
