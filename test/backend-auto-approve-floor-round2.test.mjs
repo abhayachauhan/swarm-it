@@ -80,9 +80,13 @@ test('finding 2: claude and codex global options are read with their values befo
         // A literal space beside an unquoted expansion does not stop it splitting: $SUB can be `mcp add`.
         ['claude --verbose --no-chrome --model x $SUB" " add evil', SETTINGS],
         ["claude --verbose --no-chrome --model x mcp $V' ' evil", SETTINGS],
-        // `"$@"` and `"${list[@]}"` make several words even inside double quotes.
+        // Any option value the shell fills in is left, quoted or not: `"$@"` and `"${list[@]}"` make several words even inside double quotes.
+        ['claude --verbose --no-chrome --model "$M" mcp list', SETTINGS],
         ['claude --verbose --no-chrome --model "$@" mcp list', SETTINGS],
-        ['claude --verbose --no-chrome --model "${args[@]}" mcp list', SETTINGS],        // An option value the shell fills in and does not quote can split into several words and move the subcommand.
+        ['claude --verbose --no-chrome --model "${args[@]}" mcp list', SETTINGS],
+        // A subcommand or verb word with a space of its own is a sentence, unless an expansion in it makes several words.
+        ['claude --verbose --no-chrome --some-new-option value mcp "$@ " evil', SETTINGS],
+        ['claude --verbose --no-chrome --some-new-option value "${args[@]} " add evil', SETTINGS],        // An option value the shell fills in and does not quote can split into several words and move the subcommand.
         ['claude --verbose --no-chrome --model $M mcp list', SETTINGS],
         // (an attached value with a `$` in it is left earlier still, by the rule for a word the shell builds)
         ['claude --verbose --no-chrome --model=$M mcp list', 'shell expansion builds a word'],
@@ -92,7 +96,7 @@ test('finding 2: claude and codex global options are read with their values befo
     await approve(['claude --settings /tmp/custom.json mcp list', 'claude --model x mcp get x', 'claude --settings /tmp/s.json --version',
         "claude -p --resume abc --permission-mode auto 'Write the updated result to /tmp/r.md. Reply done.'", "claude --verbose --model x -p 'explain how mcp add works'",
         "codex -c model=x exec 'fix the tests'", 'codex --profile p mcp list', "claude --some-new-option value 'explain mcp'", 'claude --model x plugin list',
-        'claude --verbose --no-chrome --model "$M" mcp list', 'claude --verbose --no-chrome --resume abc "Review $FILE now"']);
+        'claude --verbose --no-chrome --resume abc "Review $FILE now"', 'claude --verbose --no-chrome --model x mcp list']);
 });
 
 test('finding 3: standard and privilege wrappers are looked through in any order before the piped-into-shell and ruled-command checks', async () => {

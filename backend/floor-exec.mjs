@@ -520,16 +520,16 @@ function agentSettingsRule(name, args) {
     const flags = AGENT_FLAGS[name];
     let unknown = false;
     let i = 0;
-    // An option value the shell fills in outside double quotes can split into several words (`--model $M` with M="x config set"), which
-    // shifts the subcommand.
+    // An option value the shell fills in can be several words (`--model $M` with M="x config set", `--model "$@"`), which shifts the subcommand,
+    // and there are too many ways to write one to tell the harmless ones apart: any such value leaves the line.
     for (; i < args.length && args[i].text.startsWith('-'); i += 1) {
         const text = args[i].text;
         const eq = text.indexOf('=');
         const option = eq > 0 ? text.slice(0, eq) : text;
-        if (eq > 0) { if (args[i].splittable) return SETTINGS_RULE; continue; }
+        if (eq > 0) { if (args[i].dynamic) return SETTINGS_RULE; continue; }
         if (flags.has(option)) continue;
         if (values.has(option)) {
-            if (args[i + 1]?.splittable) return SETTINGS_RULE;
+            if (args[i + 1]?.dynamic) return SETTINGS_RULE;
             i += 1;
         } else unknown = true;
     }
