@@ -282,6 +282,7 @@ const XARGS_VALUES = new Set(['-a', '-d', '-E', '-e', '-I', '-L', '-n', '-P', '-
 const PARALLEL_VALUES = new Set(['-j', '-n', '-N', '-S', '-a', '-P', '-L', '-C', '--jobs', '--max-args', '--sshlogin', '--arg-file', '--colsep', '--delay', '--timeout', '--results', '--joblog']);
 const SSH_VALUES = new Set(['-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l', '-m', '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w']);
 const WATCH_VALUES = new Set(['-n', '--interval']);
+const SHELL_VALUES = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
 const EXEC_FLAGS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 /** Tools that run what follows a `--` on their command line: `op run -- aws …`, `chamber exec svc -- aws …`. */
 const DASHDASH_TOOLS = new Set(['op', 'saml2aws', 'doppler', 'chamber', 'assume', 'granted', 'aws-sso', 'leapp', 'envchain', 'dotenv']);
@@ -293,13 +294,14 @@ const DASHDASH_TOOLS = new Set(['op', 'saml2aws', 'doppler', 'chamber', 'assume'
  * word only the shell can fill in.
  */
 function invocations(words, out, depth = 0, stdin = false) {
-    if (depth > 8) { out.push({ dynamicExe: true, stdin }); return; }
+    if (depth > 8) { out.push({ dynamicExe: true, bare: true, stdin }); return; }
     let i = 0;
     for (;;) {
         while (i < words.length && ((ASSIGNMENT.test(words[i].text) && !words[i].quoted) || KEYWORDS.has(words[i].text))) i += 1;
         if (i >= words.length) return;
         const exe = words[i];
-        if (exe.dynamic) { out.push({ dynamicExe: true, stdin }); return; }
+        // `bare`: the word begins with the expansion (`$T apply`), as opposed to a word with one inside (JSON such as {"note":"$HOME"}).
+        if (exe.dynamic) { out.push({ dynamicExe: true, bare: /^[$`]/.test(exe.text), stdin }); return; }
         const name = base(exe.text);
         const wrapperValues = WRAPPERS.get(name);
         if (wrapperValues) {
@@ -318,12 +320,15 @@ function invocations(words, out, depth = 0, stdin = false) {
         }
         const rest = words.slice(i + 1);
         if (SHELLS.has(name)) {
-            const at = rest.findIndex(w => /^-[A-Za-z]*c[A-Za-z]*$/.test(w.text));
-            const before = at < 0 ? [] : rest.slice(0, at);
-            if (at >= 0 && before.every(w => w.text.startsWith('-') || w.text.startsWith('+'))) {
-                const script = rest[at + 1];
-                if (script !== undefined) subCommands(script.text, out, depth + 1, stdin);
-                return;
+            // `bash -o pipefail -c '…'`: options come first, some with a value of their own; the first word that is not an option is the script.
+            let j = 0;
+            while (j < rest.length && /^[-+]/.test(rest[j].text) && !rest[j].dynamic) {
+                const t = rest[j].text;
+                if (/^-[A-Za-z]*c[A-Za-z]*$/.test(t)) {
+                    if (rest[j + 1] !== undefined) subCommands(rest[j + 1].text, out, depth + 1, stdin);
+                    return;
+                }
+                j += SHELL_VALUES.has(t) ? 2 : 1;
             }
         } else if (name === 'ssh') {
             let j = 0;
@@ -479,9 +484,10 @@ function agentSettingsRule(name, args) {
 }
 
 /** `strict` is false for a string that is probably data (JSON, prose) and not a command line: a command word the shell would have to fill in then proves nothing. */
-function invocationRule(inv, strict) {
-    if (inv.unreadable) return strict && /\baws\b/i.test(inv.text) ? AWS_RULE : strict && /\b(?:terraform|terragrunt|tofu)\b/i.test(inv.text) ? TERRAFORM_RULE : null;
-    if (inv.dynamicExe) return strict ? VARIABLE_RULE : null;
+function invocationRule(inv, strict, source) {
+    if (inv.unreadable) return unreadableRule(inv.text, strict);
+    // A command word the shell fills in: in data, only when it starts with the expansion and a protected tool is named in the same string.
+    if (inv.dynamicExe) return strict || (inv.bare && MENTIONS_TOOL.test(source)) ? VARIABLE_RULE : null;
     // `/usr/local/bin/a?s s3 rm`: a pattern in the command word expands to whatever file matches it.
     if (inv.exe.glob && strict) return 'shell expansion builds a word';
     const { name, args, stdin } = inv;
@@ -501,14 +507,30 @@ function invocationRule(inv, strict) {
         if (TERRAFORM_TOOLS.has(base(value.text))) return TERRAFORM_RULE;
     }
     if (PLAIN_TEXT.has(name)) return null;
-    // A command not named here (`op run aws …`, `docker run x aws …`): an `aws` or `terraform` word among its arguments may be the real command.
+    // A command not named here (`docker run x aws …`, `somewrapper aws …`): an `aws` or `terraform` word among its arguments may be the real
+    // command, and a quoted argument that names one may be a command line the tool runs (`docker run x sh -c "aws …"`).
     for (let k = 0; k < args.length; k += 1) {
+        if (args[k].quoted && /\s/.test(args[k].text)) {
+            if (!MENTIONS_TOOL.test(args[k].text)) continue;
+            const inner = lexShell(args[k].text);
+            if (inner.failed) continue;
+            for (const words of inner.commands) {
+                const found = [];
+                invocations(words, found, 1);
+                for (const nested of found) {
+                    const rule = invocationRule(nested, false, args[k].text);
+                    if (rule) return rule;
+                }
+            }
+            continue;
+        }
         const word = base(args[k].text);
-        if (args[k].quoted && /\s/.test(args[k].text)) continue;
         if (word === 'aws') {
-            const service = args[k + 1];
-            if (service === undefined || args[k + 2] === undefined) continue;
-            if (!service.dynamic && !AWS_READ_OPS.has(service.text) && !SERVICES_WITH_RULES.has(service.text)) continue;
+            const next = args[k + 1];
+            if (next === undefined) continue;
+            // An option may stand between `aws` and the service (`--profile p ec2 …`), so only a plain word that is no service says it is not a call.
+            if (!next.text.startsWith('-') && !next.dynamic && args[k + 2] === undefined) continue;
+            if (!next.text.startsWith('-') && !next.dynamic && !AWS_READ_OPS.has(next.text) && !SERVICES_WITH_RULES.has(next.text)) continue;
             const rule = awsRule(args.slice(k + 1), stdin);
             if (rule) return rule;
         } else if (TERRAFORM_TOOLS.has(word) && args[k].text === args[k].text.toLowerCase()) {
@@ -518,6 +540,14 @@ function invocationRule(inv, strict) {
     }
     return null;
 }
+const MENTIONS_TOOL = /\b(?:aws|terraform|terragrunt|tofu)\b/i;
+/** A string that cannot be read as shell: a command line that names a protected tool is left (in data, only one that starts as a call to it). */
+function unreadableRule(text, strict) {
+    if (strict ? !MENTIONS_TOOL.test(text) : !STARTS_AS_TOOL.test(text)) return null;
+    return /\baws\b/i.test(text) ? AWS_RULE : TERRAFORM_RULE;
+}
+/** A string that starts as a call to one of them (after assignments or sudo), so that when it cannot be read it is still a command, not prose. */
+const STARTS_AS_TOOL = /^\s*(?:(?:[A-Za-z_]\w*=\S*|sudo|doas|env|nohup|time|command|exec)\s+)*(?:\S*\/)?(?:aws|terraform|terragrunt|tofu)(?:\s|$)/i;
 
 /**
  * The floor rule a command line breaks when read word by word, or null. Called on the command with only heredoc bodies of cat and
@@ -527,12 +557,12 @@ function invocationRule(inv, strict) {
  */
 export function floorExecRule(source, strict = true) {
     const lexed = lexShell(source);
-    if (lexed.failed) return !strict ? null : /\baws\b/i.test(source) ? AWS_RULE : /\b(?:terraform|terragrunt|tofu)\b/i.test(source) ? TERRAFORM_RULE : null;
+    if (lexed.failed) return unreadableRule(source, strict);
     for (const words of lexed.commands) {
         const found = [];
         invocations(words, found);
         for (const inv of found) {
-            const rule = invocationRule(inv, strict);
+            const rule = invocationRule(inv, strict, source);
             if (rule) return rule;
         }
     }

@@ -63,6 +63,12 @@ test('finding 1: an MCP write tool is checked on its destination field, not on t
     // A command string in one field is read on its own: a fake `echo` or `cat` in another field cannot exempt it.
     assert.deepEqual(await judge(api, request('mcp__x__run', { a: '; cat ', command: 'cp /tmp/x ~/.claude/settings.json' })), left(AA.FLOOR_SETTINGS_RULE));
     assert.deepEqual(await judge(api, request('mcp__x__run', { a: '; echo ', command: 'aws s3 rm s3://b/k' })), left(AWS));
+    // A command field that cannot be read as shell, or whose command word the shell fills in, is left when it names the tool; prose and JSON are data.
+    assert.deepEqual(await judge(api, request('mcp__x__run', { a: '; echo ', command: "aws bedrock-agent prepare-agent --agent-id X '" })), left(AWS));
+    assert.deepEqual(await judge(api, request('mcp__x__run', { a: '; echo ', command: '$T apply aws' })), left('command word is a variable'));
+    for (const text of ["don't touch the aws account", 'we run terraform plan nightly and the aws bill is fine', '{"service":"aws","note":"$HOME"}']) {
+        assert.deepEqual(await judge(api, request('mcp__slack__slack_send_message', { channel: 'C1', text })), approved, text);
+    }
     // What stays approved: reads of any file, writes to ordinary files, and other tools' text.
     for (const [tool, input] of [
         ['mcp__filesystem__read_file', { path: '/Users/x/repo/a.txt' }],
@@ -99,6 +105,11 @@ test('finding 3: AWS reads are unwrapped from sudo, env, aws-vault, bash -c, nic
         ['ssh host "aws bedrock-agent prepare-agent --agent-id X"', AWS],
         ['watch -n 5 aws bedrock-agent prepare-agent --agent-id X', AWS],
         ['op run -- aws bedrock-agent prepare-agent --agent-id X', AWS],
+        // A shell option with a value before -c, and a tool this does not know that runs a command line or `aws` itself.
+        ['bash -o pipefail -c "aws bedrock-agent prepare-agent --agent-id X"', AWS],
+        ['sudo bash --norc -o errexit -c "aws bedrock-agent prepare-agent"', AWS],
+        ['docker run --rm img aws --profile p bedrock-agent prepare-agent --agent-id X', AWS],
+        ['docker run --rm img sh -c "aws bedrock-agent prepare-agent --agent-id X"', AWS],
         ['aws bedrock-agent prepare-agent --agent-id X --profile p', AWS],
         ['aws not-a-service list-things --profile p', AWS],
         ['aws ec2 not-an-operation --profile p', AWS]
