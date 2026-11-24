@@ -10,7 +10,7 @@ import { actionableWorker, ownedRequestPane, otherSwarmPane } from './store.mjs'
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
 import { inertCurlBodies, inertQuoted, quietGrepPatterns, quietHeredocs, unrollLoops } from './floor-helpers.mjs';
-import { floorExecRule, kelpiFloorRule } from './floor-exec.mjs';
+import { commandIndex, floorExecRule, kelpiFloorRule } from './floor-exec.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -119,23 +119,11 @@ function awsCall(tokens, start, direct) {
 }
 // zsh runs `=rm` as rm, and macOS file names ignore case (`Rm` is /bin/rm), so both are folded away.
 const base = token => token.split('/').pop().replace(/^=+/, '').toLowerCase();
-const WRAPPERS = ['command', 'exec', 'env', 'nohup', 'time', 'builtin'];
 /**
- * The command word of a segment: the first token after env assignments and `command`/`exec`/`env`/`nohup`/`time`,
- * skipping the wrappers' own options (`time -p`, `env -i`, `exec -a name`).
+ * The command word of a segment: the first token after env assignments and any run of wrappers in any order (`command`, `exec`, `env`,
+ * `nohup`, `time`, `sudo`, `nice`, `timeout`, ...), skipping the wrappers' own options (`time -p`, `env -i`, `exec -a name`, `sudo -u x`).
  */
-const commandWord = tokens => {
-    let wrapped = false;
-    for (let i = 0; i < tokens.length; i += 1) {
-        const t = tokens[i];
-        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) continue;
-        if (WRAPPERS.includes(base(t))) { wrapped = true; continue; }
-        // Wrapper options that take a separate value: `exec -a name`, `env -u VAR`, `env -C dir`, `time -f fmt -o file`.
-        if (wrapped && t.startsWith('-')) { if (['-a', '-u', '-C', '-f', '-o', '--unset', '--chdir', '--format', '--output'].includes(t)) i += 1; continue; }
-        return t;
-    }
-    return undefined;
-};
+const commandWord = tokens => tokens[commandIndex(tokens)];
 /** The words after the first `name` token (or after `name -C dir` style options), for a tool's subcommand. */
 const after = (tokens, name) => {
     const i = tokens.findIndex(t => base(t) === name);

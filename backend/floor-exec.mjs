@@ -634,21 +634,35 @@ export function kelpiFloorRule(command) {
     const lines = command.split('\n').map(line => line.trim());
     for (const text of new Set([command, lines.join(' '), lines.join('')])) {
         for (const tokens of kelpiSegments(text)) {
-            // Kelpi's wrappers do not include sudo: `… | sudo bash` is read as `bash` too.
-            const bare = withoutPrivilegeWrappers(tokens);
+            // Kelpi's wrappers stop at sudo, and the floor's stop at `command`: read the line past every wrapper in any order, so
+            // `… | sudo bash`, `… | command sudo bash` and `… | nice sudo sh` are all `bash` or `sh`.
+            const at = commandIndex(tokens);
+            const bare = at > 0 ? tokens.slice(at) : null;
             for (const rule of KELPI_FLOOR) if (rule.test(tokens, text) || (bare && rule.test(bare, text))) return rule.name === 'kelpi install-hooks' ? SETTINGS_RULE : PIPED_RULE;
         }
     }
     return null;
 }
-const EXTRA_WRAPPERS = new Set(['sudo', 'doas', 'pkexec', 'ionice', 'setsid', 'chronic', 'unbuffer']);
-/** The tokens with leading sudo-like wrappers and their options taken off, or null when there are none. */
-function withoutPrivilegeWrappers(tokens) {
+/** Every word that runs the rest of its line, standard ones and privilege ones (`pkexec` as well), which may come in any order. */
+const WRAPPER_NAMES = new Set([...WRAPPERS.keys(), 'pkexec']);
+/**
+ * Where the command word is in the tokens of one segment: past assignments and any run of wrappers with their options, whatever the
+ * order (`command sudo bash`, `sudo command env bash`, `nice sudo sh`, `env A=1 timeout 5 sudo -u x bash`). -1 when nothing is run
+ * (`command -v bash` only looks the word up).
+ */
+export function commandIndex(tokens) {
     let i = 0;
-    while (i < tokens.length && EXTRA_WRAPPERS.has(base(tokens[i]))) {
-        const values = WRAPPERS.get(base(tokens[i]));
+    for (;;) {
+        while (i < tokens.length && ASSIGNMENT.test(tokens[i])) i += 1;
+        if (i >= tokens.length) return -1;
+        const name = base(tokens[i]);
+        if (!WRAPPER_NAMES.has(name)) return i;
+        const values = WRAPPERS.get(name);
         i += 1;
-        while (i < tokens.length && tokens[i].startsWith('-')) i += values?.has(tokens[i]) ? 2 : 1;
+        while (i < tokens.length && tokens[i].startsWith('-') && tokens[i] !== '-') {
+            if (name === 'command' && /^-[A-Za-z]*[vV]/.test(tokens[i])) return -1;
+            i += values?.has(tokens[i]) ? 2 : 1;
+        }
+        if (name === 'timeout' && i < tokens.length) i += 1;
     }
-    return i > 0 && i < tokens.length ? tokens.slice(i) : null;
 }

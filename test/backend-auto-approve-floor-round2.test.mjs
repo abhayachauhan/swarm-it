@@ -54,6 +54,28 @@ async function expectAll(commands, expected, make = bash) {
 const leftBy = (commands, make) => expectAll(commands, left, make);
 const approve = (commands, make) => expectAll(commands.map(c => [c]), () => approved, make);
 
+test('finding 3: standard and privilege wrappers are looked through in any order before the piped-into-shell and ruled-command checks', async () => {
+    await leftBy([
+        // The reviewer's: `command` stopped one reader and `sudo` stopped the other, so neither reached bash.
+        ['cat /tmp/payload | command sudo bash', PIPED],
+        ['cat /tmp/payload | sudo command env bash', PIPED],
+        ['cat /tmp/payload | nice sudo sh', PIPED],
+        ['cat /tmp/payload | env A=1 timeout 5 sudo -u root bash', PIPED],
+        ['cat /tmp/payload | sudo -u root nohup nice -n 5 zsh', PIPED],
+        ['cat /tmp/payload | sudo exec -a x ionice -c 3 dash', PIPED],
+        ['cat /tmp/payload | pkexec command bash', PIPED],
+        ['cat /tmp/payload | command sudo python3', PIPED],
+        // The same chains in front of the commands the floor rules name.
+        ['sudo command env terraform apply', TERRAFORM],
+        ['nice sudo command aws s3 rm s3://b/k --profile p', AWS],
+        ['command sudo $T apply', 'command word is a variable'],
+        ['nice sudo sh -c "$(echo x | base64 -d)"', 'shell fed generated code'],
+        ['sudo command {rm,-rf,x}', 'shell expansion builds a word']
+    ]);
+    await approve(['cat /tmp/payload | command sudo grep x', 'nice sudo ls /tmp', 'command sudo tee /tmp/x', 'command -v git', 'env A=1 timeout 5 sudo -n true',
+        'echo hi | command sudo -u root tee /tmp/x']);
+});
+
 test('finding 6: mediaconvert describe-endpoints creates an endpoint unless it says GET_ONLY, and other reads that mint or create are left', async () => {
     await leftBy([
         // The reviewer's: DEFAULT, also the mode when none is given, creates the account endpoint.
