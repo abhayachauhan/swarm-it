@@ -13,7 +13,8 @@ import { inertCurlBodies, inertQuoted, quietGrepPatterns, quietHeredocs, unrollL
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
-export const DEFAULT_HOURS = 12;
+/** The user's saved on/off choice; absent means on. */
+export const ENABLED_KEY = 'autoApproveEnabled';
 export const MAX_HOURS = 24 * 7;
 /** Rate guard: a pane that gets more than RATE_MAX auto-approvals within RATE_WINDOW_MS is paused (its card is left). */
 export const RATE_MAX = Number(process.env.SWARM_AUTO_RATE_MAX) || 30;
@@ -264,12 +265,21 @@ export function createState() {
 
 const validEntry = e => e && typeof e === 'object' && typeof e.at === 'string' && typeof e.paneID === 'string';
 
-/** Load the persisted log. Missing or malformed values fall back to empty. */
-export async function load(store) {
+/** Load the persisted log and the saved on/off choice. Missing or malformed values fall back to an empty log, and
+ *  Auto approve is on (no end time) unless the user's saved choice is exactly off. */
+export async function load(store, now = Date.now(), mono = performance.now()) {
     try {
         const raw = await store.api.storage.get(LOG_KEY);
         store.auto.log = (Array.isArray(raw) ? raw : []).filter(validEntry).slice(-LOG_CAP);
     } catch { store.auto.log = []; }
+    let saved = null;
+    try { saved = await store.api.storage.get(ENABLED_KEY); } catch { /* unreadable: the default, on */ }
+    if (saved !== false) turnOn(store, null, now, mono);
+}
+
+/** Remember the user's choice across a reload. A failed write leaves the choice in memory only. */
+export async function saveEnabled(store, enabled) {
+    try { await store.api.storage.set(ENABLED_KEY, enabled); } catch { /* the choice still lives in memory */ }
 }
 
 async function saveLog(store) {
@@ -291,13 +301,12 @@ export async function clearLog(store) {
 export const logEntries = store => [...store.auto.log].reverse();
 
 /**
- * Turn on for `hours` (default 12; null or 0 means until turned off). Counters, the rate guard and the tried set
- * restart. Already-open recognised cards are approved on the next run.
+ * Turn on for `hours` (default: no end time; null or 0 also mean until turned off). Counters, the rate guard and the
+ * tried set restart. Already-open recognised cards are approved on the next run.
  */
 export function turnOn(store, hours, now = Date.now(), mono = performance.now()) {
     let endAt = null;
-    if (hours === undefined) endAt = now + DEFAULT_HOURS * 3600000;
-    else if (hours === null || hours === 0) endAt = null;
+    if (hours === undefined || hours === null || hours === 0) endAt = null;
     else if (typeof hours === 'number' && Number.isFinite(hours) && hours > 0 && hours <= MAX_HOURS) endAt = now + hours * 3600000;
     else return fail(`hours must be a number between 0 and ${MAX_HOURS} (0 or null: until turned off)`, 'BAD_ARGS');
     const a = store.auto;

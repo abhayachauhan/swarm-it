@@ -9,7 +9,8 @@ process.env.SWARM_SWARMS_RELOAD_MS = '10';
 process.env.SWARM_AUTO_RATE_MAX = '2';
 process.env.SWARM_AUTO_RATE_WINDOW_MS = '600000';
 const { registerAll, SNAPSHOT_EVENT } = await import('../backend/index.mjs');
-const { LOG_CAP, RATE_MAX } = await import('../backend/autoapprove.mjs');
+const AA = await import('../backend/autoapprove.mjs');
+const { LOG_CAP, RATE_MAX } = AA;
 const { parsePrompt, promptHash } = await import('../backend/notify.mjs');
 const lastSnapshot = api => api.emitted.filter(e => e.name === SNAPSHOT_EVENT).at(-1)?.data;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -45,34 +46,68 @@ async function start(extra) {
     return { api, dispose };
 }
 
-test('off by default, and off again after a reload even if it was on; the log survives the reload', async () => {
+test('a fresh start, with nothing saved, is on with no end time', async () => {
+    const { api, dispose } = await start({ storage: new Map() });
+    const first = (await api.command('get-state', {})).snapshot.autoApprove;
+    assert.deepEqual([first.on, first.until, first.approved, first.ended], [true, null, 0, null]);
+    api.captureStore.w1 = prompt('npm test');
+    await sleep(80);
+    assert.equal(enters(api, 'w1'), 1, 'a recognised prompt is approved with no command from the user');
+    dispose();
+});
+
+test('a saved off stays off after a restart, a saved on stays on, and the log survives', async () => {
     const storage = new Map();
     const { api, dispose } = await start({ storage });
-    const before = (await api.command('get-state', {})).snapshot.autoApprove;
-    assert.equal(before.on, false);
-    assert.deepEqual([before.until, before.approved, before.skipped, before.logCount], [null, 0, 0, 0]);
-    assert.equal((await api.command('auto-approve', { on: true, hours: 12 })).autoApprove.on, true);
+    assert.equal(lastSnapshot(api).autoApprove.on, true);
     api.captureStore.w1 = prompt('npm test');
     await sleep(80);
     assert.equal(lastSnapshot(api).autoApprove.approved, 1);
+    const off = await api.command('auto-approve', { on: false });
+    assert.deepEqual([off.autoApprove.on, off.autoApprove.until], [false, null]);
+    assert.equal(storage.get('autoApproveEnabled'), false, 'the choice is saved');
     dispose();
     const again = makeApi({ storage });
     const reloaded = registerAll(again);
     await reloaded.ready;
     const after = (await again.command('get-state', {})).snapshot.autoApprove;
-    assert.equal(after.on, false, 'never persisted as on');
-    assert.equal(after.logCount, 1, 'the log is persisted');
-    assert.equal(again.storageMap.has('autoApprove'), false, 'no on-state key is written');
+    assert.deepEqual([after.on, after.until, after.logCount], [false, null, 1]);
+    const on = await again.command('auto-approve', { on: true });
+    assert.deepEqual([on.autoApprove.on, on.autoApprove.until], [true, null]);
+    assert.equal(storage.get('autoApproveEnabled'), true);
     reloaded();
+    const third = makeApi({ storage });
+    const restarted = registerAll(third);
+    await restarted.ready;
+    const last = (await third.command('get-state', {})).snapshot.autoApprove;
+    assert.deepEqual([last.on, last.until], [true, null]);
+    restarted();
 });
 
-test('turning on: default 12 h, a chosen duration, until turned off; bad input is refused; off is one call', async () => {
-    const { api, dispose } = await start();
+test('turning on with no hours never expires, and an expiry by explicit hours does not save an off', async () => {
+    const { api, dispose } = await start({ storage: new Map() });
+    const before = dispose.store;
     const t0 = Date.now();
+    const m0 = performance.now();
+    const twelveHours = 12 * 3600000;
+    const bare = await api.command('auto-approve', { on: true });
+    assert.deepEqual([bare.ok, bare.autoApprove.on, bare.autoApprove.until], [true, true, null]);
+    assert.equal(before.auto.deadline, null);
+    assert.equal(AA.expireIfDue(before,t0 + 100 * 3600000, m0 + 100 * 3600000), false, 'no end time, nothing to expire');
+    assert.deepEqual([before.auto.on, before.auto.ended], [true, null]);
+    await api.command('auto-approve', { on: true, hours: 12 });
+    assert.equal(Date.parse(before.auto.until) - t0 < twelveHours + 5000, true);
+    assert.equal(AA.expireIfDue(before, t0 + twelveHours + 60000, m0 + twelveHours + 60000), true, 'explicit hours still expire');
+    assert.deepEqual([before.auto.on, before.auto.ended.reason], [false, 'expired']);
+    assert.equal(api.storageMap.get('autoApproveEnabled'), true, 'an expiry is not the user turning it off');
+    dispose();
+});
+
+test('turning on: no end time by default, a chosen duration, until turned off; bad input is refused; off is one call', async () => {
+    const { api, dispose } = await start();
     const twelve = await api.command('auto-approve', { on: true });
     assert.equal(twelve.ok, true);
-    const untilMs = Date.parse(twelve.autoApprove.until);
-    assert.ok(Math.abs(untilMs - (t0 + 12 * 3600000)) < 5000, 'default is 12 h');
+    assert.equal(twelve.autoApprove.until, null, 'default is no end time');
     const four = await api.command('auto-approve', { on: true, hours: 4 });
     assert.ok(Math.abs(Date.parse(four.autoApprove.until) - (Date.now() + 4 * 3600000)) < 5000);
     assert.equal((await api.command('auto-approve', { on: true, hours: null })).autoApprove.until, null, 'until turned off');

@@ -170,7 +170,7 @@ test('a live Working footer clears a stale Codex waiting fallback but keeps genu
 });
 
 test('unlisted Claude questions appear in the global directory with Auto off, while ordinary idle prompts do not',async()=>{
- const api=makeFakeApi({panes:[{id:'outside',agent:'claude',type:'shell',status:'waitingForInput',workspaceID:'ws1'}],captures:{outside:PROMPT_TEXT}});const dispose=registerAll(api);
+ const api=makeFakeApi({panes:[{id:'outside',agent:'claude',type:'shell',status:'waitingForInput',workspaceID:'ws1'}],captures:{outside:PROMPT_TEXT},storage:new Map([['autoApproveEnabled',false]])});const dispose=registerAll(api);
  try{await dispose.ready;await sleep(80);let snapshot=lastSnapshot(api);assert.equal(snapshot.agents.find(a=>a.paneID==='outside').activity,'waiting');assert.equal(snapshot.attention.some(a=>a.paneID==='outside'),false);assert.equal(api.callsTo('terminal.sendKey').length,0);
   api.captureStore.outside='Done.\n────────────────────────\n❯\n────────────────────────';await sleep(80);snapshot=lastSnapshot(api);assert.equal(snapshot.agents.find(a=>a.paneID==='outside').activity,'idle');assert.equal(api.callsTo('terminal.sendKey').length,0);
  }finally{dispose();}

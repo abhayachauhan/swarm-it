@@ -263,8 +263,7 @@
     /** The header toggle's label: "Auto: off", or "Auto: on · 14 ✓ · until 08:30". */
     function autoLabel(auto) {
         if (!auto || !auto.on) return 'Auto: off';
-        const until = auto.until ? `until ${formatClock(auto.until)}` : 'until turned off';
-        return `Auto: on · ${auto.approved} ✓ · ${until}`;
+        return auto.until ? `Auto: on · ${auto.approved} ✓ · until ${formatClock(auto.until)}` : `Auto: on · ${auto.approved} ✓`;
     }
     /** After a switch-off: says so, and why. '' while on or never used. */
     function autoEndedText(auto) {
@@ -310,7 +309,7 @@
         if (at.getTime() <= nowMs) at.setDate(at.getDate() + 1);
         return at;
     }
-    /** The Auto menu's choices (no "no limit" here: the rail always sets an end). */
+    /** The Auto menu's choices, shown after the user turned Auto off: a way back on for a while, or with no limit. */
     function autoChoices(nowMs) {
         const today = nextNineAm(nowMs).getDate() === new Date(nowMs).getDate();
         return [
@@ -318,6 +317,7 @@
             { key: '4h', label: '4 hours' },
             { key: '12h', label: '12 hours' },
             { key: '9am', label: today ? 'Until 9am today' : 'Until 9am tomorrow' },
+            { key: 'always', label: 'No time limit' },
         ];
     }
     /** The auto-approve command for a menu choice, worked out when it is clicked. */
@@ -325,6 +325,7 @@
         if (key === '10m') return autoOnEffect(10 / 60);
         if (key === '4h') return autoOnEffect(4);
         if (key === '12h') return autoOnEffect(12);
+        if (key === 'always') return effect('auto-approve', { on: true });
         if (key === '9am') return effect('auto-approve', { on: true, until: nextNineAm(nowMs).toISOString() });
         return null;
     }

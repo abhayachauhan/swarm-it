@@ -271,7 +271,9 @@ export function makeSwarmApi(extra = {}) {
         createShellPane: extra.createShellPane,
         createFails: extra.createFails,
         noAgentEvents: extra.noAgentEvents,
-        storage: extra.storage,
+        // Auto approve starts on unless the user saved off, so tests that predate that start from a saved off.
+        // Pass `storage: new Map()` for a true first start.
+        storage: extra.storage ?? new Map([['autoApproveEnabled', false]]),
         groups: extra.groups,
         permissions: extra.permissions
     });

@@ -500,9 +500,9 @@ test('auto-approve off: the header says "Auto: off"; a click opens a menu of 4 h
     const morning = new Date(2026, 9, 11, 7, 30).getTime();
     L.render(fakeDoc, refs, view(snap, { selectedPaneID: null, railFocused: true, autoMenuOpen: true }, { nowMs: morning }), handlersWithMenu);
     const choices = find(refs.panel, n => n.tag === 'button');
-    assert.deepEqual(choices.map(b => b.text), ['10 minutes', '4 hours', '12 hours', 'Until 9am today']);
+    assert.deepEqual(choices.map(b => b.text), ['10 minutes', '4 hours', '12 hours', 'Until 9am today', 'No time limit']);
     choices.forEach(b => b.click());
-    assert.deepEqual(calls.slice(1), [['auto-on', '10m'], ['auto-on', '4h'], ['auto-on', '12h'], ['auto-on', '9am']]);
+    assert.deepEqual(calls.slice(1), [['auto-on', '10m'], ['auto-on', '4h'], ['auto-on', '12h'], ['auto-on', '9am'], ['auto-on', 'always']]);
     // The menu is not drawn while auto-approve is on.
     L.render(fakeDoc, refs, view({ ...snap, autoApprove: AUTO_ON }, { selectedPaneID: null, railFocused: true, autoMenuOpen: true }), handlersWithMenu);
     assert.equal(find(refs.panel, n => n.tag === 'button' && /hours|9am/.test(n.text)).length, 0);
@@ -527,9 +527,10 @@ test('the Auto menu choices: 10 minutes, 4 and 12 hours, and until 9am today bef
     assert.equal(L.autoChoiceEffect('9am', at(8, 59)).args.until, new Date(2026, 9, 11, 9).toISOString());
     assert.equal(L.autoChoiceEffect('9am', at(9)).args.until, new Date(2026, 9, 12, 9).toISOString());
     assert.equal(L.autoChoiceEffect('9am', at(23, 30)).args.until, new Date(2026, 9, 12, 9).toISOString());
+    assert.deepEqual(L.autoChoiceEffect('always', at(10)), { command: 'local.swarm-view.auto-approve', args: { on: true } });
     assert.equal(L.autoChoiceEffect('none', at(10)), null);
-    assert.deepEqual(L.autoChoices(at(8)).map(c => c.label), ['10 minutes', '4 hours', '12 hours', 'Until 9am today']);
-    assert.deepEqual(L.autoChoices(at(21)).map(c => c.label), ['10 minutes', '4 hours', '12 hours', 'Until 9am tomorrow']);
+    assert.deepEqual(L.autoChoices(at(8)).map(c => c.label), ['10 minutes', '4 hours', '12 hours', 'Until 9am today', 'No time limit']);
+    assert.deepEqual(L.autoChoices(at(21)).map(c => c.label), ['10 minutes', '4 hours', '12 hours', 'Until 9am tomorrow', 'No time limit']);
 });
 
 test('auto-approve on: "Auto: on · 14 ✓ · until 08:30", notes in the tooltip, one click turns it off', () => {
@@ -548,7 +549,7 @@ test('auto-approve on: "Auto: on · 14 ✓ · until 08:30", notes in the tooltip
     assert.ok(tip.some(t => /^Stopped for api-docs: more than 30 auto-approvals/.test(t)));
     toggle.click();
     assert.deepEqual(calls, [['auto-off']]);
-    assert.equal(L.autoLabel({ ...AUTO_ON, until: null }), 'Auto: on · 14 ✓ · until turned off');
+    assert.equal(L.autoLabel({ ...AUTO_ON, until: null }), 'Auto: on · 14 ✓', 'no end time, no countdown');
     assert.equal(find(refs.head, n => n.className === 'aa-banner').length, 0, 'no banner');
 });
 

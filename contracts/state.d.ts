@@ -93,7 +93,7 @@ export interface SwarmState {
     attention: AttentionItem[];
 }
 
-/** ADDITIVE (auto-approve). Off by default and after every reload; never persisted as on. */
+/** ADDITIVE (auto-approve). On by default with no end time, unless the user saved off; the on/off choice survives a reload. */
 export interface AutoApproveState {
     on: boolean;
     /** ISO-8601 UTC end time, or null for "until turned off" (and while off). */
