@@ -149,6 +149,14 @@ test('swarm-retry --model overrides the recorded model', () => {
   assert.equal(manifest(s).workers[0].model, 'opus')
 })
 
+test('swarm-retry --parent-session passes the coordinator session through to the new worker', () => {
+  const s = stub()
+  started(s)
+  const { status, stderr, calls } = retry(s, ['P1:w1', '--parent-session', 'repos-a9'])
+  assert.equal(status, 0, stderr)
+  assert.ok(calls.find((c) => c.startsWith('pane send')).includes('Your coordinator is the Claude Code session repos-a9.'), calls.join('\n'))
+})
+
 test('swarm-retry keeps a Codex worker on Codex with its configured model', () => {
   const s = stub()
   assert.equal(spawn(s, ['w1', s.task, '--agent', 'codex', '--path', s.home, '--model', 'gpt-6.1-sol']).status, 0)
@@ -227,8 +235,8 @@ test('swarm-retry refuses an unknown worker, a wrong label, a missing task file 
   refused(['P1;id:w1'], 'pane id must be letters, digits, dot, dash or underscore')
   refused(['P1:w1', '--model', 'sonnet;id'], 'mode and model must be plain words')
   refused(['P1:w1', '--effort', 'ultra'], 'effort must be low, medium, high, xhigh or max')
-  refused(['P1'], 'usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high]')
-  refused([], 'usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high]')
+  refused(['P1'], 'usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high] [--parent-session name]')
+  refused([], 'usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high] [--parent-session name]')
   // The manifest is untrusted: a recorded value with shell characters is refused too.
   const m = manifest(s)
   m.workers[0].model = 'haiku;id'

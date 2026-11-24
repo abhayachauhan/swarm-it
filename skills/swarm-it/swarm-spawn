@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# swarm-spawn <label> <task-file> [--agent claude|codex] [--mode auto|on-request] [--model model] [--effort level] [--path dir]
+# swarm-spawn <label> <task-file> [--agent claude|codex] [--mode auto|on-request] [--model model] [--effort level] [--path dir] [--parent-session name]
 # One call per worker: create a child workspace, register it in the swarm rail, start a headless
 # agent on the task file. Prints <pane-id>:<label>, ready for swarm-wait. The result
 # lands in ~/.kelpi-swarm/results/<label>.md.
+# --parent-session names the coordinator's Claude Code session (the name ListAgents gives it). A Claude
+# worker then messages the coordinator with SendMessage when it is blocked, finds something that changes
+# the plan, and when it finishes. The result file is still written first, so swarm-wait remains the backstop.
 set -euo pipefail
 
-usage() { echo "usage: swarm-spawn <label> <task-file> [--agent claude|codex] [--mode mode] [--model model] [--effort low|medium|high|xhigh|max] [--path dir]" >&2; exit 1; }
+usage() { echo "usage: swarm-spawn <label> <task-file> [--agent claude|codex] [--mode mode] [--model model] [--effort low|medium|high|xhigh|max] [--path dir] [--parent-session name]" >&2; exit 1; }
 [ $# -ge 2 ] || usage
 label=$1 task=$2; shift 2
-agent=claude mode= model= effort= dir=$PWD
+agent=claude mode= model= effort= dir=$PWD parent_session=
 while [ $# -gt 0 ]; do
   case "$1" in
     --agent) agent=$2; shift 2 ;;
@@ -16,6 +19,7 @@ while [ $# -gt 0 ]; do
     --model) model=$2; shift 2 ;;
     --effort) effort=$2; shift 2 ;;
     --path) dir=$2; shift 2 ;;
+    --parent-session) [ $# -ge 2 ] || usage; parent_session=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -31,6 +35,7 @@ bad() { echo "$1" >&2; exit 1; }
 [[ $mode =~ ^[A-Za-z-]+$ && ( -z $model || $model =~ ^[A-Za-z0-9.-]+$ ) ]] || bad "mode and model must be plain words"
 # The levels both CLIs accept. Codex's ultra is refused: it starts its own agents, so an unattended worker's cost is open-ended.
 [[ -z $effort || $effort =~ ^(low|medium|high|xhigh|max)$ ]] || bad "effort must be low, medium, high, xhigh or max"
+[[ -z $parent_session || ( $parent_session =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $parent_session != *..* ) ]] || bad "parent session must be letters, digits, dot, dash or underscore"
 if [ "$agent" = codex ]; then
   [[ $mode = on-request || $mode = never ]] || bad "Codex mode must be on-request or never"
 fi
@@ -105,8 +110,13 @@ sleep 2
 if [ "$agent" = claude ]; then
   effortArg=
   [ -z "$effort" ] || effortArg="--effort $effort "
-  kelpi pane send --target "$pane" "cd $dir && claude -p --permission-mode $mode --model $model ${effortArg}\"Do the task in $task. $FORMAT Write the result to $RES/$label.md. Reply done.\"" >/dev/null
+  # Built only from validated plain words, so it is safe inside the double-quoted prompt.
+  report=
+  [ -z "$parent_session" ] || report=" Your coordinator is the Claude Code session $parent_session. Load SendMessage with ToolSearch query select:SendMessage, then send it one-line messages that start with $label: when you are blocked, when you find something that changes the plan, and once at the very end after the result file is written, saying done and the result path. Never send more than one message a minute, and never send to any other session. Always write the result file even if a send fails."
+  kelpi pane send --target "$pane" "cd $dir && claude -p --permission-mode $mode --model $model ${effortArg}\"Do the task in $task. $FORMAT Write the result to $RES/$label.md.${report} Reply done.\"" >/dev/null
 else
+  # Codex has no SendMessage: its result file and swarm-wait are the only report.
+  [ -z "$parent_session" ] || echo "note: Codex workers cannot message $parent_session; rely on swarm-wait" >&2
   modelArg= effortArg=
   [ -z "$model" ] || modelArg="--model $model "
   [ -z "$effort" ] || effortArg="-c model_reasoning_effort=$effort "

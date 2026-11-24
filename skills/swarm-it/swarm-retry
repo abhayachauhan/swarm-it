@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# swarm-retry <pane-id>:<label> [--model sonnet] [--effort high]
+# swarm-retry <pane-id>:<label> [--model sonnet] [--effort high] [--parent-session name]
 # Start a dead worker again through swarm-spawn, with the agent, label, task file, mode, model, effort
 # and directory recorded in the manifest. Prints <pane-id>:<label> of the new pane, ready for swarm-wait.
+# --parent-session is passed through so the new worker messages the coordinator (see swarm-spawn).
 # The old result is archived by swarm-spawn. Refuses while the old pane still runs Claude.
 set -euo pipefail
 
-usage() { echo "usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high]" >&2; exit 1; }
+usage() { echo "usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high] [--parent-session name]" >&2; exit 1; }
 bad() { echo "$1" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 worker=$1; shift
-newmodel= neweffort=
+newmodel= neweffort= parent_session=
 while [ $# -gt 0 ]; do
   case "$1" in
     --model) [ $# -ge 2 ] || usage; newmodel=$2; shift 2 ;;
     --effort) [ $# -ge 2 ] || usage; neweffort=$2; shift 2 ;;
+    --parent-session) [ $# -ge 2 ] || usage; parent_session=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -60,6 +62,7 @@ args=("$label" "$task" --agent "$agent")
 [ -z "$model" ] || args+=(--model "$model")
 [ -z "$effort" ] || args+=(--effort "$effort")
 [ -z "$dir" ] || args+=(--path "$dir")
+[ -z "$parent_session" ] || args+=(--parent-session "$parent_session")
 new=$("$SPAWN" "${args[@]}")
 # The new pane has its own entry; drop the dead one so the label is listed once.
 node "$MW" remove-worker "$ws" "$pane" >/dev/null
