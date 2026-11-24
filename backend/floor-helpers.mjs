@@ -121,8 +121,13 @@ export function unrollLoops(text) {
  */
 const COMMIT_MESSAGE_HEAD = /^[ \t]*git(?:[ \t]+-C[ \t]+\S+)?[ \t]+commit\b.*[ \t](?:-[A-Za-z]*m|--message)[ \t]+$/;
 const GREP_HEAD = /^[ \t]*(?:grep|egrep|fgrep|rg)(?=[ \t]|$)/;
+/**
+ * `rg --pre 'terraform' x apply` runs `terraform apply` on the searched file: the value of these options is a program, not a pattern.
+ * A command that names one is read as written, so what the option runs is read by every rule.
+ */
+const PROGRAM_OPTION = /(?:^|[\s'"])--(?:pre|hostname-bin)(?:[=\s'"]|$)/;
 export function inertQuoted(text) {
-    if (!/['"]/.test(text) || /<<|`|\$['"({]|\\|\r/.test(text)) return text;
+    if (!/['"]/.test(text) || /<<|`|\$['"({]|\\|\r/.test(text) || PROGRAM_OPTION.test(text)) return text;
     let out = '';
     let segment = 0;
     for (let i = 0; i < text.length; i++) {
@@ -145,17 +150,18 @@ export function inertQuoted(text) {
     return out;
 }
 /**
- * `cat >> file <<'EOF' … EOF` (or `tee`, or `git commit|tag -F - <<'EOF'`, a message read from stdin, or `python3|node - <<'EOF'`, a script read from
- * stdin, which the floor answers as it answers a script file; `bash` and `sh` are never listed): a quoted delimiter means nothing in the body expands or runs, and cat or tee only writes it, so the
- * body and its marker are removed before the floor rules read the text. Nothing may follow the marker but a plain redirect (no pipe, no second
- * command), and the command before it must be cat or tee; a body fed to a shell or interpreter is never removed. No terminator: text unchanged.
+ * `cat >> file <<'EOF' … EOF` (or `tee`, or `git commit|tag -F - <<'EOF'`, a message read from stdin): a quoted delimiter means nothing in the
+ * body expands or runs, and cat, tee or git only store it, so the body and its marker are removed before the floor rules read the text. Nothing
+ * may follow the marker but a plain redirect (no pipe, no second command), and the command before it must be cat, tee or git commit or tag. A body
+ * fed to a shell or an interpreter (`python3 <<'EOF'`, `node - <<'EOF'`, `bash <<'EOF'`) is code that runs: quoting the delimiter only stops the
+ * shell expanding it, so it is never removed and the floor leaves it. No terminator: text unchanged.
  */
 export function quietHeredocs(text) {
     const lines = text.split('\n');
     const out = [];
     for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i];
-        const heredoc = /^((?:[^<]*?[;&|][ \t]*)?(?:(?:cat|tee|python[0-9.]*|node)\b[^;&|<]*|git(?:[ \t]+-C[ \t]+[^\s;&|<'"`\\#]+)?[ \t]+(?:commit|tag)\b[^;&|<]*[ \t]-F[ \t]+-[ \t]*))<<-?[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)")([^\n]*)$/.exec(line);
+        const heredoc = /^((?:[^<]*?[;&|][ \t]*)?(?:(?:cat|tee)\b[^;&|<]*|git(?:[ \t]+-C[ \t]+[^\s;&|<'"`\\#]+)?[ \t]+(?:commit|tag)\b[^;&|<]*[ \t]-F[ \t]+-[ \t]*))<<-?[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)")([^\n]*)$/.exec(line);
         const delimiter = heredoc?.[2] ?? heredoc?.[3];
         if (!heredoc || !/^[ \t]*(?:\d?>>?[ \t]*[\w.\/~+-]+[ \t]*|\d>&\d[ \t]*)*$/.test(heredoc[4])) { out.push(line); continue; }
         // The marker must be a real heredoc to the shell: no comment, quote, backtick or backslash before it on this line, and no earlier line that
@@ -173,9 +179,11 @@ export function quietHeredocs(text) {
 /**
  * Single-quoted arguments of a `grep`, `egrep`, `fgrep` or `rg` segment are patterns, so they are blanked (backslashes inside single quotes
  * are plain text, which `inertQuoted` does not allow). Text with a double quote, backtick, `$(`, heredoc, comment, backslash outside quotes,
- * newline or unclosed quote is returned unchanged; so is every segment whose first word is anything else (`bash -c '…'` still runs).
+ * newline or unclosed quote is returned unchanged; so is every segment whose first word is anything else (`bash -c '…'` still runs), and
+ * so is any command that gives `rg` a program to run (`--pre`, `--hostname-bin`).
  */
 export function quietGrepPatterns(text) {
+    if (PROGRAM_OPTION.test(text)) return text;
     let out = '';
     let segment = '';
     for (let i = 0; i < text.length; i += 1) {
