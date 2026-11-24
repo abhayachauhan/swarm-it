@@ -160,9 +160,9 @@ export function quietHeredocs(text) {
     return stripHeredocs(text).text;
 }
 /**
- * quietHeredocs, and also the bodies it took out of `cat` and `tee` heredocs (`written`), which are files being written: the floor reads those
- * as shell when the same command later runs or sources a file (`cat > p.sh <<'EOF' … EOF` then `bash p.sh`), because storing a script
- * is harmless until it is run. A commit or tag message is not a file, so its body is never listed.
+ * quietHeredocs, and also the bodies it took out of `cat` and `tee` heredocs with the files they are written to (`written`, each
+ * `{ body, targets }`): the floor reads those as shell when the same command later runs or sources a file (`cat > p.sh <<'EOF' … EOF`
+ * then `bash p.sh`), because storing a script is harmless until it is run. A commit or tag message is not a file, so its body is never listed.
  */
 export function stripHeredocs(text) {
     const lines = text.split('\n');
@@ -180,7 +180,13 @@ export function stripHeredocs(text) {
         for (let j = i + 1; j < lines.length; j += 1) if (lines[j].replace(/^\t+/, '') === delimiter) { end = j; break; }
         if (end < 0) { out.push(line); continue; }
         out.push(`${heredoc[1]}${heredoc[4]}`);
-        if (/^(?:cat|tee)\b/.test(heredoc[1].split(/[;&|]/).pop().trim())) written.push(lines.slice(i + 1, end).join('\n'));
+        const writer = heredoc[1].split(/[;&|]/).pop().trim();
+        if (/^(?:cat|tee)\b/.test(writer)) {
+            // Where it is written: the targets of `>` and `>>` (before or after the marker) and, for tee, its file arguments.
+            const redirected = [...`${heredoc[1]} ${heredoc[4]}`.matchAll(/(?:^|[\s\d])>>?[ \t]*([^\s;&|<>]+)/g)].map(m => m[1]);
+            const teed = writer.startsWith('tee') ? writer.slice(3).split(/\s+/).filter(w => w && !w.startsWith('-') && !w.startsWith('>')) : [];
+            written.push({ body: lines.slice(i + 1, end).join('\n'), targets: [...redirected, ...teed] });
+        }
         i = end;
     }
     return { text: out.join('\n'), written };

@@ -668,13 +668,16 @@ export function floorExecRule(source, strict = true) {
 }
 
 const INTERPRETER_NAMES = /^(?:python[0-9.]*|node|nodejs|perl|ruby|php|deno|bun)$/;
+/** Commands that only read, list, copy, stage or edit a file they are given, so handing them a script does not run it (awk and sed can: `awk -f`). */
+const FILE_HANDLERS = new Set([...PLAIN_TEXT].filter(name => name !== 'awk' && name !== 'sed'));
 /**
  * Whether a command line runs or sources a file: a shell or interpreter given something that is not an option (`bash p.sh`, `sh -x p.sh`,
- * `python3 p.py`), `source` or `.`, or a command that is itself a path (`./p.sh`, `/tmp/p.sh`). Read through wrappers, `bash -c` and `xargs`.
- * A line that cannot be read, or whose command word the shell fills in, counts as running one. Used to tell a script that is only stored
- * (`cat > p.sh <<'EOF'`) from one that is then run, whose body is shell the floor must read.
+ * `python3 p.py`), `source` or `.`, a command that is itself a path (`./p.sh`, `/tmp/p.sh`), or any command that is not a plain reader or
+ * stager (cat, ls, git, cp, ...) and is handed one of `targets`, the files just written, by path or by name (`make -f p.mk`, `crontab p`).
+ * Read through wrappers, `bash -c` and `xargs`. A line that cannot be read, or whose command word the shell fills in, counts as running
+ * one. Used to tell a script that is only stored (`cat > p.sh <<'EOF'`) from one that is then run, whose body is shell the floor must read.
  */
-export function runsFile(source) {
+export function runsFile(source, targets = []) {
     const lexed = lexShell(source);
     if (lexed.failed) return true;
     for (const words of lexed.commands) {
@@ -685,6 +688,7 @@ export function runsFile(source) {
             const { name, exe, args } = inv;
             if (name === 'source' || exe.text === '.' || exe.text.includes('/')) return true;
             if ((SHELLS.has(name) || INTERPRETER_NAMES.test(name)) && args.some(a => !a.text.startsWith('-'))) return true;
+            if (!FILE_HANDLERS.has(name) && args.some(a => targets.some(t => a.text === t || base(a.text) === base(t)))) return true;
         }
     }
     return false;

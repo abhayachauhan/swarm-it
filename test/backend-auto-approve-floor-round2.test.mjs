@@ -74,7 +74,13 @@ test('finding 1: a heredoc written to a file is read as shell when the same comm
         [write('terraform apply', 'echo done && bash /tmp/payload.sh'), TERRAFORM],
         // Run through a wrapper or a variable the shell fills in.
         [write('terraform apply', 'nice sudo bash /tmp/payload.sh'), TERRAFORM],
-        [write('terraform apply', '$RUN /tmp/payload.sh'), TERRAFORM]
+        [write('terraform apply', '$RUN /tmp/payload.sh'), TERRAFORM],
+        // A command that is not a plain reader or stager, handed the file just written by path or by name, may run it.
+        [write('terraform apply', 'make -f /tmp/payload.sh'), TERRAFORM],
+        [write('aws s3 rm s3://b/k --profile p', 'crontab payload.sh', "cat > payload.sh <<'EOF'"), AWS],
+        [write('terraform apply', 'awk -f /tmp/payload.sh x'), TERRAFORM],
+        // Fed to a shell on stdin, it is left by Kelpi's own rule for code piped into a shell.
+        [write('terraform apply', 'bash < /tmp/payload.sh'), PIPED]
     ]);
     // Plain storage stays approved: nothing runs the file, so nothing in it is a command.
     await approve([
@@ -83,6 +89,7 @@ test('finding 1: a heredoc written to a file is read as shell when the same comm
         write('run terraform apply after review', 'git add /tmp/payload.sh'),
         write('aws s3 rm s3://b/k', "bash -c 'echo hi'"),
         write('terraform apply', 'cat /tmp/payload.sh | grep terraform'),
+        write('terraform apply', 'chmod +x /tmp/payload.sh\nls -l /tmp/payload.sh\ngit add /tmp/payload.sh\ncp /tmp/payload.sh /tmp/copy.sh\nwc -l /tmp/payload.sh'),
         // A script that is run but holds nothing the floor leaves is not a prompt.
         write('echo hi\nls /tmp', 'bash /tmp/payload.sh'),
         write('#!/bin/bash\naws s3 ls --profile p\nterraform plan', 'chmod +x /tmp/payload.sh && /tmp/payload.sh'),

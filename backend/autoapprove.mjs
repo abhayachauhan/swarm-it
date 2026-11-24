@@ -417,8 +417,9 @@ export function floorRule(command, shell = true) {
     const { text: heredocFree, written } = stripHeredocs(command);
     // Unless the same command also runs a file: `cat > p.sh <<'EOF' … EOF` then `bash p.sh` runs what was written, so each body is read as
     // a shell script of its own (without its `#!` line, which would read as a command word `bash`). Plain storage stays approved.
-    if (shell && written.length > 0 && runsFile(heredocFree)) {
-        for (const body of written) {
+    // A body is read as shell whatever language it is in: that can only leave more for the user, never less.
+    if (shell && written.length > 0 && runsFile(heredocFree, written.flatMap(w => w.targets))) {
+        for (const { body } of written) {
             const rule = floorRule(body.replace(/^#!.*(?:\n|$)/, ''), true);
             if (rule) return rule;
         }
