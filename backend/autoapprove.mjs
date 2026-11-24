@@ -9,8 +9,8 @@ import { approve } from './actions.mjs';
 import { actionableWorker, ownedRequestPane, otherSwarmPane } from './store.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
-import { inertCurlBodies, inertQuoted, quietGrepPatterns, quietHeredocs, unrollLoops } from './floor-helpers.mjs';
-import { commandIndex, floorExecRule, kelpiFloorRule } from './floor-exec.mjs';
+import { inertCurlBodies, inertQuoted, quietGrepPatterns, stripHeredocs, unrollLoops } from './floor-helpers.mjs';
+import { commandIndex, floorExecRule, kelpiFloorRule, runsFile } from './floor-exec.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -414,7 +414,15 @@ export function floorRule(command, shell = true) {
     const settings = settingsRule(command);
     if (settings) return settings;
     // Quoted grep patterns and commit messages hold text, not commands; so do quoted heredoc bodies written by cat or tee.
-    const heredocFree = quietHeredocs(command);
+    const { text: heredocFree, written } = stripHeredocs(command);
+    // Unless the same command also runs a file: `cat > p.sh <<'EOF' … EOF` then `bash p.sh` runs what was written, so each body is read as
+    // a shell script of its own (without its `#!` line, which would read as a command word `bash`). Plain storage stays approved.
+    if (shell && written.length > 0 && runsFile(heredocFree)) {
+        for (const body of written) {
+            const rule = floorRule(body.replace(/^#!.*(?:\n|$)/, ''), true);
+            if (rule) return rule;
+        }
+    }
     command = inertCurlBodies(quietGrepPatterns(inertQuoted(heredocFree)));
     const joined = command.replace(/\\\r?\n/g, '');
     const lines = joined.split('\n').map(l => l.trim());

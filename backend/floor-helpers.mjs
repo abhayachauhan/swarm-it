@@ -157,8 +157,17 @@ export function inertQuoted(text) {
  * shell expanding it, so it is never removed and the floor leaves it. No terminator: text unchanged.
  */
 export function quietHeredocs(text) {
+    return stripHeredocs(text).text;
+}
+/**
+ * quietHeredocs, and also the bodies it took out of `cat` and `tee` heredocs (`written`), which are files being written: the floor reads those
+ * as shell when the same command later runs or sources a file (`cat > p.sh <<'EOF' … EOF` then `bash p.sh`), because storing a script
+ * is harmless until it is run. A commit or tag message is not a file, so its body is never listed.
+ */
+export function stripHeredocs(text) {
     const lines = text.split('\n');
     const out = [];
+    const written = [];
     for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i];
         const heredoc = /^((?:[^<]*?[;&|][ \t]*)?(?:(?:cat|tee)\b[^;&|<]*|git(?:[ \t]+-C[ \t]+[^\s;&|<'"`\\#]+)?[ \t]+(?:commit|tag)\b[^;&|<]*[ \t]-F[ \t]+-[ \t]*))<<-?[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)")([^\n]*)$/.exec(line);
@@ -171,9 +180,10 @@ export function quietHeredocs(text) {
         for (let j = i + 1; j < lines.length; j += 1) if (lines[j].replace(/^\t+/, '') === delimiter) { end = j; break; }
         if (end < 0) { out.push(line); continue; }
         out.push(`${heredoc[1]}${heredoc[4]}`);
+        if (/^(?:cat|tee)\b/.test(heredoc[1].split(/[;&|]/).pop().trim())) written.push(lines.slice(i + 1, end).join('\n'));
         i = end;
     }
-    return out.join('\n');
+    return { text: out.join('\n'), written };
 }
 
 /**

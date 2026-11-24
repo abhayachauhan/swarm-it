@@ -667,6 +667,29 @@ export function floorExecRule(source, strict = true) {
     return null;
 }
 
+const INTERPRETER_NAMES = /^(?:python[0-9.]*|node|nodejs|perl|ruby|php|deno|bun)$/;
+/**
+ * Whether a command line runs or sources a file: a shell or interpreter given something that is not an option (`bash p.sh`, `sh -x p.sh`,
+ * `python3 p.py`), `source` or `.`, or a command that is itself a path (`./p.sh`, `/tmp/p.sh`). Read through wrappers, `bash -c` and `xargs`.
+ * A line that cannot be read, or whose command word the shell fills in, counts as running one. Used to tell a script that is only stored
+ * (`cat > p.sh <<'EOF'`) from one that is then run, whose body is shell the floor must read.
+ */
+export function runsFile(source) {
+    const lexed = lexShell(source);
+    if (lexed.failed) return true;
+    for (const words of lexed.commands) {
+        const found = [];
+        invocations(words, found);
+        for (const inv of found) {
+            if (inv.unreadable || inv.dynamicExe) return true;
+            const { name, exe, args } = inv;
+            if (name === 'source' || exe.text === '.' || exe.text.includes('/')) return true;
+            if ((SHELLS.has(name) || INTERPRETER_NAMES.test(name)) && args.some(a => !a.text.startsWith('-'))) return true;
+        }
+    }
+    return false;
+}
+
 // ------------------------------------------------------------------------------------------------------------------------- Kelpi's rules
 
 /**

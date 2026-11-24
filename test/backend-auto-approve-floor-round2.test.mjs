@@ -54,6 +54,43 @@ async function expectAll(commands, expected, make = bash) {
 const leftBy = (commands, make) => expectAll(commands, left, make);
 const approve = (commands, make) => expectAll(commands.map(c => [c]), () => approved, make);
 
+test('finding 1: a heredoc written to a file is read as shell when the same command runs or sources that file', async () => {
+    const write = (body, run, tool = "cat > /tmp/payload.sh <<'EOF'") => `${tool}\n${body}\nEOF\n${run}`;
+    await leftBy([
+        // The reviewer's: the body was removed as stored text, then run.
+        [write('terraform apply', 'bash /tmp/payload.sh'), TERRAFORM],
+        [write('terraform apply', 'sh /tmp/payload.sh'), TERRAFORM],
+        [write('terraform apply', 'zsh -x /tmp/payload.sh'), TERRAFORM],
+        [write('terraform apply', 'source /tmp/payload.sh'), TERRAFORM],
+        [write('terraform apply', '. /tmp/payload.sh'), TERRAFORM],
+        [write('terraform apply', 'chmod +x /tmp/payload.sh && /tmp/payload.sh'), TERRAFORM],
+        [write('terraform apply', 'chmod 755 /tmp/payload.sh\ncd /tmp\n./payload.sh'), TERRAFORM],
+        [write('terraform destroy -auto-approve', 'sudo bash /tmp/payload.sh'), TERRAFORM],
+        [write('#!/bin/bash\nset -e\naws s3 rm s3://b/k --recursive --profile p', 'bash /tmp/payload.sh'), AWS],
+        [write('aws --profile p ec2 terminate-instances --instance-ids i-1', 'xargs -n1 bash < /dev/null; bash /tmp/payload.sh'), AWS],
+        [write('terraform apply', 'bash /tmp/payload.sh', "tee /tmp/payload.sh <<'EOF'"), TERRAFORM],
+        [write('terraform apply', 'bash /tmp/payload.sh', "cat >> /tmp/payload.sh <<-'EOF'"), TERRAFORM],
+        [write('os.system("terraform apply")', 'python3 /tmp/payload.sh'), TERRAFORM],
+        [write('terraform apply', 'echo done && bash /tmp/payload.sh'), TERRAFORM],
+        // Run through a wrapper or a variable the shell fills in.
+        [write('terraform apply', 'nice sudo bash /tmp/payload.sh'), TERRAFORM],
+        [write('terraform apply', '$RUN /tmp/payload.sh'), TERRAFORM]
+    ]);
+    // Plain storage stays approved: nothing runs the file, so nothing in it is a command.
+    await approve([
+        write('terraform apply', 'echo written'),
+        "cat > /tmp/payload.sh <<'EOF'\nterraform apply\nEOF",
+        write('run terraform apply after review', 'git add /tmp/payload.sh'),
+        write('aws s3 rm s3://b/k', "bash -c 'echo hi'"),
+        write('terraform apply', 'cat /tmp/payload.sh | grep terraform'),
+        // A script that is run but holds nothing the floor leaves is not a prompt.
+        write('echo hi\nls /tmp', 'bash /tmp/payload.sh'),
+        write('#!/bin/bash\naws s3 ls --profile p\nterraform plan', 'chmod +x /tmp/payload.sh && /tmp/payload.sh'),
+        // A commit message is not a file.
+        "git commit -F - <<'EOF'\nDocument the terraform apply flow\nEOF\nbash scripts/check.sh"
+    ]);
+});
+
 test('finding 2: claude and codex global options are read with their values before the subcommand is found', async () => {
     await leftBy([
         // The reviewer's: the value of --settings was read as the subcommand, so the `mcp add` behind it was never checked.
