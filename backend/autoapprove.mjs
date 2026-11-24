@@ -53,6 +53,11 @@ const INTERPRETERS = /^(?:python[0-9.]*|node|nodejs|perl|ruby|php|deno|bun)$/;
 const AWS_READ_OP = /^(?:describe|list|get|head|batch-get|search|lookup|query|scan|select|check|validate|simulate|estimate|filter|tail|wait)(?:-|$)/;
 /** Operation names that change state, for an `aws` that is not itself the command run (`bash -c "aws …"`, `xargs aws …`, `ssh host aws …`). */
 const AWS_WRITE_OP = /^(?:delete|put|create|update|terminate|modify|remove|start|stop|run|invoke|send|publish|attach|detach|associate|disassociate|enable|disable|register|deregister|reboot|cancel|tag|untag|reset|restore|revoke|authorize|import|export|copy|deploy|package|execute|apply|add|set|rotate|replace|release|allocate|change|abort|accept|reject|schedule|submit|admin|batch-(?:write|delete|put|update)|generate|upload|attach|detach|reboot|activate|deactivate|rollback|promote|failover|resize|scale|truncate|purge|empty|flush|drain)(?:-|$)/;
+/** Services of the AWS CLI that this repo's work touches, for an `aws` passed to another command. */
+const AWS_SERVICES = new Set(['ec2', 's3api', 'iam', 'ssm', 'lambda', 'ecs', 'eks', 'ecr', 'rds', 'dynamodb', 'cloudformation', 'logs', 'sqs', 'sns', 'kms',
+    'secretsmanager', 'route53', 'cloudfront', 'elbv2', 'elb', 'autoscaling', 'imagebuilder', 'events', 'stepfunctions', 'codebuild', 'codepipeline', 'apigateway',
+    'apigatewayv2', 'organizations', 'sso', 'ssm-contacts', 'acm', 'wafv2', 'cloudwatch', 'athena', 'glue', 'kinesis', 'firehose', 'elasticache', 'efs', 'backup',
+    'guardduty', 'securityhub', 'config', 'cloudtrail', 'sesv2', 'ses', 'ebs', 'batch', 'emr', 'redshift', 'opensearch', 'es', 'kafka', 'mq', 'transfer']);
 /** Global `aws` options that take a separate value. */
 const AWS_VALUE_OPTIONS = new Set(['--profile', '--region', '--output', '--query', '--endpoint-url', '--ca-bundle', '--cli-read-timeout', '--cli-connect-timeout', '--color', '--cli-binary-format']);
 /** First words of a segment whose arguments are text, so an `aws` among them is a word, not a command. */
@@ -66,7 +71,7 @@ const AWS_TEXT_TOOLS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'echo', 'printf'
  * words may be anything. After a text tool (grep, echo, cat, ls, cd) `aws` is only a word.
  */
 export function awsWrites(tokens) {
-    const index = tokens.findIndex(t => t === 'aws');
+    const index = tokens.findIndex(t => t === 'aws' || t.endsWith('/aws'));
     const word = commandWord(tokens);
     const direct = word !== undefined && base(word) === 'aws';
     const start = direct ? tokens.indexOf(word) : index;
@@ -87,7 +92,9 @@ export function awsWrites(tokens) {
     if (!direct) {
         if (op === undefined) return false;
         if (service === 's3') return ['rm', 'mv', 'rb', 'mb'].includes(op) || (['cp', 'sync'].includes(op) && words.slice(2).some(w => w.startsWith('s3://') || w.startsWith('--delete')));
-        return AWS_WRITE_OP.test(op);
+        // A write-looking operation of any service, or any operation that is not a read on a service named here. A bare word "aws" in
+        // a PR body ("aws account migration") names no service, so it is not read as a command.
+        return AWS_WRITE_OP.test(op) || (AWS_SERVICES.has(service) && !AWS_READ_OP.test(op));
     }
     if (service === undefined || service === 'help' || rest.includes('--version') || rest.includes('--help')) return false;
     if (service === 'sts') return false;
@@ -96,7 +103,8 @@ export function awsWrites(tokens) {
     if (service === 's3') {
         if (op === 'ls' || op === 'presign') return false;
         if (op === 'cp' || op === 'sync') {
-            const operands = words.slice(2).filter(w => !w.startsWith('-'));
+            // A bare `-` is stdin or stdout, an operand: `aws s3 cp - s3://b/k` uploads.
+            const operands = words.slice(2).filter(w => w === '-' || !w.startsWith('-'));
             const remote = operands.filter(w => w.startsWith('s3://'));
             if (words.slice(2).some(w => w.startsWith('--delete'))) return true;
             return remote.length > 1 || (remote.length === 1 && operands[0] !== remote[0]);

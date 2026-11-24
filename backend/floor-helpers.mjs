@@ -120,7 +120,7 @@ export function unrollLoops(text) {
  * heredocs, any backslash, a `#` comment, an unclosed quote) leaves the text unchanged, which only ever leaves more for the person.
  */
 const COMMIT_MESSAGE_HEAD = /^[ \t]*git(?:[ \t]+-C[ \t]+\S+)?[ \t]+commit\b.*[ \t](?:-[A-Za-z]*m|--message)[ \t]+$/;
-const GREP_HEAD = /^[ \t]*(?:grep|egrep|fgrep|rg)\b/;
+const GREP_HEAD = /^[ \t]*(?:grep|egrep|fgrep|rg)(?=[ \t]|$)/;
 export function inertQuoted(text) {
     if (!/['"]/.test(text) || /<<|`|\$['"({]|\\|\r/.test(text)) return text;
     let out = '';
