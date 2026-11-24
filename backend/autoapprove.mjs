@@ -10,7 +10,7 @@ import { actionableWorker, ownedRequestPane, otherSwarmPane } from './store.mjs'
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
 import { inertCurlBodies, inertQuoted, quietGrepPatterns, stripHeredocs, unrollLoops } from './floor-helpers.mjs';
-import { AWS_RULE, TERRAFORM_RULE, atlantisRule, commandIndex, floorExecRule, interpreterProgramRule, kelpiFloorRule, runsFile } from './floor-exec.mjs';
+import { atlantisRule, commandIndex, floorExecRule, interpreterProgramRule, kelpiFloorRule, programNameRule, runsFile } from './floor-exec.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -384,10 +384,13 @@ checkFloorRules();
  * something in front of people (`create_comment`, `add_reaction`, `respond_to_event`) are outside this list.
  */
 export const MCP_SEND_RULE = 'mcp send or delete';
-const MCP_SEND_WORDS = new Set(['send', 'post', 'reply', 'forward', 'share', 'publish', 'delete', 'trash', 'remove', 'archive']);
+const OUTWARD_WORDS = new Set(['send', 'post', 'reply', 'forward', 'share', 'publish']);
+const MCP_SEND_WORDS = new Set([...OUTWARD_WORDS, 'delete', 'trash', 'remove', 'archive']);
 export function mcpSends(toolName) {
     const words = mcpWords(String(toolName).split('__').pop());
-    if (words.includes('draft') || words.includes('drafts')) return false;
+    // `send_draft` and `publish_draft` send a draft that exists; `send_message_draft` and `draft_reply` only make one, and `delete_draft` throws one away.
+    const sendsADraft = words.some((word, i) => OUTWARD_WORDS.has(word) && (words[i + 1] === 'draft' || words[i + 1] === 'drafts'));
+    if (!sendsADraft && (words.includes('draft') || words.includes('drafts'))) return false;
     return words.some((word, i) => MCP_SEND_WORDS.has(word) || (word === 'schedule' && words[i + 1] === 'message'));
 }
 
@@ -544,9 +547,9 @@ function scriptKind(path, text) {
     return SOURCE_FILE.test(path) ? 'source' : null;
 }
 /** A call that runs another program, in Python, JavaScript, Ruby or Perl. */
-const PROCESS_API = /\b(?:subprocess|child_process|execSync|execFileSync|execFile|spawnSync|spawn|popen|execa|shelljs|os\.system|Deno\.Command|Bun\.spawn)\b|\bsystem\s*\(/;
+const PROCESS_API = /\b(?:subprocess|child_process|execSync|execFileSync|execFile|spawnSync|spawn|popen|popen2|popen3|execa|shelljs|Open3|proc_open|Deno\.Command|Bun\.spawn|pty\.spawn)\b|\bos\.(?:system|exec\w*|spawn\w*|popen\w*)|\b(?:Kernel\.)?(?:system|exec|spawn)\s*\(|\bexec\s+["']/;
 /** A string that is just the name of one of the programs, or the path to it: an argument list starts with it (`["terraform", "apply"]`). */
-const PROGRAM_LITERAL = /^(?:.*\/)?(aws|terraform|terragrunt|tofu)$/i;
+const PROGRAM_LITERAL = /^(?:.*\/)?(aws|terraform|terragrunt|tofu|aws-cdk|cdk|sam|copilot|eb|amplify)$/i;
 /**
  * The first call to aws, terraform, Atlantis, a deploy tool or the agent's settings held in a string literal of the source, as `{ rule }`.
  * A literal that is only the program's name leaves the file when the file also runs programs (`subprocess.run(["terraform", "apply"])`),
@@ -561,7 +564,7 @@ function literalCheck(source) {
         read += 1;
         if (value.length > MAX_REQUEST_TEXT || read > MAX_LITERALS) return { tooLong: true };
         const program = spawns ? PROGRAM_LITERAL.exec(value.trim())?.[1] : undefined;
-        if (program) return { rule: program.toLowerCase() === 'aws' ? AWS_RULE : TERRAFORM_RULE };
+        if (program) return { rule: programNameRule(program) };
         const rule = (line => atlantisRule(line) ?? floorExecRule(line, false))(value.replace(/\\[nrt]/g, ' ').replace(/\\(.)/g, '$1'));
         if (rule) return { rule };
     }
@@ -809,7 +812,8 @@ export async function run(api, store, now = Date.now()) {
                     at: iso(now), ...describePane(store, item.paneID), paneID: item.paneID, command: item.command ?? '', ok: false, skipped: true, source: 'screen',
                     ...(never.tooLong ? { reason: 'too long to check', code: 'TOO_LONG' }
                         : never.file ? { reason: 'a file write seen only on the screen: where it lands cannot be followed', code: 'PATH' }
-                            : { reason: NEVER_REASON, rule: never.rule, code: 'NEVER' })
+                            : never.unreadable ? { reason: 'a Tool use card whose tool name cannot be read', code: 'MCP_UNKNOWN' }
+                                : { reason: NEVER_REASON, rule: never.rule, code: 'NEVER' })
                 });
             }
             continue;
@@ -843,18 +847,19 @@ export async function run(api, store, now = Date.now()) {
 const FILE_CARD = /^\s*(?:edit|create|write) file\b/im;
 /** An MCP card on the screen: its header says Tool use, and the call reads `server - tool(args)`. */
 const TOOL_CARD = /^\s*tool use\b/im;
-const SCREEN_TOOL_NAME = /^[^()]*?([A-Za-z0-9_.-]+)\s*\(/;
 /**
- * The floor's answer for a card read off the screen: `{ file: true }` for an Edit or Write card, `{ rule }` for an MCP tool that sends or
- * deletes or a command that breaks a floor rule, `{ tooLong: true }`, or null. The screen shows only the path text Claude chose to print
- * (a relative `settings.json` in a pane whose folder is `~/.claude` names nothing under `.claude`), and the symlinks and the folder the
- * provider path resolves cannot be followed from here, so a file write is left for the provider path or the user.
+ * The floor's answer for a card read off the screen: `{ file: true }` for an Edit or Write card, `{ unreadable: true }` for a Tool use card
+ * whose tool name cannot be read, `{ rule }` for an MCP tool that sends or deletes or a command that breaks a floor rule, `{ tooLong: true }`,
+ * or null. The screen shows only the path text Claude chose to print (a relative `settings.json` in a pane whose folder is `~/.claude` names
+ * nothing under `.claude`), and the symlinks and the folder the provider path resolves cannot be followed from here, so a file write is left
+ * for the provider path or the user. A Tool use card reads `server - tool(args)`: every word before the `(` is the name, server included.
  */
 function screenFloor(item) {
     if (FILE_CARD.test(String(item.promptBlock ?? ''))) return { file: true };
     if (TOOL_CARD.test(String(item.promptBlock ?? ''))) {
-        const name = SCREEN_TOOL_NAME.exec(String(item.command ?? ''))?.[1];
-        if (name && mcpSends(name)) return { rule: MCP_SEND_RULE };
+        const open = String(item.command ?? '').indexOf('(');
+        if (open <= 0) return { unreadable: true };
+        if (mcpSends(item.command.slice(0, open))) return { rule: MCP_SEND_RULE };
     }
     return floorCheck(item.command ?? '');
 }

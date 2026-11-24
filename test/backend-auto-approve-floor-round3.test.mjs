@@ -151,7 +151,8 @@ test('finding 6: code handed to an interpreter that spells aws, terraform, terra
         [`ruby -e 'system("tofu", "apply")'`, TERRAFORM],
         [`perl -e 'system("terraform", "destroy")'`, TERRAFORM],
         [`deno eval 'new Deno.Command("aws", {args:["s3","rm","x"]}).outputSync()'`, AWS],
-        [`bun -e "Bun.spawnSync(['terraform','apply'])"`, TERRAFORM]
+        [`bun -e "Bun.spawnSync(['terraform','apply'])"`, TERRAFORM],
+        [`node -e "require('child_process').spawnSync('cdk', ['deploy', '--all'])"`, DEPLOY]
     ]);
     await approve([
         'node -e "console.log(1 + 1)"',
@@ -204,7 +205,11 @@ test('finding 3: a script written now is read for the commands in it, since the 
         // An argument list holds no command line: the program's name beside a call that runs programs is enough.
         [{ file: 'tf.py', content: 'import subprocess\nsubprocess.run(["terraform", "apply", "-auto-approve"])\n' }, TERRAFORM],
         [{ file: 'rm.mjs', content: "import { spawnSync } from 'node:child_process';\nspawnSync('aws', ['s3', 'rm', 's3://b/k']);\n" }, AWS],
-        [{ file: 'fish.fish', content: 'terraform apply\n' }, TERRAFORM]
+        [{ file: 'fish.fish', content: 'terraform apply\n' }, TERRAFORM],
+        [{ file: 'cdk.mjs', content: "import { spawnSync } from 'node:child_process';\nspawnSync('cdk', ['deploy', '--all']);\n" }, DEPLOY],
+        [{ file: 'exec.py', content: 'import os\nos.execvp("terraform", ["terraform", "apply"])\n' }, TERRAFORM],
+        [{ file: 'open3.rb', content: 'require "open3"\nOpen3.capture2("aws", "s3", "rm", "s3://b/k")\n' }, AWS],
+        [{ file: 'kernel.rb', content: 'exec("terraform", "destroy")\n' }, TERRAFORM]
     ], rule => left(rule), write);
     // Edit and MultiEdit put the new text in the same file, so it is read the same way.
     const edit = request('Edit', { file_path: join(dir, 'deploy.sh'), old_string: 'echo hi', new_string: 'terraform destroy' });
@@ -249,7 +254,9 @@ test('finding 9: MCP tools that send, share or delete are left, and drafts and r
         ['mcp__claude_ai_Gmail__send_message', MCP_SEND], ['mcp__claude_ai_Gmail__forward', MCP_SEND], ['mcp__claude_ai_Gmail__reply', MCP_SEND],
         ['mcp__claude_ai_Gmail__trash_thread', MCP_SEND], ['mcp__claude_ai_Google_Drive__share_file', MCP_SEND], ['mcp__claude_ai_Google_Drive__trash_file', MCP_SEND],
         ['mcp__claude_ai_Notion__notion-delete-pages', MCP_SEND], ['mcp__missive__create_post', MCP_SEND], ['mcp__linear-server__delete_comment', MCP_SEND],
-        ['mcp__claude_ai_Granola__remove_note_from_folder', MCP_SEND], ['mcp__x__archiveThread', MCP_SEND], ['mcp__x__publishRelease', MCP_SEND]
+        ['mcp__claude_ai_Granola__remove_note_from_folder', MCP_SEND], ['mcp__x__archiveThread', MCP_SEND], ['mcp__x__publishRelease', MCP_SEND],
+        // A draft that is sent or published is not a draft any more.
+        ['mcp__claude_ai_Gmail__send_draft', MCP_SEND], ['mcp__x__publish_draft', MCP_SEND], ['mcp__x__forwardDrafts', MCP_SEND]
     ], rule => left(rule), tool => request(tool, input));
     await expectAll([
         // Drafts stay a draft, and every read and ordinary change stays approved.
@@ -273,7 +280,8 @@ test('finding 8 and 9: under the floor a screen card for a file write is left, a
     await show(card('Write file', 'notes.txt'));
     await show(card('Create file', 'src/new.mjs'));
     await show(card('Tool use', 'Slack - slack_send_message(channel_id: "C1", message: "hi")'));
-    assert.equal(enters(), 0, 'none of the four gets an Enter');
+    await show(card('Tool use', 'something that names no tool'));
+    assert.equal(enters(), 0, 'none of the five gets an Enter');
     await show(card('Bash command', 'git status'));
     await show(card('Tool use', 'Slack - slack_add_reaction(channel_id: "C1", name: "eyes")'));
     await show(card('Read file', 'settings.json'));
@@ -284,6 +292,7 @@ test('finding 8 and 9: under the floor a screen card for a file write is left, a
         ['notes.txt', false, 'PATH', undefined, 'floor'],
         ['src/new.mjs', false, 'PATH', undefined, 'floor'],
         ['Slack - slack_send_message(channel_id: "C1", message: "hi")', false, 'NEVER', MCP_SEND, 'floor'],
+        ['something that names no tool', false, 'MCP_UNKNOWN', undefined, 'floor'],
         ['git status', true, undefined, undefined, 'floor'],
         ['Slack - slack_add_reaction(channel_id: "C1", name: "eyes")', true, undefined, undefined, 'floor'],
         ['settings.json', true, undefined, undefined, 'floor']

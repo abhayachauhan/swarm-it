@@ -728,17 +728,22 @@ function invocationRule(inv, strict, source) {
     return null;
 }
 const MENTIONS_TOOL = /\b(?:aws|terraform|terragrunt|tofu)\b/i;
-/** A quoted string literal that is exactly one of the programs, or the path to it: `'terraform'`, `"aws"`, `` `/usr/local/bin/tofu` ``. */
-const LITERAL_PROGRAM = /(["'`])(?:[^"'`]*\/)?(aws|terraform|terragrunt|tofu)\1/i;
+/** A quoted string literal that is exactly one of the programs, or the path to it: `'terraform'`, `"aws"`, `` `/usr/local/bin/tofu` ``, `'cdk'`. */
+const LITERAL_PROGRAM = /(["'`])(?:[^"'`]*\/)?(aws|terraform|terragrunt|tofu|aws-cdk|cdk|sam|copilot|eb|amplify)\1/i;
+/** The floor rule a call of the program named `name` (one that LITERAL_PROGRAM finds) is left under. */
+export function programNameRule(name) {
+    const program = String(name).toLowerCase();
+    return program === 'aws' ? AWS_RULE : TERRAFORM_TOOLS.has(program) ? TERRAFORM_RULE : DEPLOY_RULE;
+}
 /**
  * Code handed to an interpreter (`node -e`, `python3 -c`, `ruby -e`, `deno eval`) that spells the program out as a string, as in
  * `spawnSync('terraform', ['apply'])` or `subprocess.run(("aws", "s3", "rm", …))`: the argument list is not words the shell can see, so the
- * program's name alone leaves the call.
+ * program's name alone leaves the call. The deploy tools count too (`spawnSync('cdk', ['deploy'])`).
  */
 function literalProgramRule(inv) {
     if (!INTERPRETER_NAMES.test(inv.name)) return null;
     const literal = inv.args.map(a => LITERAL_PROGRAM.exec(a.text)?.[2]).find(Boolean);
-    return literal === undefined ? null : literal.toLowerCase() === 'aws' ? AWS_RULE : TERRAFORM_RULE;
+    return literal === undefined ? null : programNameRule(literal);
 }
 /** The rule an interpreter call in the command breaks by naming the program as a string, or null. Read before the settings rule, whose
  *  glob reading of `['apply']` would otherwise leave the same call under the wrong name. */
