@@ -214,11 +214,14 @@ function doubleQuoted(p, word, depth) {
             const start = p.i;
             p.i += 2;
             skipBraced(p, depth);
+            // `"${@}"`, `"${*:2}"` and `"${list[@]}"` are the one kind of expansion that still makes several words inside double quotes.
+            if (/^\$\{[@*]|\[[@*]\]/.test(src.slice(start, p.i))) word.splittable = true;
             word.dynamic = true; word.text += src.slice(start, p.i); continue;
         }
         if (c === '$' && src[p.i + 1] !== undefined && (NAME_START.test(src[p.i + 1]) || /[0-9@*#?$!-]/.test(src[p.i + 1]))) {
             let end = p.i + 2;
             if (NAME_START.test(src[p.i + 1])) while (end < src.length && NAME_CHAR.test(src[end])) end += 1;
+            if (src[p.i + 1] === '@' || src[p.i + 1] === '*') word.splittable = true;
             word.dynamic = true; word.text += src.slice(p.i, end); p.i = end; continue;
         }
         word.text += c; p.i += 1;
