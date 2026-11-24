@@ -40,7 +40,13 @@ function spawn({ home, bin, task }, args = ['w1', task, '--path', home]) {
   delete env.SWARM_MANIFEST_DIR
   const out = spawnSync(script, args, { env, encoding: 'utf8' })
   const log = path.join(home, 'calls.log')
-  return { ...out, calls: fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [] }
+  const typed = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []
+  return { ...out, typed, calls: typed.map(expandPrompt) }
+}
+
+/** The typed command reads its prompt from a file; put the file's text back so assertions see the whole prompt. */
+function expandPrompt(call) {
+  return call.replace(/"\$\(cat ([^)]+)\)"/, (_, file) => `"${fs.readFileSync(file, 'utf8').trimEnd()}"`)
 }
 
 test('shell metacharacters in the label, task, dir, mode or model are refused before anything runs', () => {
@@ -127,6 +133,24 @@ test('--parent-session tells a Claude worker to message that session, and is lef
   assert.ok(send.includes('start with w1:'), send)
   assert.ok(send.indexOf('/.kelpi-swarm/results/w1.md.') < send.indexOf('Your coordinator'), 'the result file instruction comes first')
   assert.ok(send.endsWith('Always write the result file even if a send fails. Reply done."'), send)
+})
+
+test('the typed command stays under the 1024-byte terminal line limit and reads the full prompt from a file', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const deep = path.join(s.home, 'a-fairly-long-scratchpad-folder-name-e66692be-8c93-46b2-9455-cc37d93631aa', 'another-nested-folder-for-the-worker')
+  fs.mkdirSync(deep, { recursive: true })
+  const label = 'a-long-worker-label-for-the-line-limit-check'
+  for (const agent of ['claude', 'codex']) {
+    const out = spawn(s, [label, s.task, '--agent', agent, '--path', deep, '--effort', 'high', '--parent-session', 'repos-a9'])
+    assert.equal(out.status, 0, out.stderr)
+    const typed = out.typed.filter(c => c.startsWith('pane send')).at(-1).replace(/^pane send --target \S+ /, '')
+    assert.ok(Buffer.byteLength(typed) < 700, `${agent}: ${Buffer.byteLength(typed)} bytes typed: ${typed}`)
+    assert.ok(typed.endsWith(`"$(cat ${s.home}/.kelpi-swarm/prompts/${label}.txt)"`), typed)
+    const prompt = fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'prompts', `${label}.txt`), 'utf8')
+    assert.ok(prompt.startsWith(`Do the task in ${s.task}. Write the result as markdown`), prompt)
+    assert.ok(prompt.trimEnd().endsWith('Reply done.'), prompt)
+    assert.equal(prompt.includes('Your coordinator is the Claude Code session repos-a9.'), agent === 'claude', prompt)
+  }
 })
 
 test('a Codex worker is not told to message the parent session and the coordinator is warned', () => {
