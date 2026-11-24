@@ -502,13 +502,54 @@ const PROGRAM_OPTIONS = new Set(['--pre', '--hostname-bin']);
  */
 function agentSettingsRule(name, args) {
     if (name !== 'claude' && name !== 'codex') return null;
-    const words = args.filter(a => !a.text.startsWith('-'));
-    const [first, second] = words.map(w => w.text);
     if (args.slice(0, 3).some(a => a.dynamic)) return SETTINGS_RULE;
-    if (name === 'claude' && first === 'config') return SETTINGS_RULE;
-    if (first === 'mcp') return ['add', 'add-json', 'add-from-claude-desktop', 'remove', 'reset-project-choices', 'login', 'logout'].includes(second) ? SETTINGS_RULE : null;
-    if (name === 'claude' && (first === 'plugin' || first === 'plugins')) return ['install', 'uninstall', 'enable', 'disable', 'update', 'marketplace'].includes(second) ? SETTINGS_RULE : null;
+    // Global options come before the subcommand, some with a value in the next word: `claude --settings /tmp/x.json mcp add …`. Read
+    // them with their values, so the subcommand is the first word that is neither.
+    const values = AGENT_VALUE_OPTIONS[name];
+    const flags = AGENT_FLAGS[name];
+    let unknown = false;
+    let i = 0;
+    for (; i < args.length && args[i].text.startsWith('-'); i += 1) {
+        const text = args[i].text;
+        const eq = text.indexOf('=');
+        const option = eq > 0 ? text.slice(0, eq) : text;
+        if (eq > 0 || flags.has(option)) continue;
+        if (values.has(option)) i += 1;
+        else unknown = true;
+    }
+    const rest = args.slice(i);
+    if (rest[0]?.dynamic) return SETTINGS_RULE;
+    if (!unknown) return agentSubcommandRule(name, rest, 0);
+    // An option this does not know may or may not take a value, so the subcommand could be any word after it: leave the line when one
+    // of them starts a settings write.
+    for (let k = 0; k < rest.length; k += 1) {
+        const rule = agentSubcommandRule(name, rest, k);
+        if (rule) return rule;
+    }
     return null;
+}
+/** Global options of `claude` and `codex` that take a value, and the ones that take none. Any other option may be either. */
+const AGENT_VALUE_OPTIONS = {
+    claude: new Set(['--settings', '--model', '--add-dir', '--mcp-config', '--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--tools',
+        '--permission-mode', '--append-system-prompt', '--system-prompt', '--session-id', '--fallback-model', '--output-format', '--input-format', '--max-turns', '--agents',
+        '--agent', '--plugin-dir', '--setting-sources', '--betas', '--permission-prompt-tool', '--effort', '--name', '-n', '--file', '--max-budget-usd', '--json-schema']),
+    codex: new Set(['-c', '--config', '-m', '--model', '-p', '--profile', '-C', '--cd', '-s', '--sandbox', '-a', '--ask-for-approval', '-i', '--image', '--add-dir', '--color',
+        '--enable', '--disable', '--local-provider', '--oss-provider'])
+};
+const AGENT_FLAGS = {
+    claude: new Set(['-p', '--print', '-c', '--continue', '--verbose', '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--strict-mcp-config',
+        '--include-partial-messages', '--replay-user-messages', '--fork-session', '--no-session-persistence', '--chrome', '--no-chrome', '--ide', '--bare', '-v', '--version',
+        '-h', '--help', '--disable-slash-commands']),
+    codex: new Set(['--oss', '--full-auto', '--dangerously-bypass-approvals-and-sandbox', '--search', '--no-alt-screen', '-h', '--help', '-V', '--version'])
+};
+const MCP_WRITES = ['add', 'add-json', 'add-from-claude-desktop', 'remove', 'reset-project-choices', 'login', 'logout'];
+const PLUGIN_WRITES = ['install', 'uninstall', 'enable', 'disable', 'update', 'marketplace'];
+/** The settings write that starts at `rest[k]`: `config`, `mcp` or `plugin` followed within three words (options may stand between) by a verb that writes. */
+function agentSubcommandRule(name, rest, k) {
+    const first = rest[k]?.text;
+    if (name === 'claude' && first === 'config') return SETTINGS_RULE;
+    const verbs = first === 'mcp' ? MCP_WRITES : name === 'claude' && (first === 'plugin' || first === 'plugins') ? PLUGIN_WRITES : null;
+    return verbs && rest.slice(k + 1, k + 4).some(w => w.dynamic || verbs.includes(w.text)) ? SETTINGS_RULE : null;
 }
 
 /** `strict` is false for a string that is probably data (JSON, prose) and not a command line: a command word the shell would have to fill in then proves nothing. */

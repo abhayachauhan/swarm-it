@@ -54,6 +54,31 @@ async function expectAll(commands, expected, make = bash) {
 const leftBy = (commands, make) => expectAll(commands, left, make);
 const approve = (commands, make) => expectAll(commands.map(c => [c]), () => approved, make);
 
+test('finding 2: claude and codex global options are read with their values before the subcommand is found', async () => {
+    await leftBy([
+        // The reviewer's: the value of --settings was read as the subcommand, so the `mcp add` behind it was never checked.
+        ['claude --settings /tmp/custom.json mcp add evil -- echo ok', SETTINGS],
+        ['claude --model x config set allowedTools Bash', SETTINGS],
+        ['claude --model opus --settings /tmp/s.json --permission-mode plan mcp remove evil', SETTINGS],
+        ['claude --settings=/tmp/s.json mcp add-json evil \'{"command":"x"}\'', SETTINGS],
+        ['claude -p --verbose --add-dir /tmp plugin install x@y', SETTINGS],
+        ['codex -c model=x mcp add evil -- npx evil', SETTINGS],
+        ['codex --config sandbox_mode=read-only --profile p mcp remove evil', SETTINGS],
+        ['codex -m gpt-6 -s workspace-write mcp login evil', SETTINGS],
+        ['sudo claude --settings /tmp/s.json mcp add evil -- npx evil', SETTINGS],
+        // An option this does not know may take a value or not, so an `mcp` or `config` word anywhere after it is left.
+        ['claude --some-new-option value mcp add evil -- npx evil', SETTINGS],
+        ['claude --resume abc config set x y', SETTINGS],
+        ['codex --some-new-option mcp add evil -- npx evil', SETTINGS],
+        // A subcommand or verb the shell fills in.
+        ['claude --model x $SUB add evil', SETTINGS],
+        ['claude --model x mcp $VERB evil', SETTINGS]
+    ]);
+    await approve(['claude --settings /tmp/custom.json mcp list', 'claude --model x mcp get x', 'claude --settings /tmp/s.json --version',
+        "claude -p --resume abc --permission-mode auto 'Write the updated result to /tmp/r.md. Reply done.'", "claude --verbose --model x -p 'explain how mcp add works'",
+        "codex -c model=x exec 'fix the tests'", 'codex --profile p mcp list', "claude --some-new-option value 'explain mcp'", 'claude --model x plugin list']);
+});
+
 test('finding 3: standard and privilege wrappers are looked through in any order before the piped-into-shell and ruled-command checks', async () => {
     await leftBy([
         // The reviewer's: `command` stopped one reader and `sudo` stopped the other, so neither reached bash.
