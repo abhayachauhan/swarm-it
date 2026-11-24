@@ -9,6 +9,7 @@ import { approve } from './actions.mjs';
 import { actionableWorker, ownedRequestPane, otherSwarmPane } from './store.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 import { judgeCommand, neverAutoApprove as kelpiNever, NEVER_AUTO_APPROVE as KELPI_NEVER } from './kelpi-policy.mjs';
+import { inertCurlBodies, inertQuoted, quietGrepPatterns, quietHeredocs, unrollLoops } from './floor-helpers.mjs';
 
 export const LOG_KEY = 'autoApproveLog';
 export const LOG_CAP = 500;
@@ -48,7 +49,62 @@ const message = error => String(error?.message ?? error);
 export const NEVER_REASON = 'on the never-auto-approve list';
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const INTERPRETERS = /^(?:python[0-9.]*|node|nodejs|perl|ruby|php|deno|bun)$/;
-const AWS_WRITE = /^(?:delete|put|create|update|terminate|modify|remove)-/;
+/** An AWS CLI operation that only reads. Anything else (`start-image-pipeline-execution`, `invoke`, `send-command`) may change state. */
+const AWS_READ_OP = /^(?:describe|list|get|head|batch-get|search|lookup|query|scan|select|check|validate|simulate|estimate|filter|tail|wait)(?:-|$)/;
+/** Operation names that change state, for an `aws` that is not itself the command run (`bash -c "aws …"`, `xargs aws …`, `ssh host aws …`). */
+const AWS_WRITE_OP = /^(?:delete|put|create|update|terminate|modify|remove|start|stop|run|invoke|send|publish|attach|detach|associate|disassociate|enable|disable|register|deregister|reboot|cancel|tag|untag|reset|restore|revoke|authorize|import|export|copy|deploy|package|execute|apply|add|set|rotate|replace|release|allocate|change|abort|accept|reject|schedule|submit|admin|batch-(?:write|delete|put|update)|generate|upload|attach|detach|reboot|activate|deactivate|rollback|promote|failover|resize|scale|truncate|purge|empty|flush|drain)(?:-|$)/;
+/** Global `aws` options that take a separate value. */
+const AWS_VALUE_OPTIONS = new Set(['--profile', '--region', '--output', '--query', '--endpoint-url', '--ca-bundle', '--cli-read-timeout', '--cli-connect-timeout', '--color', '--cli-binary-format']);
+/** First words of a segment whose arguments are text, so an `aws` among them is a word, not a command. */
+const AWS_TEXT_TOOLS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'echo', 'printf', 'cat', 'head', 'tail', 'wc', 'ls', 'cd', 'man', 'which', 'type', 'test', 'stat', 'du', 'diff']);
+/**
+ * Whether one segment runs an AWS CLI call that may change state. When `aws` is the command run (after env assignments and
+ * wrappers) only a read operation passes: describe, list, get, head, batch-get, search, lookup, query, scan, select, check, validate,
+ * simulate, estimate, filter, tail and wait; every `sts` call; `s3 ls` and `s3 presign`; an `s3 cp` or `s3 sync` that only downloads
+ * (one `s3://` operand, first) and does not delete. Anything not on that list, or not understood, is a write. When `aws` is passed
+ * to another command (`bash -c "aws …"`, `xargs aws …`) the operation must not look like a write, because that command's own
+ * words may be anything. After a text tool (grep, echo, cat, ls, cd) `aws` is only a word.
+ */
+export function awsWrites(tokens) {
+    const index = tokens.findIndex(t => t === 'aws');
+    const word = commandWord(tokens);
+    const direct = word !== undefined && base(word) === 'aws';
+    const start = direct ? tokens.indexOf(word) : index;
+    if (start < 0) return false;
+    if (!direct && AWS_TEXT_TOOLS.has(base(word ?? ''))) return false;
+    const rest = tokens.slice(start + 1);
+    // Global options come before the service; the first two other words are the service and the operation.
+    const words = [];
+    for (let i = 0; i < rest.length; i += 1) {
+        if (rest[i].startsWith('-')) {
+            if (words.length < 2 && AWS_VALUE_OPTIONS.has(rest[i])) i += 1;
+            else if (words.length >= 2) words.push(rest[i]);
+            continue;
+        }
+        words.push(rest[i]);
+    }
+    const [service, op] = words;
+    if (!direct) {
+        if (op === undefined) return false;
+        if (service === 's3') return ['rm', 'mv', 'rb', 'mb'].includes(op) || (['cp', 'sync'].includes(op) && words.slice(2).some(w => w.startsWith('s3://') || w.startsWith('--delete')));
+        return AWS_WRITE_OP.test(op);
+    }
+    if (service === undefined || service === 'help' || rest.includes('--version') || rest.includes('--help')) return false;
+    if (service === 'sts') return false;
+    if (service === 'configure') return !['list', 'get', 'list-profiles'].includes(op);
+    if (service === 'sso') return !(op === 'login' || op === 'logout' || AWS_READ_OP.test(op ?? ''));
+    if (service === 's3') {
+        if (op === 'ls' || op === 'presign') return false;
+        if (op === 'cp' || op === 'sync') {
+            const operands = words.slice(2).filter(w => !w.startsWith('-'));
+            const remote = operands.filter(w => w.startsWith('s3://'));
+            if (words.slice(2).some(w => w.startsWith('--delete'))) return true;
+            return remote.length > 1 || (remote.length === 1 && operands[0] !== remote[0]);
+        }
+        return true;
+    }
+    return op === undefined || !AWS_READ_OP.test(op);
+}
 // zsh runs `=rm` as rm, and macOS file names ignore case (`Rm` is /bin/rm), so both are folded away.
 const base = token => token.split('/').pop().replace(/^=+/, '').toLowerCase();
 const WRAPPERS = ['command', 'exec', 'env', 'nohup', 'time', 'builtin'];
@@ -99,14 +155,7 @@ export const NEVER_AUTO_APPROVE = [
     { name: 'kubectl write', test: tokens => sub(tokens, 'kubectl', ['delete', 'apply', 'replace', 'scale', 'drain', 'patch', 'edit', 'create']) },
     { name: 'terraform apply or destroy', test: tokens => ['terraform', 'terragrunt', 'tofu'].some(tool => sub(tokens, tool, ['apply', 'destroy'])) },
     { name: 'helm install, upgrade or uninstall', test: tokens => sub(tokens, 'helm', ['install', 'upgrade', 'uninstall', 'delete', 'rollback']) },
-    { name: 'aws write', test: tokens => {
-        const rest = after(tokens, 'aws');
-        if (!rest) return false;
-        if (rest.some(t => AWS_WRITE.test(t))) return true;
-        const s3 = rest.indexOf('s3');
-        const verb = s3 < 0 ? null : rest[s3 + 1];
-        return verb === 'rm' || verb === 'mv' || verb === 'rb' || (verb === 'sync' && rest.some(f => f.startsWith('--delete')));
-    } },
+    { name: 'aws write', test: tokens => awsWrites(tokens) },
     { name: 'download piped into an interpreter', test: (tokens, all) => /\b(?:curl|wget)\b/.test(all) && tokens.some(t => INTERPRETERS.test(base(t))) },
     // `R=rm; $R -rf x`: the command word is only known when the shell runs it. `echo $HOME` stays approvable.
     { name: 'command word is a variable', test: tokens => /^\$/.test(commandWord(tokens) ?? '') },
@@ -287,6 +336,48 @@ export function describePane(store, paneID) {
 export const supersededBy = (store, item) => store.attention.some(o => o !== item && o.type === 'Request' && !o.handledAt
     && o.paneID === item.paneID && o.createdAt > item.createdAt);
 
+// The floor policy, the user's choice on 14 Nov (swarm-it-herdr/lib/policy.mjs has the same): everything is answered except terraform
+// apply or destroy and AWS writes. Besides those two rules, a command whose real words the shell only builds at run time stays left,
+// because it could spell either of them.
+export const FLOOR_RULES = new Set(['terraform apply or destroy', 'aws write', 'command word is a variable', 'alias or eval', 'shell expansion builds a word',
+    'shell fed generated code', 'command word from a substitution', 'ANSI-C escape', 'env -S']);
+
+/** Which policy answers: `floor` (the default) or `careful`, the full never list and Kelpi's example policy. Set SWARM_AUTO_APPROVE_POLICY=careful for the old behaviour. */
+export const POLICY_ENV = 'SWARM_AUTO_APPROVE_POLICY';
+export const approvePolicy = (env = process.env) => (String(env[POLICY_ENV] ?? '').trim().toLowerCase() === 'careful' ? 'careful' : 'floor');
+
+/** The floor rule a command breaks, or null. Reads each line of a wrapped command the way neverAutoApprove does. */
+export function floorRule(command) {
+    if (typeof command !== 'string' || !command) return null;
+    // Quoted grep patterns and commit messages hold text, not commands; so do quoted heredoc bodies written by cat or tee.
+    command = inertCurlBodies(quietGrepPatterns(inertQuoted(quietHeredocs(command))));
+    const joined = command.replace(/\\\r?\n/g, '');
+    const lines = joined.split('\n').map(l => l.trim());
+    for (const text of [joined, lines.join(' '), lines.join('')]) {
+        for (const tokens of segments(text)) {
+            const rule = NEVER_AUTO_APPROVE.find(r => FLOOR_RULES.has(r.name) && r.test(tokens, text));
+            if (rule) return rule.name;
+        }
+    }
+    return null;
+}
+
+/** The floor policy: every Bash, Monitor, file and MCP request is answered unless it breaks a floor rule. */
+export function judgeFloor(toolName, toolInput) {
+    const input = toolInput !== null && typeof toolInput === 'object' && !Array.isArray(toolInput) ? toolInput : null;
+    const mcp = typeof toolName === 'string' && /^mcp__./.test(toolName);
+    const field = FLOOR_TOOLS.get(toolName);
+    if (!input || (!field && !mcp)) return { allow: false, text: '', reason: `auto-approve does not answer ${typeof toolName === 'string' ? toolName : 'this'} requests`, code: 'TOOL' };
+    const text = mcp ? `${toolName}(${strings(input).join(' ')})` : input[field];
+    if (typeof text !== 'string' || !text.trim()) return { allow: false, text: '', reason: `no ${field}`, code: 'NO_INPUT' };
+    if (text.length > MAX_REQUEST_TEXT) return { allow: false, text, reason: 'too long to check', code: 'TOO_LONG' };
+    if (toolName === 'Bash' || toolName === 'Monitor' || mcp) {
+        const rule = floorRule(text) ?? floorRule(unrollLoops(text));
+        if (rule) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule };
+    }
+    return { allow: true, text };
+}
+
 /**
  * Approve every open, recognised Request from every live swarm through actions.approve. Unrecognised prompts are
  * left for the user and counted once. A refused approval is logged with its reason and the card stays. Snoozed cards
@@ -316,7 +407,10 @@ export async function run(api, store, now = Date.now()) {
         if (supersededBy(store, item)) continue;
         // A dangerous command is left as a card for the user, counted in skipped and logged once.
         // Both never lists, as the provider applies: the screen fallback must not be the weaker path.
-        const never = neverAutoApprove(item.command ?? '') ?? kelpiNever(item.command ?? '');
+        // The same policy as the provider: the floor rules by default, both full lists under SWARM_AUTO_APPROVE_POLICY=careful.
+        const never = approvePolicy() === 'floor'
+            ? (floorRule(item.command ?? '') ?? floorRule(unrollLoops(item.command ?? '')))
+            : neverAutoApprove(item.command ?? '') ?? kelpiNever(item.command ?? '');
         if (never) {
             if (!a.seenNever.has(item.id)) {
                 a.seenNever.add(item.id); a.skipped += 1; changed = true;
@@ -375,6 +469,8 @@ async function noteNotAsked(store, now) {
 
 /** The input field each tool's prompt shows, for the tools whose prompt the screen path recognises (notify.mjs HEADER). */
 const SCREEN_TOOLS = new Map([['Bash', 'command'], ['Edit', 'file_path'], ['MultiEdit', 'file_path'], ['Write', 'file_path'], ['Read', 'file_path'], ['WebFetch', 'url']]);
+/** The floor policy also answers Monitor, whose prompt shows the command. */
+const FLOOR_TOOLS = new Map([...SCREEN_TOOLS, ['Monitor', 'command']]);
 const WRITES = new Set(['Edit', 'MultiEdit', 'Write']);
 const KELPI_NEVER_PREFIX = 'never auto-approved: ';
 const KELPI_CODES = { 'multi-line command': 'MULTILINE', 'command too long': 'TOO_LONG', 'no command': 'NO_INPUT' };
@@ -529,7 +625,7 @@ export async function decide(store, args, now = Date.now(), mono = performance.n
             tool, source: 'provider', ...fields
         });
         const leave = (reason, code, extra = {}) => { a.skipped += 1; entry({ ok: false, skipped: true, reason, code, ...extra }); return ABSTAIN; };
-        const judged = await judgeRequest(args.toolName, args.toolInput, a.fs);
+        const judged = approvePolicy() === 'floor' ? judgeFloor(args.toolName, args.toolInput) : await judgeRequest(args.toolName, args.toolInput, a.fs);
         // Turned off while a path was being looked up: off means abstain, unlogged.
         if (!a.on) return ABSTAIN;
         text = judged.text;

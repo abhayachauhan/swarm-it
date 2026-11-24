@@ -18,6 +18,8 @@ process.env.SWARM_AUTO_RATE_MAX = '3';
 // Long, so the selection tests prove the check on every scan while auto-approve is on.
 process.env.SWARM_PROVIDER_CHECK_MS = '600000';
 process.env.SWARM_PATH_CHECK_MS = '50';
+// These tests cover the full never list, which is now the opt-in `careful` policy; the default floor is in backend-auto-approve-floor.test.mjs.
+process.env.SWARM_AUTO_APPROVE_POLICY = 'careful';
 const { registerAll, SNAPSHOT_EVENT, COUNTS_ITEM } = await import('../backend/index.mjs');
 const AA = await import('../backend/autoapprove.mjs');
 const { createStore } = await import('../backend/store.mjs');

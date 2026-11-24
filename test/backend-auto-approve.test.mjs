@@ -341,10 +341,10 @@ test('while on, a Claude pane outside any swarm is approved too; off, it is left
     assert.equal(enters(api, 'plain'), 0, 'a shell with no Claude session never gets a key');
     const { entries } = await api.command('auto-approve-log', {});
     assert.deepEqual(entries.map(e => [e.ok, e.label, e.command]), [[true, 'my-claude', 'npm test']]);
-    // The never list still applies outside a swarm.
-    api.captureStore.solo = prompt('git push origin main');
+    // The floor rules still apply outside a swarm.
+    api.captureStore.solo = prompt('terraform apply');
     await sleep(80);
-    assert.equal(enters(api, 'solo'), 1, 'git push is left for the user');
+    assert.equal(enters(api, 'solo'), 1, 'terraform apply is left for the user');
     assert.equal(lastSnapshot(api).autoApprove.skipped, 1);
     // Off again: the non-swarm card is no longer owned and the scan settles it.
     await api.command('auto-approve', { on: false });
