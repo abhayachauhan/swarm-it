@@ -23,9 +23,11 @@ const base = text => String(text).split('/').pop().replace(/^=+/, '').toLowerCas
 // ---------------------------------------------------------------------------------------------------------------- reading words
 
 /**
- * @typedef {{ text: string, dynamic: boolean, glob: boolean, quoted: boolean }} Word
+ * @typedef {{ text: string, dynamic: boolean, glob: boolean, quoted: boolean, spaced: boolean, splittable: boolean }} Word
  *   text: the word with its quotes taken off. dynamic: a `$` expansion, substitution, backtick or process substitution is in it,
  *   so the real word is only known when the shell runs. glob: an unquoted `* ? [ {` is in it. quoted: any quoting at all.
+ *   spaced: the word's own text (not what an expansion fills in) holds a space, so it is a sentence and not one bare name.
+ *   splittable: an expansion or substitution stands outside double quotes, so what it fills in may split into several words.
  */
 
 /**
@@ -53,7 +55,11 @@ function parse(p, close, depth) {
     let redirect = null;
     let parens = 0;
     const heredocs = [];
-    const add = text => { cur ??= { text: '', dynamic: false, glob: false, quoted: false }; cur.text += text; };
+    const add = text => {
+        cur ??= { text: '', dynamic: false, glob: false, quoted: false, spaced: false, splittable: false };
+        cur.text += text;
+        if (/\s/.test(text)) cur.spaced = true;
+    };
     const endWord = () => {
         if (!cur) return;
         const word = cur;
@@ -70,7 +76,7 @@ function parse(p, close, depth) {
     const endCommand = () => { endWord(); redirect = null; if (words.length) p.commands.push(words); words = []; };
     // Everything a `$(`, a backtick or a `${` holds is read as commands of its own, in place.
     const nested = (start, kind) => {
-        add(''); cur.dynamic = true;
+        add(''); cur.dynamic = true; cur.splittable = true;
         if (kind === '`') {
             let end = start + 1;
             while (end < src.length && src[end] !== '`') end += src[end] === '\\' ? 2 : 1;
@@ -139,7 +145,7 @@ function parse(p, close, depth) {
             if (d !== undefined && (NAME_START.test(d) || /[0-9@*#?$!-]/.test(d))) {
                 let end = p.i + 2;
                 if (NAME_START.test(d)) while (end < src.length && NAME_CHAR.test(src[end])) end += 1;
-                add(src.slice(p.i, end)); cur.dynamic = true; p.i = end; continue;
+                add(src.slice(p.i, end)); cur.dynamic = true; cur.splittable = true; p.i = end; continue;
             }
             add('$'); p.i += 1; continue;
         }
@@ -186,6 +192,7 @@ function doubleQuoted(p, word, depth) {
             const d = src[p.i + 1] ?? '';
             if (d === '\n') { p.i += 2; continue; }
             word.text += /[$`"\\]/.test(d) ? d : `\\${d}`;
+            if (/\s/.test(d)) word.spaced = true;
             p.i += 2; continue;
         }
         if (c === '`') {
@@ -215,6 +222,7 @@ function doubleQuoted(p, word, depth) {
             word.dynamic = true; word.text += src.slice(p.i, end); p.i = end; continue;
         }
         word.text += c; p.i += 1;
+        if (/\s/.test(c)) word.spaced = true;
     }
     p.failed = true;
 }
@@ -509,31 +517,33 @@ function agentSettingsRule(name, args) {
     const flags = AGENT_FLAGS[name];
     let unknown = false;
     let i = 0;
-    // A value the shell fills in and does not quote can split into several words (`--model $M` with M="x config set"), which shifts the subcommand.
-    const splits = word => word.dynamic && !word.quoted;
+    // An option value the shell fills in outside double quotes can split into several words (`--model $M` with M="x config set"), which
+    // shifts the subcommand.
     for (; i < args.length && args[i].text.startsWith('-'); i += 1) {
         const text = args[i].text;
         const eq = text.indexOf('=');
         const option = eq > 0 ? text.slice(0, eq) : text;
-        if (eq > 0) { if (splits(args[i])) return SETTINGS_RULE; continue; }
+        if (eq > 0) { if (args[i].splittable) return SETTINGS_RULE; continue; }
         if (flags.has(option)) continue;
         if (values.has(option)) {
-            if (args[i + 1] !== undefined && splits(args[i + 1])) return SETTINGS_RULE;
+            if (args[i + 1]?.splittable) return SETTINGS_RULE;
             i += 1;
         } else unknown = true;
     }
     const rest = args.slice(i);
-    if (rest[0]?.dynamic) return SETTINGS_RULE;
+    if (nameFilledIn(rest[0])) return SETTINGS_RULE;
     if (!unknown) return agentSubcommandRule(name, rest, 0);
     // An option this does not know may or may not take a value, so the subcommand could be any word after it: leave the line when one
-    // of them starts a settings write, or is a bare word the shell fills in (a quoted sentence with a variable in it is a prompt).
+    // of them starts a settings write, or may become a subcommand name once the shell fills it in.
     for (let k = 0; k < rest.length; k += 1) {
-        if (rest[k].dynamic && !/\s/.test(rest[k].text)) return SETTINGS_RULE;
+        if (nameFilledIn(rest[k])) return SETTINGS_RULE;
         const rule = agentSubcommandRule(name, rest, k);
         if (rule) return rule;
     }
     return null;
 }
+/** A word the shell fills in that has no spaces of its own, so it could become a bare subcommand or verb (`$SUB`, `"$SUB"`, `$(echo mcp)`), not a sentence (`"Review $FILE now"`). */
+const nameFilledIn = word => word !== undefined && word.dynamic && !word.spaced;
 /** Global options of `claude` and `codex` that take a value, and the ones that take none. Any other option may be either. */
 const AGENT_VALUE_OPTIONS = {
     claude: new Set(['--settings', '--model', '--add-dir', '--mcp-config', '--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--tools',
@@ -558,7 +568,7 @@ function agentSubcommandRule(name, rest, k) {
     const first = rest[k]?.text;
     if (name === 'claude' && first === 'config') return SETTINGS_RULE;
     const verbs = first === 'mcp' ? MCP_WRITES : name === 'claude' && (first === 'plugin' || first === 'plugins') ? PLUGIN_WRITES : null;
-    return verbs && rest.slice(k + 1).some(w => (w.dynamic && !/\s/.test(w.text)) || verbs.includes(w.text)) ? SETTINGS_RULE : null;
+    return verbs && rest.slice(k + 1).some(w => nameFilledIn(w) || verbs.includes(w.text)) ? SETTINGS_RULE : null;
 }
 
 /** `strict` is false for a string that is probably data (JSON, prose) and not a command line: a command word the shell would have to fill in then proves nothing. */

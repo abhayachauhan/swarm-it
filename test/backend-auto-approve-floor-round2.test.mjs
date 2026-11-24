@@ -74,6 +74,9 @@ test('finding 2: claude and codex global options are read with their values befo
         ['claude --model x $SUB add evil', SETTINGS],
         ['claude --model x mcp $VERB evil', SETTINGS],
         ['claude --verbose --no-chrome --some-new-option value $SUB add evil', SETTINGS],
+        ['claude --verbose --no-chrome --some-new-option value "$SUB" add evil', SETTINGS],
+        ['claude --verbose --no-chrome --some-new-option value $(echo mcp add) evil', SETTINGS],
+        ['claude --verbose --no-chrome --some-new-option value mcp "$VERB" evil', SETTINGS],
         // An option value the shell fills in and does not quote can split into several words and move the subcommand.
         ['claude --verbose --no-chrome --model $M mcp list', SETTINGS],
         // (an attached value with a `$` in it is left earlier still, by the rule for a word the shell builds)
