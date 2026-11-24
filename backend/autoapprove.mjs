@@ -496,6 +496,8 @@ function pathValues(value, out = [], named = false) {
 /** A field that names the program of a structured call, and one that holds its arguments (an array of words, not a command line). */
 const EXEC_FIELD = /^(?:executable|exe|command|cmd|program|binary|bin|command_?name)$/i;
 const ARGS_FIELD = /^(?:args|arguments|argv)$/i;
+/** Beside a field that names a program, these hold arguments too; alone they are ordinary data (`options` of a Slack poll). */
+const MORE_ARGS_FIELD = /^(?:params|parameters|options|opts|flags)$/i;
 export const UNREADABLE_EXEC_RULE = 'structured command the floor cannot read';
 const isWords = value => Array.isArray(value) && value.every(item => typeof item === 'string' || typeof item === 'number');
 /** One word of a command line, single-quoted unless it is plainly safe, so the reader sees it as the one word a structured call passes. */
@@ -514,22 +516,39 @@ function structuredExecRule(value) {
         return null;
     }
     const keys = Object.keys(value);
-    const argsKey = keys.find(key => ARGS_FIELD.test(key) && Array.isArray(value[key]));
-    const execKey = keys.find(key => EXEC_FIELD.test(key) && (typeof value[key] === 'string' || (isWords(value[key]) && value[key].length > 0)));
-    if (execKey !== undefined) {
-        // A lone string is a command line the per-string check already read; only a program with arguments, or a program given as words, is joined.
-        if (argsKey !== undefined || Array.isArray(value[execKey])) {
-            const program = [value[execKey]].flat();
-            const args = argsKey === undefined ? [] : value[argsKey];
-            if (!isWords(args)) return UNREADABLE_EXEC_RULE;
-            // A string program may be a whole command line already (`aws s3 ls`): its own words are read as written.
-            const first = typeof program[0] === 'string' && /\s/.test(program[0]) ? program[0] : shellWord(String(program[0]));
-            const line = [first, ...program.slice(1).map(String).map(shellWord), ...args.map(String).map(shellWord)].join(' ');
-            const rule = floorRule(line, true);
-            if (rule) return rule;
+    // Every field that names a program and every field that holds arguments counts, not the first of each: an object may carry several.
+    const execKeys = keys.filter(key => EXEC_FIELD.test(key) && (typeof value[key] === 'string' || Array.isArray(value[key])));
+    if (execKeys.some(key => Array.isArray(value[key]) && !(isWords(value[key]) && value[key].length > 0))) return UNREADABLE_EXEC_RULE;
+    if (execKeys.length === 0) {
+        if (keys.some(key => ARGS_FIELD.test(key) && Array.isArray(value[key]))) return UNREADABLE_EXEC_RULE;
+    } else {
+        const argKeys = keys.filter(key => (ARGS_FIELD.test(key) || MORE_ARGS_FIELD.test(key)) && (Array.isArray(value[key]) || typeof value[key] === 'string'));
+        // A lone string program is a command line the per-string check already read; only a program with arguments, or given as words, is joined.
+        if (argKeys.length > 0 || execKeys.some(key => Array.isArray(value[key]))) {
+            for (const execKey of execKeys) {
+                for (const argKey of argKeys.length > 0 ? argKeys : [null]) {
+                    const rule = joinedExecRule([value[execKey]].flat(), argKey === null ? [] : value[argKey]);
+                    if (rule) return rule;
+                }
+            }
         }
-    } else if (argsKey !== undefined) return UNREADABLE_EXEC_RULE;
+    }
     for (const inner of Object.values(value)) { const rule = structuredExecRule(inner); if (rule) return rule; }
+    return null;
+}
+/**
+ * The rule that `program` (a string or words) followed by `args` (words, or one string that is part of the command line) breaks when read as
+ * one shell command line. A program string with a space in it is read both as written (`aws s3 ls` may be a whole line) and as one word.
+ */
+function joinedExecRule(program, args) {
+    if (Array.isArray(args) && !isWords(args)) return UNREADABLE_EXEC_RULE;
+    const tail = typeof args === 'string' ? [args] : args.map(String).map(shellWord);
+    const rest = program.slice(1).map(String).map(shellWord);
+    const head = String(program[0]);
+    for (const first of typeof program[0] === 'string' && /\s/.test(head) ? [head, shellWord(head)] : [shellWord(head)]) {
+        const rule = floorRule([first, ...rest, ...tail].join(' '), true);
+        if (rule) return rule;
+    }
     return null;
 }
 

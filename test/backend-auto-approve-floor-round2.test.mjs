@@ -187,7 +187,15 @@ test('finding 5: an MCP call with an executable and an args array is judged as t
         [{ executable: 'claude', args: ['--settings', '/tmp/s.json', 'mcp', 'add', 'evil'] }, SETTINGS],
         // A word with a quote or a space in it stays one word: this is `aws ssm put-parameter --value 'a b'`, a write.
         [{ executable: 'aws', args: ['ssm', 'put-parameter', '--name', 'n', '--value', "it's a b", '--profile', 'p'] }, AWS],
+        // Several fields that name a program or hold arguments are each read: the first of a kind does not hide the others.
+        [{ command: 'echo', cmd: 'aws', args: ['s3', 'rm', 's3://b/k'] }, AWS],
+        [{ executable: 'aws', args: ['s3api', 'list-buckets'], argv: ['s3', 'rm', 's3://b/k'] }, AWS],
+        [{ executable: 'sudo terraform', args: ['destroy'] }, TERRAFORM],
+        [{ executable: 'aws', args: 's3 rm s3://b/k' }, AWS],
+        [{ command: 'terraform', options: ['apply'] }, TERRAFORM],
+        [{ command: 'terraform', params: 'destroy' }, TERRAFORM],
         // A layout this cannot read is left: no field names the program, or the arguments are not plain words.
+        [{ command: ['aws', { x: 1 }] }, UNREADABLE],
         [{ args: ['s3', 'rm'] }, UNREADABLE],
         [{ tool: 'aws', args: ['s3', 'rm', 's3://b/k'] }, UNREADABLE],
         [{ executable: 'aws', args: ['s3', { nested: true }] }, UNREADABLE],
@@ -197,7 +205,8 @@ test('finding 5: an MCP call with an executable and an args array is judged as t
         { executable: 'git', args: ['status'] }, { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'] }, { command: ['ls', '-la'] },
         { executable: 'aws', args: ['s3', 'ls', '--profile', 'p'] }, { executable: 'aws', args: ['s3api', 'list-objects-v2', '--bucket', 'b', '--profile', 'p'] },
         { executable: 'aws', args: ['s3', 'cp', 's3://b/k', '/tmp/k', '--profile', 'p'] }, { command: 'ls -la' }, { executable: 'terraform', args: ['plan'] },
-        { channel: 'C1', text: 'hello', tags: ['a', 'b'], ids: [1, 2, 3] }
+        { channel: 'C1', text: 'hello', tags: ['a', 'b'], ids: [1, 2, 3] }, { question: 'Lunch?', options: ['pizza', 'sushi'] }, { command: 'ls', options: 'a' },
+        { executable: 'sudo ls', args: ['-la'] }
     ], run);
 });
 
