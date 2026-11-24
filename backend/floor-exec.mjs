@@ -330,6 +330,9 @@ function invocations(words, out, depth = 0, stdin = false) {
                 }
                 j += SHELL_VALUES.has(t) ? 2 : 1;
             }
+            // The ordered search stopped on a word it cannot place (a dynamic option, an unknown value option): any `-c` still names the script after it.
+            const c = rest.findIndex(w => !w.dynamic && /^-[A-Za-z]*c[A-Za-z]*$/.test(w.text));
+            if (c >= 0 && rest[c + 1] !== undefined) { subCommands(rest[c + 1].text, out, depth + 1, stdin); return; }
         } else if (name === 'ssh') {
             let j = 0;
             while (j < rest.length && rest[j].text.startsWith('-')) j += SSH_VALUES.has(rest[j].text) ? 2 : 1;
@@ -513,12 +516,16 @@ function invocationRule(inv, strict, source) {
         if (args[k].quoted && /\s/.test(args[k].text)) {
             if (!MENTIONS_TOOL.test(args[k].text)) continue;
             const inner = lexShell(args[k].text);
-            if (inner.failed) continue;
+            if (inner.failed) {
+                const unreadable = unreadableRule(args[k].text, strict);
+                if (unreadable) return unreadable;
+                continue;
+            }
             for (const words of inner.commands) {
                 const found = [];
                 invocations(words, found, 1);
                 for (const nested of found) {
-                    const rule = invocationRule(nested, false, args[k].text);
+                    const rule = invocationRule(nested, strict, args[k].text);
                     if (rule) return rule;
                 }
             }
@@ -543,7 +550,7 @@ function invocationRule(inv, strict, source) {
 const MENTIONS_TOOL = /\b(?:aws|terraform|terragrunt|tofu)\b/i;
 /** A string that cannot be read as shell: a command line that names a protected tool is left (in data, only one that starts as a call to it). */
 function unreadableRule(text, strict) {
-    if (strict ? !MENTIONS_TOOL.test(text) : !STARTS_AS_TOOL.test(text)) return null;
+    if (strict ? !MENTIONS_TOOL.test(text) : !text.split(/[;&|\n(]+/).some(part => STARTS_AS_TOOL.test(part))) return null;
     return /\baws\b/i.test(text) ? AWS_RULE : TERRAFORM_RULE;
 }
 /** A string that starts as a call to one of them (after assignments or sudo), so that when it cannot be read it is still a command, not prose. */

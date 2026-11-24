@@ -66,6 +66,11 @@ test('finding 1: an MCP write tool is checked on its destination field, not on t
     // A command field that cannot be read as shell, or whose command word the shell fills in, is left when it names the tool; prose and JSON are data.
     assert.deepEqual(await judge(api, request('mcp__x__run', { a: '; echo ', command: "aws bedrock-agent prepare-agent --agent-id X '" })), left(AWS));
     assert.deepEqual(await judge(api, request('mcp__x__run', { a: '; echo ', command: '$T apply aws' })), left('command word is a variable'));
+    // A field named like a command is read as a command line: a variable set one step earlier and run as the command word is left.
+    assert.deepEqual(await judge(api, request('mcp__x__run', { cmd: 'T=terraform; $T apply -auto-approve' })), left('command word is a variable'));
+    assert.deepEqual(await judge(api, request('mcp__x__run', { options: { script: 'echo hi; $T apply' } })), left('command word is a variable'));
+    // Data that cannot be read as shell is left when any part of it starts as a call to the tool.
+    assert.deepEqual(await judge(api, request('mcp__x__run', { note: "echo hi; aws s3 rm s3://b/k '" })), left(AWS));
     for (const text of ["don't touch the aws account", 'we run terraform plan nightly and the aws bill is fine', '{"service":"aws","note":"$HOME"}']) {
         assert.deepEqual(await judge(api, request('mcp__slack__slack_send_message', { channel: 'C1', text })), approved, text);
     }
@@ -110,6 +115,10 @@ test('finding 3: AWS reads are unwrapped from sudo, env, aws-vault, bash -c, nic
         ['sudo bash --norc -o errexit -c "aws bedrock-agent prepare-agent"', AWS],
         ['docker run --rm img aws --profile p bedrock-agent prepare-agent --agent-id X', AWS],
         ['docker run --rm img sh -c "aws bedrock-agent prepare-agent --agent-id X"', AWS],
+        // A quoted command line that cannot be read, and a shell option the search cannot place before -c.
+        ['docker run --rm img sh -c "aws s3 rm s3://b/k \'"', AWS],
+        ['bash $OPT -c "aws bedrock-agent prepare-agent --agent-id X"', AWS],
+        ['bash --init-file=x --noprofile -c "aws bedrock-agent prepare-agent"', AWS],
         ['aws bedrock-agent prepare-agent --agent-id X --profile p', AWS],
         ['aws not-a-service list-things --profile p', AWS],
         ['aws ec2 not-an-operation --profile p', AWS]

@@ -479,10 +479,14 @@ const FILE_WRITE_WORDS = new Set(['append', 'replace', 'overwrite', 'mkdir', 'to
     'sync', 'rewrite', 'change', 'open', 'new', 'make', 'generate', 'output', 'write']);
 /** A field that says where a file is: `path`, `file_path`, `filePath`, `filename`, `destination`, `target`, `dir`, `output`, `uri`. */
 const PATH_FIELD = /(?:path|file|filename|dest|destination|target|dir|directory|folder|output|out|location|uri)s?$/i;
-/** Every string value in a tool's input, however deep, keys left out. */
-function stringValues(value, out = []) {
-    if (typeof value === 'string') out.push(value);
-    else if (value !== null && typeof value === 'object') for (const inner of Object.values(value)) stringValues(inner, out);
+/** A field that holds a command line to run: read as shell, not as data. */
+const COMMAND_FIELD = /^(?:command|commands|cmd|commandline|command_line|cmdline|script|scripts|shell|bash|sh|exec|execute)$/i;
+/** Every string value in a tool's input with whether its key says it is a command line, however deep. */
+function stringEntries(value, out = [], command = false) {
+    if (typeof value === 'string') out.push({ value, command });
+    else if (value !== null && typeof value === 'object') {
+        for (const [key, inner] of Object.entries(value)) stringEntries(inner, out, Array.isArray(value) ? command : COMMAND_FIELD.test(key));
+    }
     return out;
 }
 /** The strings held under a path-like key, however deep: `{ args: { filePath: '…' } }`, `{ paths: ['…'] }`. */
@@ -500,8 +504,8 @@ function pathValues(value, out = [], named = false) {
  * has the fields that say where it writes checked for a settings path, whatever the other fields hold.
  */
 function mcpFloor(toolName, input) {
-    for (const value of stringValues(input)) {
-        const rule = settingsRule(value) ?? floorExecRule(value, false);
+    for (const { value, command } of stringEntries(input)) {
+        const rule = settingsRule(value) ?? floorExecRule(value, command);
         if (rule) return { rule };
     }
     const words = mcpWords(String(toolName).split('__').pop());
