@@ -141,7 +141,10 @@ test('finding 10: read-looking AWS operations that send, mint or change somethin
     // The list is the AWS CLI's own: the exceptions are not in it, and the reads people run all day are.
     for (const [service, op] of [['cognito-idp', 'get-user-attribute-verification-code'], ['iot', 'describe-endpoint'], ['lambda', 'invoke'], ['ec2', 'run-instances'], ['bedrock-agent', 'prepare-agent'],
         // `Check` must be a whole word (`CheckoutLicense` takes a license), and credential or login-link minting is left.
-        ['license-manager', 'checkout-license'], ['license-manager', 'checkout-borrow-license'], ['lightsail', 'get-instance-access-details'], ['lakeformation', 'get-temporary-glue-table-credentials']]) {
+        ['license-manager', 'checkout-license'], ['license-manager', 'checkout-borrow-license'], ['lightsail', 'get-instance-access-details'], ['lakeformation', 'get-temporary-glue-table-credentials'],
+        // A minter whose name ends in a qualifier (`-for-identity`, `-from-refresh-token`) is still a minter.
+        ['cognito-identity', 'get-credentials-for-identity'], ['cognito-idp', 'get-tokens-from-refresh-token'], ['bedrock-agentcore', 'get-workload-access-token-for-jwt'],
+        ['bedrock-agentcore', 'get-workload-access-token-for-user-id'], ['cloudwatchomni', 'get-space-credentials-for-organization']]) {
         assert.equal(AWS_READ_OPS.get(service)?.has(op) ?? false, false, `${service} ${op}`);
     }
     for (const [service, op] of [['ec2', 'describe-instances'], ['s3api', 'list-objects-v2'], ['ssm', 'get-parameter'], ['logs', 'filter-log-events'], ['dynamodb', 'scan'],
