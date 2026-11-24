@@ -428,15 +428,18 @@ function terraformRule(args, stdin) {
 }
 
 /** A pull request comment that tells Atlantis (the infrastructure repos' Terraform runner) to apply, import or change state. `atlantis plan` is not one. */
-const ATLANTIS_COMMAND = /\batlantis\s+(apply|import|state)\b/i;
+const ATLANTIS_COMMAND = /\batlantis\s+(apply|import|state|[$`])/i;
 /**
- * The floor rule an `atlantis apply`, `atlantis import` or `atlantis state` anywhere in the text breaks, or null. Read on the raw text,
- * before quotes, heredocs and commit messages are made inert: `gh pr comment 1 --body "atlantis apply"` is a command to Atlantis,
- * whatever tool posts it, so it is also read in every string value of an MCP call.
+ * The floor rule an `atlantis apply`, `atlantis import` or `atlantis state` anywhere in the text breaks, or null, and so does `atlantis`
+ * followed by a word the shell fills in (`"atlantis $ACTION"`). Read on the raw text, before quotes, heredocs and commit messages are made
+ * inert: `gh pr comment 1 --body "atlantis apply"` is a command to Atlantis, whatever tool posts it, so it is also read in every string
+ * value of an MCP call. A word spelled around the quotes (`atl""antis apply`) is a disguise, which is outside what the floor guards against.
  */
 export function atlantisRule(text) {
     const found = ATLANTIS_COMMAND.exec(String(text));
-    return found ? (found[1].toLowerCase() === 'apply' ? TERRAFORM_RULE : STATE_RULE) : null;
+    if (!found) return null;
+    const verb = found[1].toLowerCase();
+    return verb === 'import' || verb === 'state' ? STATE_RULE : TERRAFORM_RULE;
 }
 
 // ------------------------------------------------------------------------------------------------------ AWS deploys without the aws CLI
@@ -479,9 +482,11 @@ const ECR_HOST = /\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com|public\.ecr\.
  * or whose image name the shell fills in (it may be one). A push to any other registry stays approved.
  */
 function containerPushRule(args, stdin) {
-    const pushes = args.some(a => !a.dynamic && !a.glob && (a.text === 'push' || /^--push(?:=true)?$/.test(a.text) || /type=registry/i.test(a.text)));
+    const pushes = args.some(a => !a.dynamic && !a.glob && (a.text === 'push' || /^--push(?:=true)?$/.test(a.text) || /type=registry|(?:^|,)push=true/i.test(a.text)));
     if (!pushes) return null;
-    return stdin || args.some(a => a.dynamic || a.glob || ECR_HOST.test(a.text)) ? DEPLOY_RULE : null;
+    // `compose push` and `buildx bake` take their image names from a file, so no registry shows in the arguments.
+    const namesInAFile = args.some(a => !a.dynamic && !a.glob && (a.text === 'compose' || a.text === 'bake'));
+    return stdin || namesInAFile || args.some(a => a.dynamic || a.glob || ECR_HOST.test(a.text)) ? DEPLOY_RULE : null;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------ aws
@@ -654,8 +659,12 @@ function invocationRule(inv, strict, source) {
     const { name, args, stdin } = inv;
     if (name === 'aws') return awsRule(args, stdin);
     if (TERRAFORM_TOOLS.has(name)) return terraformRule(args, stdin);
+    // A deploy tool that reads (`cdk synth`) is read on for the rest: its arguments may still hold a command (`cdk synth --app "aws s3 rm …"`).
     const deploy = deployTool(inv.exe.text);
-    if (deploy) return deployToolRule(deploy, args, stdin);
+    if (deploy) {
+        const rule = deployToolRule(deploy, args, stdin);
+        if (rule) return rule;
+    }
     if (CONTAINER_TOOLS.has(name)) {
         const push = containerPushRule(args, stdin);
         if (push) return push;

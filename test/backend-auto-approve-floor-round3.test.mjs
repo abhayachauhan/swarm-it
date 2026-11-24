@@ -121,6 +121,7 @@ test('finding 2: an atlantis apply, import or state comment is left in a command
         ["gh pr comment 123 --body-file - <<'EOF'\natlantis apply\nEOF", TERRAFORM],
         ['gh pr comment 123 --body "Atlantis  Apply"', TERRAFORM],
         ['echo "atlantis apply" | gh pr comment 1 -F -', TERRAFORM],
+        ['gh pr comment 123 --body "atlantis $ACTION -d infra/prod"', TERRAFORM],
         ['gh pr comment 1 -b "atlantis import aws_s3_bucket.b b"', STATE],
         ['gh pr comment 1 -b "atlantis state rm aws_s3_bucket.b"', STATE]
     ]);
@@ -166,12 +167,16 @@ test('finding 9: AWS deploys without the aws CLI are left, and so is a push to a
         [`docker push ${ecr}/app:1`, DEPLOY], [`docker image push ${ecr}/app:1`, DEPLOY], [`docker buildx build --push -t ${ecr}/app:1 .`, DEPLOY],
         ['docker push public.ecr.aws/x/app:1', DEPLOY], ['docker push "$IMAGE"', DEPLOY], ['podman push $IMAGE', DEPLOY],
         ['copilot svc deploy', DEPLOY], ['copilot deploy --name x', DEPLOY], ['eb deploy', DEPLOY], ['eb terminate prod', DEPLOY],
-        ['amplify publish', DEPLOY], ['amplify push --yes', DEPLOY]
+        ['amplify publish', DEPLOY], ['amplify push --yes', DEPLOY],
+        // Image names that come from a file or from an output option, and a deploy tool that reads but is handed a command to run.
+        ['docker compose push', DEPLOY], ['docker buildx bake --push', DEPLOY], [`docker buildx build --output type=image,name=${ecr}/app,push=true .`, DEPLOY],
+        ['cdk synth --app "aws s3 rm s3://b/k --recursive"', AWS]
     ]);
     await approve([
         'cdk synth', 'cdk diff MyStack', 'npx cdk diff', 'cdk diff "$STACK"', 'sam build', 'sam validate',
         'docker push myrepo/app:1', 'docker push ghcr.io/org/app:1', `docker build -t ${ecr}/app:1 .`, `docker tag app ${ecr}/app:1`,
-        'copilot svc ls', 'eb status', 'amplify status', 'git commit -m "cdk deploy in CI"', 'echo cdk deploy', 'grep -rn "sam deploy" docs'
+        'copilot svc ls', 'eb status', 'amplify status', 'git commit -m "cdk deploy in CI"', 'echo cdk deploy', 'grep -rn "sam deploy" docs',
+        'docker compose up', 'docker compose build', 'docker buildx build -t app:1 .', 'cdk synth --app "node bin/app.js"'
     ]);
 });
 
