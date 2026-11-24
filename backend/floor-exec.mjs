@@ -428,7 +428,7 @@ function terraformRule(args, stdin) {
 }
 
 /** A pull request comment that tells Atlantis (the infrastructure repos' Terraform runner) to apply, import or change state. `atlantis plan` is not one. */
-const ATLANTIS_COMMAND = /\batlantis\s+(apply|import|state|[$`])/i;
+const ATLANTIS_COMMAND = /\batlantis["'\s]+(apply|import|state|[$`])/i;
 /**
  * The floor rule an `atlantis apply`, `atlantis import` or `atlantis state` anywhere in the text breaks, or null, and so does `atlantis`
  * followed by a word the shell fills in (`"atlantis $ACTION"`). Read on the raw text, before quotes, heredocs and commit messages are made
@@ -482,7 +482,8 @@ const ECR_HOST = /\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com|public\.ecr\.
  * or whose image name the shell fills in (it may be one). A push to any other registry stays approved.
  */
 function containerPushRule(args, stdin) {
-    const pushes = args.some(a => !a.dynamic && !a.glob && (a.text === 'push' || /^--push(?:=true)?$/.test(a.text) || /type=registry|(?:^|,)push=true/i.test(a.text)));
+    // Any value the CLI reads as true counts (`--push=1`, `push=T`, `--push=TRUE`).
+    const pushes = args.some(a => !a.dynamic && !a.glob && (a.text === 'push' || /^--push(?:=(?:1|t|true))?$/i.test(a.text) || /type=registry|(?:^|,)push=(?:1|t|true)\b/i.test(a.text)));
     if (!pushes) return null;
     // `compose push` and `buildx bake` take their image names from a file, so no registry shows in the arguments.
     const namesInAFile = args.some(a => !a.dynamic && !a.glob && (a.text === 'compose' || a.text === 'bake'));

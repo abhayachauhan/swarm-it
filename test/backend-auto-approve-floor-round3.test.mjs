@@ -4,6 +4,9 @@
 // A test here asserts the exact decision, the code and the rule, so a command left for a different reason fails it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { makeSwarmApi } from './backend-fake-api.mjs';
 
 process.env.SWARM_PROMPT_SCAN_MS = '20';
@@ -122,6 +125,7 @@ test('finding 2: an atlantis apply, import or state comment is left in a command
         ['gh pr comment 123 --body "Atlantis  Apply"', TERRAFORM],
         ['echo "atlantis apply" | gh pr comment 1 -F -', TERRAFORM],
         ['gh pr comment 123 --body "atlantis $ACTION -d infra/prod"', TERRAFORM],
+        [`gh pr comment 123 --body 'atlantis "apply"'`, TERRAFORM],
         ['gh pr comment 1 -b "atlantis import aws_s3_bucket.b b"', STATE],
         ['gh pr comment 1 -b "atlantis state rm aws_s3_bucket.b"', STATE]
     ]);
@@ -169,6 +173,7 @@ test('finding 9: AWS deploys without the aws CLI are left, and so is a push to a
         ['copilot svc deploy', DEPLOY], ['copilot deploy --name x', DEPLOY], ['eb deploy', DEPLOY], ['eb terminate prod', DEPLOY],
         ['amplify publish', DEPLOY], ['amplify push --yes', DEPLOY],
         // Image names that come from a file or from an output option, and a deploy tool that reads but is handed a command to run.
+        [`docker buildx build --push=1 -t ${ecr}/app:1 .`, DEPLOY], [`docker buildx build --output type=image,name=${ecr}/app,push=T .`, DEPLOY],
         ['docker compose push', DEPLOY], ['docker buildx bake --push', DEPLOY], [`docker buildx build --output type=image,name=${ecr}/app,push=true .`, DEPLOY],
         ['cdk synth --app "aws s3 rm s3://b/k --recursive"', AWS]
     ]);
@@ -178,6 +183,44 @@ test('finding 9: AWS deploys without the aws CLI are left, and so is a push to a
         'copilot svc ls', 'eb status', 'amplify status', 'git commit -m "cdk deploy in CI"', 'echo cdk deploy', 'grep -rn "sam deploy" docs',
         'docker compose up', 'docker compose build', 'docker buildx build -t app:1 .', 'cdk synth --app "node bin/app.js"'
     ]);
+});
+
+test('finding 3: a script written now is read for the commands in it, since the run later only names the file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'round3-'));
+    const write = ({ file, content }) => request('Write', { file_path: join(dir, file), content });
+    await expectAll([
+        // The reviewer's: Write deploy.sh holding terraform apply, then bash deploy.sh.
+        [{ file: 'deploy.sh', content: '#!/bin/bash\nset -e\nterraform apply -auto-approve\n' }, TERRAFORM],
+        [{ file: 'run', content: '#!/usr/bin/env bash\naws s3 rm s3://b --recursive --profile p\n' }, AWS],
+        [{ file: 'ci.zsh', content: 'cd infra\nterragrunt run-all apply\n' }, TERRAFORM],
+        [{ file: 'Makefile', content: 'deploy:\n\tterraform apply\n' }, TERRAFORM],
+        // A command word held in a variable, in a Makefile that also names terraform, may be the apply.
+        [{ file: 'infra.mk', content: 'TF = terraform\ndeploy:\n\t$(TF) apply\n' }, 'command word is a variable'],
+        [{ file: 'p.py', content: 'import os\nos.system("terraform apply")\n' }, TERRAFORM],
+        [{ file: 'x.mjs', content: "import { execSync } from 'node:child_process';\nexecSync(`aws s3 rm s3://b/k --recursive`);\n" }, AWS],
+        [{ file: 'package.json', content: '{"scripts":{"deploy":"cdk deploy --all"}}' }, DEPLOY],
+        [{ file: 'post.ts', content: 'await sh("gh pr comment 1 --body \\"atlantis apply\\"");\n' }, TERRAFORM]
+    ], rule => left(rule), write);
+    // Edit and MultiEdit put the new text in the same file, so it is read the same way.
+    const edit = request('Edit', { file_path: join(dir, 'deploy.sh'), old_string: 'echo hi', new_string: 'terraform destroy' });
+    const multi = request('MultiEdit', { file_path: join(dir, 'deploy.sh'), edits: [{ old_string: 'a', new_string: 'echo ok' }, { old_string: 'b', new_string: 'sam deploy' }] });
+    const { api, dispose } = await start();
+    try {
+        assert.deepEqual(await judge(api, edit), left(TERRAFORM));
+        assert.deepEqual(await judge(api, multi), left(DEPLOY));
+        // A shell script too long to read inside Kelpi's deadline is the user's.
+        assert.deepEqual(await judge(api, write({ file: 'long.sh', content: '#!/bin/sh\n' + 'echo hi\n'.repeat(600) })), [ABSTAIN, 'TOO_LONG', undefined, 'too long to check']);
+    } finally { dispose(); }
+    await expectAll([
+        [{ file: 'ok.sh', content: '#!/bin/bash\nset -e\necho hi\nterraform plan\naws s3 ls\ndocker build -t app .\n' }],
+        [{ file: 'app.ts', content: "import { S3Client } from '@aws-sdk/client-s3';\nconst client = new S3Client({ region: 'ap-southeast-2' });\nconst provider = 'aws';\nconst rows = [1, 2].map(n => `${n}`);\n" }],
+        [{ file: 'app.js', content: "const x = $('#a'); const y = [1, 2]; // don't run terraform apply here\n" }],
+        [{ file: 'notes.md', content: '# Deploy\n\nRun `terraform apply` and then `atlantis apply`.\n' }],
+        [{ file: 'package.json', content: '{"dependencies":{"aws-cdk-lib":"2.1.0","@aws-sdk/client-s3":"3.0.0"},"scripts":{"build":"tsc","synth":"cdk synth"}}' }],
+        [{ file: 'Makefile', content: 'build:\n\t$(CC) -o app main.c\n\ntest:\n\tnpm test\n' }],
+        [{ file: 'plan.mk', content: 'plan:\n\tterraform plan\n\taws s3 ls\n' }],
+        [{ file: 'check.py', content: 'import subprocess\nsubprocess.run(["aws", "--version"])\nprint("terraform plan")\n' }]
+    ], () => approved, write);
 });
 
 test('finding 9: Terraform commands that change state without an apply are left, reads of state are not', async () => {

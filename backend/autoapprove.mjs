@@ -486,7 +486,66 @@ export function judgeFloor(toolName, toolInput) {
         if (check) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: check.rule };
     }
     if (WRITES.has(toolName) && settingsPath(input.file_path)) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
+    // A script written now and run by a later call is read now: the later call only names the file.
+    const script = WRITES.has(toolName) ? scriptCheck(toolName, input) : null;
+    if (script?.tooLong) return { allow: false, text, reason: 'too long to check', code: 'TOO_LONG' };
+    if (script) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: script.rule };
     return { allow: true, text };
+}
+
+/**
+ * Writes of a script are read for the commands inside, because `Write deploy.sh` holding `terraform apply` followed by `bash deploy.sh` would
+ * otherwise get both calls approved. What is read depends on the kind of file, since JavaScript, TypeScript and Python read as shell leave
+ * every file (a `[` or `$(` in code looks like a glob or a substitution): a shell script (a `.sh`, `.bash` or `.zsh` file, or a shell on its
+ * `#!` line) gets the whole floor, a Makefile the calls to aws, terraform and the deploy tools, and any other source file, and package.json,
+ * only its string literals that hold such a call (`os.system("terraform apply")`, `"deploy": "cdk deploy"`).
+ */
+const SHELL_FILE = /\.(?:sh|bash|zsh)$/i;
+const MAKE_FILE = /(?:^|\/)(?:makefile|gnumakefile)$|\.mk$/i;
+const SOURCE_FILE = /\.(?:py|mjs|cjs|js|ts|mts|rb|pl)$|(?:^|\/)package\.json$/i;
+const SHEBANG = /^#!\s*(\S+)(?:\s+(?:-S\s+)?(\S+))?/;
+const SHELL_NAMES = /^(?:sh|bash|zsh|dash|ksh|fish)$/;
+/** Longest script read: a Makefile, or the string literals of a source file. A shell script is read up to MAX_REQUEST_TEXT, as a command is. */
+const MAX_SCRIPT_TEXT = 256 * 1024;
+const MAX_LITERALS = 200;
+/** A word that makes a string literal worth reading as a command. */
+const PROTECTED_WORD = /\b(?:aws|aws-cdk|terraform|terragrunt|tofu|atlantis|cdk|sam|copilot|eb|amplify|docker|podman|nerdctl|buildah|finch|claude|codex)\b/i;
+/** A single-line string in single or double quotes, or a template in backticks (which may run over lines). */
+const STRING_LITERAL = /(["'])((?:\\.|(?!\1)[^\\\n])*)\1|`((?:\\.|[^\\`])*)`/g;
+function scriptKind(path, text) {
+    const shebang = SHEBANG.exec(text);
+    if (shebang) return SHELL_NAMES.test(posix.basename(posix.basename(shebang[1]) === 'env' ? shebang[2] ?? '' : shebang[1])) ? 'shell' : 'source';
+    if (SHELL_FILE.test(path)) return 'shell';
+    if (MAKE_FILE.test(path)) return 'make';
+    return SOURCE_FILE.test(path) ? 'source' : null;
+}
+/** The first call to aws, terraform, Atlantis, a deploy tool or the agent's settings held in a string literal of the source, as `{ rule }`. */
+function literalCheck(source) {
+    let read = 0;
+    for (const match of source.matchAll(STRING_LITERAL)) {
+        const value = match[2] ?? match[3] ?? '';
+        if (!PROTECTED_WORD.test(value)) continue;
+        read += 1;
+        if (value.length > MAX_REQUEST_TEXT || read > MAX_LITERALS) return { tooLong: true };
+        const rule = (line => atlantisRule(line) ?? floorExecRule(line, false))(value.replace(/\\[nrt]/g, ' ').replace(/\\(.)/g, '$1'));
+        if (rule) return { rule };
+    }
+    return null;
+}
+/** What a Write, Edit or MultiEdit puts in a script, read by the floor: `{ rule }`, `{ tooLong: true }` or null. */
+function scriptCheck(toolName, input) {
+    const pieces = toolName === 'Write' ? [input.content] : toolName === 'Edit' ? [input.new_string] : Array.isArray(input.edits) ? input.edits.map(edit => edit?.new_string) : [];
+    for (const piece of pieces) {
+        if (typeof piece !== 'string' || !piece) continue;
+        const kind = scriptKind(String(input.file_path), piece);
+        if (kind === null) continue;
+        if (kind === 'shell' ? piece.length > MAX_REQUEST_TEXT : piece.length > MAX_SCRIPT_TEXT) return { tooLong: true };
+        // The `#!` line names the shell, which would read as a command word `bash`.
+        const found = kind === 'shell' ? floorCheck(piece.replace(/^#!.*(?:\n|$)/, ''), true)
+            : kind === 'make' ? (rule => (rule ? { rule } : null))(floorExecRule(piece, false)) : literalCheck(piece);
+        if (found) return found;
+    }
+    return null;
 }
 
 /** Words beyond MCP_CHANGE_WORDS that say a tool puts something in a file. */
