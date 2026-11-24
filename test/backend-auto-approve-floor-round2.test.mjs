@@ -180,6 +180,8 @@ test('finding 4: an MCP tool that writes, moves or copies a file is followed to 
         await writeFile(settings, '{}');
         await symlink(settings, join(root, 'repo', 'notes.json'));
         await symlink(join(root, 'home', '.claude'), join(root, 'repo', 'cfg'));
+        await mkdir(join(root, 'home', '.codex'));
+        await symlink(join(root, 'home', '.codex'), join(root, 'repo', 'codex-link'));
         await link(settings, join(root, 'repo', 'hard.json'));
         await writeFile(join(root, 'repo', 'plain.txt'), 'x');
         const { api, dispose } = await start();
@@ -207,6 +209,12 @@ test('finding 4: an MCP tool that writes, moves or copies a file is followed to 
             // Moved or copied into a folder, a file keeps its name there: the folder `.claude` gets `settings.json` or `hooks` from a file of that name.
             assert.deepEqual(await mcp('copy_file', { src: join(root, 'repo', 'plain.txt'), dest: join(root, 'home', '.claude') }), settingsLeft, 'into the settings folder');
             assert.deepEqual(await mcp('move_file', { source: join(root, 'repo', 'settings.json'), destination: join(root, 'repo', 'cfg') }), settingsLeft, 'into a linked settings folder');
+            // The rules folder of Codex is named with a slash after it, so a folder called `rules` moved into a linked `.codex` is caught too.
+            assert.deepEqual(await mcp('copy_file', { src: join(root, 'repo', 'rules'), dest: join(root, 'repo', 'codex-link') }), settingsLeft, 'a rules folder into a linked .codex');
+            // A name with a read word and a word that changes a file is not a plain read: `get_and_extract`, `read_then_chmod`.
+            for (const tool of ['get_and_extract', 'read_then_unzip', 'list_and_chmod', 'get_and_chown', 'read_and_unlink']) {
+                assert.deepEqual(await mcp(tool, { path: join(root, 'repo', 'notes.json') }), settingsLeft, tool);
+            }
             // A key that is plainly a file says so whatever it holds: a bare name is a relative path, left. Under `target` or `folder` it may be a branch or a label.
             for (const input of [{ path: 'notes' }, { destination: 'inbox' }, { filePath: 'out' }, { dest_path: 'x' }, { paths: ['notes'] }, { args: { file: 'x' } }]) {
                 assert.deepEqual(await mcp('stash_file', input), [ABSTAIN, 'PATH', undefined, 'not an absolute path'], JSON.stringify(input));

@@ -473,7 +473,7 @@ export function judgeFloor(toolName, toolInput) {
 
 /** Words beyond MCP_CHANGE_WORDS that say a tool puts something in a file. */
 const FILE_WRITE_WORDS = new Set(['append', 'replace', 'overwrite', 'mkdir', 'touch', 'link', 'symlink', 'truncate', 'store', 'persist', 'dump', 'export',
-    'sync', 'rewrite', 'change', 'open', 'new', 'make', 'generate', 'output', 'write']);
+    'sync', 'rewrite', 'change', 'open', 'new', 'make', 'generate', 'output', 'write', 'unlink', 'extract', 'unzip', 'chmod', 'chown']);
 /** A field that says where a file is: `path`, `file_path`, `filePath`, `filename`, `destination`, `target`, `dir`, `output`, `uri`. */
 const PATH_FIELD = /(?:path|file|filename|dest|destination|target|dir|directory|folder|output|out|location|uri)s?$/i;
 /** A field that holds a command line to run: read as shell, not as data. */
@@ -645,7 +645,8 @@ async function landing(path, text, fs, names = []) {
             const found = await lookup(fs.stat, landed.path, performance.now() + PATH_CHECK_MS);
             const folder = typeof found.isDirectory === 'function' && found.isDirectory();
             // Into a folder, a move or copy keeps the source's name: `mv x ~/.claude` lands on `~/.claude/x`.
-            if (folder && names.some(name => settingsPath(posix.join(landed.path, name)))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
+            // The slash is for `.codex/rules`: the settings pattern names that folder with one after it, and a folder moved in has none yet.
+            if (folder && names.some(name => [posix.join(landed.path, name), `${posix.join(landed.path, name)}/`].some(settingsPath))) return { allow: false, text, reason: NEVER_REASON, code: 'NEVER', rule: FLOOR_SETTINGS_RULE };
             // A folder's link count is its sub-folders and the two entries every folder has, not a second name.
             if (found.nlink > 1 && !folder) return { allow: false, text, reason: 'writes to a file with more than one name (hard link)', code: 'HARDLINK' };
         } catch (error) {
