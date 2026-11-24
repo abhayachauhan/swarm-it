@@ -72,11 +72,19 @@ test('finding 2: claude and codex global options are read with their values befo
         ['codex --some-new-option mcp add evil -- npx evil', SETTINGS],
         // A subcommand or verb the shell fills in.
         ['claude --model x $SUB add evil', SETTINGS],
-        ['claude --model x mcp $VERB evil', SETTINGS]
+        ['claude --model x mcp $VERB evil', SETTINGS],
+        ['claude --verbose --no-chrome --some-new-option value $SUB add evil', SETTINGS],
+        // An option value the shell fills in and does not quote can split into several words and move the subcommand.
+        ['claude --verbose --no-chrome --model $M mcp list', SETTINGS],
+        // (an attached value with a `$` in it is left earlier still, by the rule for a word the shell builds)
+        ['claude --verbose --no-chrome --model=$M mcp list', 'shell expansion builds a word'],
+        // The verb may stand any distance behind `mcp`, after options of its own.
+        ['claude mcp --scope user --transport http --header a:b --header c:d add evil http://x', SETTINGS]
     ]);
     await approve(['claude --settings /tmp/custom.json mcp list', 'claude --model x mcp get x', 'claude --settings /tmp/s.json --version',
         "claude -p --resume abc --permission-mode auto 'Write the updated result to /tmp/r.md. Reply done.'", "claude --verbose --model x -p 'explain how mcp add works'",
-        "codex -c model=x exec 'fix the tests'", 'codex --profile p mcp list', "claude --some-new-option value 'explain mcp'", 'claude --model x plugin list']);
+        "codex -c model=x exec 'fix the tests'", 'codex --profile p mcp list', "claude --some-new-option value 'explain mcp'", 'claude --model x plugin list',
+        'claude --verbose --no-chrome --model "$M" mcp list', 'claude --verbose --no-chrome --resume abc "Review $FILE now"']);
 });
 
 test('finding 3: standard and privilege wrappers are looked through in any order before the piped-into-shell and ruled-command checks', async () => {

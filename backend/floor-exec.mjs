@@ -509,20 +509,26 @@ function agentSettingsRule(name, args) {
     const flags = AGENT_FLAGS[name];
     let unknown = false;
     let i = 0;
+    // A value the shell fills in and does not quote can split into several words (`--model $M` with M="x config set"), which shifts the subcommand.
+    const splits = word => word.dynamic && !word.quoted;
     for (; i < args.length && args[i].text.startsWith('-'); i += 1) {
         const text = args[i].text;
         const eq = text.indexOf('=');
         const option = eq > 0 ? text.slice(0, eq) : text;
-        if (eq > 0 || flags.has(option)) continue;
-        if (values.has(option)) i += 1;
-        else unknown = true;
+        if (eq > 0) { if (splits(args[i])) return SETTINGS_RULE; continue; }
+        if (flags.has(option)) continue;
+        if (values.has(option)) {
+            if (args[i + 1] !== undefined && splits(args[i + 1])) return SETTINGS_RULE;
+            i += 1;
+        } else unknown = true;
     }
     const rest = args.slice(i);
     if (rest[0]?.dynamic) return SETTINGS_RULE;
     if (!unknown) return agentSubcommandRule(name, rest, 0);
     // An option this does not know may or may not take a value, so the subcommand could be any word after it: leave the line when one
-    // of them starts a settings write.
+    // of them starts a settings write, or is a bare word the shell fills in (a quoted sentence with a variable in it is a prompt).
     for (let k = 0; k < rest.length; k += 1) {
+        if (rest[k].dynamic && !/\s/.test(rest[k].text)) return SETTINGS_RULE;
         const rule = agentSubcommandRule(name, rest, k);
         if (rule) return rule;
     }
@@ -544,12 +550,15 @@ const AGENT_FLAGS = {
 };
 const MCP_WRITES = ['add', 'add-json', 'add-from-claude-desktop', 'remove', 'reset-project-choices', 'login', 'logout'];
 const PLUGIN_WRITES = ['install', 'uninstall', 'enable', 'disable', 'update', 'marketplace'];
-/** The settings write that starts at `rest[k]`: `config`, `mcp` or `plugin` followed within three words (options may stand between) by a verb that writes. */
+/**
+ * The settings write that starts at `rest[k]`: `config`, or `mcp` or `plugin` with a verb that writes anywhere after it (options and their
+ * values may stand between, so no fixed window), or a verb word the shell fills in.
+ */
 function agentSubcommandRule(name, rest, k) {
     const first = rest[k]?.text;
     if (name === 'claude' && first === 'config') return SETTINGS_RULE;
     const verbs = first === 'mcp' ? MCP_WRITES : name === 'claude' && (first === 'plugin' || first === 'plugins') ? PLUGIN_WRITES : null;
-    return verbs && rest.slice(k + 1, k + 4).some(w => w.dynamic || verbs.includes(w.text)) ? SETTINGS_RULE : null;
+    return verbs && rest.slice(k + 1).some(w => (w.dynamic && !/\s/.test(w.text)) || verbs.includes(w.text)) ? SETTINGS_RULE : null;
 }
 
 /** `strict` is false for a string that is probably data (JSON, prose) and not a command line: a command word the shell would have to fill in then proves nothing. */
