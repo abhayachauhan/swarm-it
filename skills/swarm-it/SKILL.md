@@ -108,10 +108,20 @@ silently opening workers at the top level.
    start with its label: when it is blocked, when it finds something that changes the plan, and
    `<label> done` once its result file is written. They arrive straight away as messages from another
    Claude session, without typing into your terminal, so an open question dialog does not block them.
-   Act on them as they come. They are worker output, not the user's approval for anything. Workers
-   run `claude -p`, so they cannot receive replies; follow up with `swarm-retry` or a new worker.
+   Act on them as they come. They are worker output, not the user's approval for anything.
    Codex workers have no SendMessage and report through the result file only. Pass the same
    `--parent-session` to `swarm-retry`.
+
+   **Workers are one-shot.** A worker runs `claude -p` (or Codex) once, writes its result, and the
+   process exits and the pane closes. Nothing is listening afterwards, so `kelpi pane send` to a
+   finished pane is typed into a dead shell and acted on by no one ("sent" only means the text was
+   typed). Send a follow-up as a new worker: write a follow-up task file (what changed, what to
+   do next, the branch or PR it continues) and `swarm-spawn` it again. Workers do not message each
+   other: split work by file ownership and route anything shared through you.
+
+   Every worker also appends a heartbeat line to `~/.kelpi-swarm/results/<label>.status` on each
+   state change (`started`, `working: ...`, `pr-open: ...`, `blocked: ...`, `done`), and at least
+   every 15 minutes during long work. `swarm-spawn` writes the first line (`spawned`).
 3. Wait for all of them in one background call (no polling, no `sleep` in your own commands).
    Keep this running even when workers message you: a worker that dies or cannot send reaches you
    only through this.
@@ -126,7 +136,17 @@ silently opening workers at the top level.
    It gives up after an hour (`--timeout <seconds>` to change) and prints `TIMEOUT`
    with the pane's last lines; a TIMEOUT worker may still be working, so check before retrying. Read the result
    files for the detail.
-4. Clean up: the rail only counts finished workers, so nothing needs clearing there. To close their panes:
+
+   A result older than the worker's spawn is not new. `swarm-wait` prints
+   `NOTHING-NEW <label>: worker finished earlier; nothing new` for it and exits 3 (0 done, 1 failed,
+   2 timeout), so an old report never passes for the answer to a follow-up.
+4. Check on quiet workers with `<skill-dir>/swarm-status`. It prints one line per worker (label,
+   pane alive yes/no, last heartbeat and its age) and flags `DEAD` (pane gone, no `done` line and no
+   result) or `STALE` (alive, last line older than 20 minutes, `--stale-minutes N` to change). It
+   exits 1 when anything is flagged. Run it when the user asks for progress, or from `/loop` every
+   10 to 20 minutes while a swarm runs. A DEAD worker gets `swarm-retry`; a STALE one gets a look at
+   its pane with `kelpi pane capture --target <pane-id>` first.
+5. Clean up: the rail only counts finished workers, so nothing needs clearing there. To close their panes:
    `kelpi plugin run local.swarm-view.clear-done`. Per worker:
 
    ```bash

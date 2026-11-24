@@ -76,6 +76,51 @@ test('an exit file with no readable reason still fails the worker, with a plain 
   assert.equal(stdout.trim(), 'FAILED P1:w1 agent stopped without a result')
 })
 
+/** Writes the manifest swarm-spawn would have: one worker per [pane, label, startedAt]. */
+function manifest(s, workers) {
+  fs.writeFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), JSON.stringify({
+    version: 1,
+    orchestrator: { paneID: 'ORCH', label: 'coordinator' },
+    workers: workers.map(([paneID, label, startedAt]) => ({ paneID, label, task: 't', resultPath: null, parent: null, startedAt }))
+  }))
+}
+const at = iso => new Date(iso)
+
+test('a result written before the worker was spawned is NOTHING-NEW, not DONE, with its own exit code', () => {
+  const s = setup()
+  manifest(s, [['P1', 'w1', '2026-11-24T10:00:00Z']])
+  fs.writeFileSync(s.result('w1'), '## Goal\nold report\n')
+  fs.utimesSync(s.result('w1'), at('2026-11-24T09:00:00Z'), at('2026-11-24T09:00:00Z'))
+  const { status, stdout } = s.run(['P1:w1'])
+  assert.equal(status, 3)
+  assert.equal(stdout.trim(), 'NOTHING-NEW w1: worker finished earlier; nothing new')
+})
+
+test('a result written after the spawn is DONE, and a failure still outranks nothing-new', () => {
+  const s = setup()
+  manifest(s, [['P1', 'w1', '2026-11-24T10:00:00Z'], ['P2', 'w2', '2026-11-24T10:00:00Z']])
+  fs.writeFileSync(s.result('w1'), '## Goal\nnew report\n')
+  fs.utimesSync(s.result('w1'), at('2026-11-24T10:30:00Z'), at('2026-11-24T10:30:00Z'))
+  const fresh = s.run(['P1:w1'])
+  assert.equal(fresh.status, 0)
+  assert.match(fresh.stdout, /^DONE w1: ## Goal new report/)
+  fs.writeFileSync(s.result('w2'), 'old\n')
+  fs.utimesSync(s.result('w2'), at('2026-11-24T09:00:00Z'), at('2026-11-24T09:00:00Z'))
+  s.exit('P3', { reason: 'usage limit reached' })
+  const mixed = s.run(['P2:w2', 'P3:w3'])
+  assert.equal(mixed.status, 1)
+  assert.deepEqual(mixed.stdout.trim().split('\n'), ['NOTHING-NEW w2: worker finished earlier; nothing new', 'FAILED P3:w3 usage limit reached'])
+})
+
+test('a worker with no manifest entry keeps the old behaviour: any result is DONE', () => {
+  const s = setup()
+  fs.writeFileSync(s.result('w1'), '## Goal\nfix\n')
+  fs.utimesSync(s.result('w1'), at('2020-01-01T00:00:00Z'), at('2020-01-01T00:00:00Z'))
+  const { status, stdout } = s.run(['P1:w1'])
+  assert.equal(status, 0)
+  assert.match(stdout, /^DONE w1:/)
+})
+
 test('SWARM_MANIFEST_DIR moves the exits directory, and a closed pane with no result is still FAILED', () => {
   const s = setup(['P2'])
   const dir = path.join(s.home, 'custom')

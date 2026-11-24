@@ -175,6 +175,32 @@ test('two spawns with the same label keep separate prompt files, and a real shel
   assert.equal(echoed.stdout, 'Do the task in x. Reply done.')
 })
 
+test('every worker, Claude and Codex, is told to keep a heartbeat in results/<label>.status, and the status file starts with a spawned line', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  for (const agent of ['claude', 'codex']) {
+    const out = spawn(s, ['hb', s.task, '--agent', agent, '--path', s.home])
+    assert.equal(out.status, 0, out.stderr)
+    const send = out.calls.filter(c => c.startsWith('pane send')).at(-1)
+    assert.ok(send.includes(`Keep a heartbeat in ${s.home}/.kelpi-swarm/results/hb.status: append one line per state change`), `${agent}: ${send}`)
+    assert.ok(send.includes('a working: line at least every 15 minutes') && send.includes('Write the final done line last, after the result file.'), `${agent}: ${send}`)
+    assert.ok(send.endsWith('Reply done."'), send)
+  }
+  const status = fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'results', 'hb.status'), 'utf8')
+  assert.match(status, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ spawned\n$/)
+})
+
+test('reusing a label starts a fresh status file, so the last worker\'s done line is not read as the new one', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const results = path.join(s.home, '.kelpi-swarm', 'results')
+  fs.mkdirSync(results, { recursive: true })
+  fs.writeFileSync(path.join(results, 'w1.status'), '2026-11-24T09:00:00Z done\n')
+  const out = spawn(s)
+  assert.equal(out.status, 0, out.stderr)
+  const lines = fs.readFileSync(path.join(results, 'w1.status'), 'utf8').trim().split('\n')
+  assert.equal(lines.length, 1)
+  assert.match(lines[0], / spawned$/)
+})
+
 test('a Codex worker is not told to message the parent session and the coordinator is warned', () => {
   const s = stub([{ id: 'WS', name: 'Warm pool' }])
   const out = spawn(s, ['review', s.task, '--agent', 'codex', '--path', s.home, '--parent-session', 'repos-a9'])

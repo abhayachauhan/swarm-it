@@ -6,6 +6,7 @@
 # --parent-session names the coordinator's Claude Code session (the name ListAgents gives it). A Claude
 # worker then messages the coordinator with SendMessage when it is blocked, finds something that changes
 # the plan, and when it finishes. The result file is still written first, so swarm-wait remains the backstop.
+# Every worker also appends heartbeat lines to results/<label>.status; swarm-status reads them.
 set -euo pipefail
 
 usage() { echo "usage: swarm-spawn <label> <task-file> [--agent claude|codex] [--mode mode] [--model model] [--effort low|medium|high|xhigh|max] [--path dir] [--parent-session name]" >&2; exit 1; }
@@ -98,11 +99,20 @@ if [ -e "$RES/$label.md" ]; then
   mv -n "$RES/$label.md" "$RES/archive/$label.$(date -u +%Y%m%dT%H%M%SZ).md"
   [ ! -e "$RES/$label.md" ] || { echo "cannot archive the old result for $label" >&2; exit 1; }
 fi
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" \
-  --agent "$agent" --task-path "$task" --model "${model:--}" --mode "$mode" --effort "${effort:--}" --dir "$dir" --started-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
+  --agent "$agent" --task-path "$task" --model "${model:--}" --mode "$mode" --effort "${effort:--}" --dir "$dir" --started-at "$started" >/dev/null
 registered=1
+# First heartbeat line, written here so swarm-status can tell a worker that never started from a slow one.
+# It replaces a reused label's old file, so the last worker's done line is never read as this one's.
+rm -f -- "$RES/$label.status"
+# noclobber: refuse to write through anything that appears at the path between the rm and the write.
+( set -C; printf '%s spawned\n' "$started" >"$RES/$label.status" ) || bad "cannot write the status file for $label"
 
 FORMAT="Write the result as markdown with three headings, ## Goal, ## Done and ## Next. Goal is one plain sentence saying what you were asked to do. Done is at most three short bullets saying what is now true or what you found, in plain words, with no code, file dumps or tool narration. Next is at most two bullets of what a human must decide or do, or the words Nothing pending. Keep the whole file under 80 words."
+
+# Both agents get this one. Workers are one-shot, so the status file is the only sign of life before the result.
+HEARTBEAT="Keep a heartbeat in $RES/$label.status: append one line per state change, each starting with the UTC time from date -u +%Y-%m-%dT%H:%M:%SZ, such as started, working: <short what>, pr-open: #123 <sha>, blocked: <why>, done. Write at most one line every few minutes, but a working: line at least every 15 minutes during long work. Append, never overwrite. Write the final done line last, after the result file."
 
 report=
 if [ "$agent" = claude ]; then
@@ -121,7 +131,7 @@ find "$PROMPTS" -name '*.txt' -mtime +1 -delete 2>/dev/null || true
 promptFile=$(mktemp "$PROMPTS/$label.XXXXXX") || bad "cannot write the worker prompt file"
 mv "$promptFile" "$promptFile.txt" && promptFile=$promptFile.txt
 [[ $promptFile != *"'"* ]] || bad "the prompt file path cannot contain a single quote"
-printf '%s\n' "Do the task in $task. $FORMAT Write the result to $RES/$label.md.${report} Reply done." >"$promptFile"
+printf '%s\n' "Do the task in $task. $FORMAT Write the result to $RES/$label.md. $HEARTBEAT${report} Reply done." >"$promptFile"
 # Single-quoted so a home folder with spaces still reaches cat as one argument.
 prompt="\"\$(cat '$promptFile')\""
 

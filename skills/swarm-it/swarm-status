@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# swarm-status [--stale-minutes N]
+# One line per worker in this coordinator's swarm: label, pane alive yes/no, the last heartbeat line
+# (results/<label>.status) and its age. Flags:
+#   DEAD   the pane is gone and the worker never wrote a done line or a result
+#   STALE  the pane is alive but the last heartbeat is older than N minutes (default 20)
+# Exit code 0 when no worker is flagged, 1 when any is. It is a snapshot, not a wait: run it when you
+# want to know whether a quiet worker is slow or dead, and use swarm-wait to be told when one finishes.
+set -uo pipefail
+
+usage() { echo "usage: swarm-status [--stale-minutes N]" >&2; exit 1; }
+bad() { echo "$1" >&2; exit 1; }
+stale_min=20
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --stale-minutes) [ $# -ge 2 ] || usage; stale_min=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[[ $stale_min =~ ^[0-9]+$ ]] || bad "--stale-minutes must be a whole number of minutes"
+
+RES="$HOME/.kelpi-swarm/results"
+MW="$(dirname "$(realpath "$0")")/manifest-writer.mjs"
+
+orch=$(kelpi pane id) || bad "cannot identify the coordinator pane; run swarm-status from a Kelpi pane"
+panes=$(kelpi pane list --json) || bad "cannot read Kelpi panes; if Codex denied local IPC, retry this command with sandbox escalation"
+ws=$(jq -er --arg p "$orch" '.[] | select(.id == $p) | .workspace_id | select(type == "string" and length > 0)' <<<"$panes") || bad "Kelpi returned no workspace ID for the coordinator"
+manifest=$(node "$MW" show "$ws") || bad "no swarm manifest for this workspace"
+# An empty list is a failed read, not every pane closing at once: never report workers dead from it.
+[ "$(jq 'length' <<<"$panes")" -gt 0 ] || bad "Kelpi returned no panes"
+
+now=$(date +%s)
+flagged=0
+count=0
+while IFS=$'\t' read -r pane label startedAt; do
+  count=$((count + 1))
+  alive=no
+  jq -e --arg p "$pane" 'any(.[]; .id == $p)' <<<"$panes" >/dev/null && alive=yes
+  last= stamp=
+  [ ! -s "$RES/$label.status" ] || last=$(tail -n 1 "$RES/$label.status")
+  # The first word of a heartbeat line is its UTC time; with no usable line, age runs from the spawn.
+  stamp=${last%% *}
+  [ -n "$last" ] || stamp=$startedAt
+  at=$(jq -nr --arg t "$stamp" '$t | try fromdateiso8601 catch empty')
+  age="unknown"
+  [ -z "$at" ] || age="$(((now - at) / 60))m"
+  text=${last#* }
+  [ -n "$last" ] || text="(no heartbeat yet)"
+  # A worker that wrote its result is finished even if it forgot the done line.
+  finished=no
+  [[ $text == done* ]] && finished=yes
+  if [ -s "$RES/$label.md" ] && [ -n "$startedAt" ]; then
+    s=$(jq -nr --arg t "$startedAt" '$t | try fromdateiso8601 catch empty')
+    m=$(date -r "$RES/$label.md" +%s 2>/dev/null || true)
+    [ -z "$s" ] || [ -z "$m" ] || [ "$m" -lt "$s" ] || finished=yes
+  fi
+  flag=
+  if [ "$finished" = yes ]; then
+    flag=DONE
+  elif [ "$alive" = no ]; then
+    flag=DEAD
+    flagged=$((flagged + 1))
+  elif [ -n "$at" ] && [ $(((now - at) / 60)) -gt "$stale_min" ]; then
+    flag=STALE
+    flagged=$((flagged + 1))
+  fi
+  printf '%s\talive=%s\t%s\t%s%s\n' "$label" "$alive" "$age" "$text" "${flag:+  [$flag]}"
+done < <(jq -r '.workers[] | [.paneID, .label, (.startedAt // "")] | @tsv' <<<"$manifest")
+
+[ "$count" -gt 0 ] || echo "no workers in this swarm"
+[ "$flagged" -eq 0 ]
