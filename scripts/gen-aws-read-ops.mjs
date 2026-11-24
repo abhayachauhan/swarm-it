@@ -8,7 +8,8 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const READ = /^(?:Describe|List|Get|BatchGet|Search|Lookup|Query|Scan|Select|Check|Validate|Simulate|Estimate|Filter|Head)/;
+// The verb must be a whole word: `CheckoutLicense` (license-manager, which takes a license) is not a `Check`.
+const READ = /^(?:Describe|List|Get|BatchGet|Search|Lookup|Query|Scan|Select|Check|Validate|Simulate|Estimate|Filter|Head)(?=[A-Z0-9]|$)/;
 /** Read-looking operations that change something, send a message or mint a credential or login link. Anything not here is a read. */
 const EXCLUDED = new Set([
     'cognito-idp get-user-attribute-verification-code', // sends a verification code by email or text message
@@ -22,9 +23,9 @@ const EXCLUDED = new Set([
     'security-ir get-case-attachment-upload-url', 'auditmanager get-evidence-file-upload-url', 'datazone get-iam-portal-login-url',
     'connectparticipant get-authentication-url', 'emr-serverless get-dashboard-for-job-run'
 ]);
-/** Operations that mint a token, session or link: left for the user, except the two registry login tokens people run all day. */
-const MINTS = /-(?:workload-access-token(?:-for-[a-z-]+)?|oauth2-token|payment-token|login-url|embed-url|upload-url|session-credentials)$/;
-const KEEP_MINTS = new Set(['codeartifact get-authorization-token', 'ecr get-authorization-token', 'ecr-public get-authorization-token']);
+/** Operations that mint a credential, token, session or link: left for the user, except the few people run all day. A `list-` or `describe-` is never one. */
+const MINTS = /^get-.*(?:credentials|access-token|auth-token|federation-token|presigned-url|access-details|login-url|embed-url|upload-url|oauth2-token|payment-token)$/;
+const KEEP_MINTS = new Set(['codeartifact get-authorization-token', 'ecr get-authorization-token', 'ecr-public get-authorization-token', 'sso get-role-credentials']);
 /** Commands the AWS CLI adds on top of its service models that only read. */
 const CUSTOM = { logs: ['tail'], eks: ['get-token'], ecr: ['get-login-password'], cloudtrail: ['validate-logs'] };
 /** A read that carries an idempotency token for retries and changes nothing. */
