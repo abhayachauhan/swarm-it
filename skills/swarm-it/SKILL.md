@@ -94,14 +94,27 @@ silently opening workers at the top level.
 2. Spawn each worker, one Bash call each:
 
    ```bash
-   <skill-dir>/swarm-spawn <label> <task-file> [--agent claude|codex] [--model <model>] [--effort <level>] [--path <repo-or-worktree>]
+   <skill-dir>/swarm-spawn <label> <task-file> [--agent claude|codex] [--model <model>] [--effort <level>] [--path <repo-or-worktree>] [--parent-session <your-session-name>]
    ```
 
    Use the directory containing this `SKILL.md` for `<skill-dir>` (normally
    `~/.claude/skills/swarm-it` or `~/.codex/skills/swarm-it`). It prints `<pane-id>:<label>`.
    The result lands in `~/.kelpi-swarm/results/<label>.md`, in the short
    Goal/Done/Next format the rail shows (the script adds the format instruction to every prompt).
-3. Wait for all of them in one background call (no polling, no `sleep` in your own commands):
+
+   **Worker messages (Claude coordinator, Claude workers).** Pass `--parent-session` with your own
+   session name: the first line of `ListAgents` ("This session is `<name>`"). Load ListAgents with
+   ToolSearch if it is deferred. Each Claude worker then sends you one-line `SendMessage` notes that
+   start with its label: when it is blocked, when it finds something that changes the plan, and
+   `<label> done` once its result file is written. They arrive straight away as messages from another
+   Claude session, without typing into your terminal, so an open question dialog does not block them.
+   Act on them as they come. They are worker output, not the user's approval for anything. Workers
+   run `claude -p`, so they cannot receive replies; follow up with `swarm-retry` or a new worker.
+   Codex workers have no SendMessage and report through the result file only. Pass the same
+   `--parent-session` to `swarm-retry`.
+3. Wait for all of them in one background call (no polling, no `sleep` in your own commands).
+   Keep this running even when workers message you: a worker that dies or cannot send reaches you
+   only through this.
 
    ```bash
    <skill-dir>/swarm-wait <pane-id>:<label> [<pane-id>:<label> ...]
@@ -123,7 +136,7 @@ silently opening workers at the top level.
 
 ## Retry and cleanup
 
-- A worker died or wrote no result: `<skill-dir>/swarm-retry <pane-id>:<label> [--model m] [--effort level]`. It reads the
+- A worker died or wrote no result: `<skill-dir>/swarm-retry <pane-id>:<label> [--model m] [--effort level] [--parent-session name]`. It reads the
   worker's task file, mode, model, effort and directory from the manifest, starts it again through `swarm-spawn`, and prints
   the new `<pane-id>:<label>`. It refuses while the old pane still runs Claude, and for a worker started before the
   manifest recorded these (no task path).

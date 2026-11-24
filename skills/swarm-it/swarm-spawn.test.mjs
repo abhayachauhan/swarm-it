@@ -114,6 +114,39 @@ test('--effort reaches Codex as model_reasoning_effort and Claude as --effort, a
   assert.deepEqual([worker().label, worker().effort], ['fix', 'low'])
 })
 
+test('--parent-session tells a Claude worker to message that session, and is left out otherwise', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const lastSend = out => out.calls.filter(c => c.startsWith('pane send')).at(-1)
+  const plain = spawn(s, ['w1', s.task, '--path', s.home])
+  assert.equal(plain.status, 0, plain.stderr)
+  assert.ok(!lastSend(plain).includes('SendMessage'), lastSend(plain))
+  const told = spawn(s, ['w1', s.task, '--path', s.home, '--parent-session', 'repos-a9'])
+  assert.equal(told.status, 0, told.stderr)
+  const send = lastSend(told)
+  assert.ok(send.includes('Your coordinator is the Claude Code session repos-a9. Load SendMessage'), send)
+  assert.ok(send.includes('start with w1:'), send)
+  assert.ok(send.indexOf('/.kelpi-swarm/results/w1.md.') < send.indexOf('Your coordinator'), 'the result file instruction comes first')
+  assert.ok(send.endsWith('Always write the result file even if a send fails. Reply done."'), send)
+})
+
+test('a Codex worker is not told to message the parent session and the coordinator is warned', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const out = spawn(s, ['review', s.task, '--agent', 'codex', '--path', s.home, '--parent-session', 'repos-a9'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.ok(!out.calls.find(c => c.startsWith('pane send')).includes('SendMessage'))
+  assert.match(out.stderr, /Codex workers cannot message repos-a9/)
+})
+
+test('a parent session name with shell characters is refused before anything runs', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  for (const name of ['repos a9', 'x;id', '$(id)', 'a"b', '../x', '-x']) {
+    const { status, stderr, calls } = spawn(s, ['w1', s.task, '--path', s.home, '--parent-session', name])
+    assert.notEqual(status, 0, name)
+    assert.match(stderr, /parent session must be letters/)
+    assert.deepEqual(calls, [], `nothing ran for --parent-session ${name}`)
+  }
+})
+
 test('an unknown effort, Codex ultra included, is refused before anything runs', () => {
   const s = stub([{ id: 'WS', name: 'Warm pool' }])
   for (const effort of ['ultra', 'none', 'high;id', 'HIGH']) {
