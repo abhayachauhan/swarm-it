@@ -308,9 +308,48 @@ test('--any keeps waiting while one listed pane is open, and a failed pane list 
 
 test('--any refuses a pane id that could reach outside news/', () => {
   const s = withNews(setup())
-  const out = s.any(['../x:w1'])
+  s.news('P1', ['2026-11-25T10:00:00.000Z', 'blocked', 'x'])
+  const out = s.any(['P1:w1', '../x:w1'])
   assert.equal(out.status, 1)
-  assert.match(out.stderr, /pane id must be letters/)
+  assert.equal(out.stderr, 'pane id must be letters, digits, dot, dash or underscore: ../x\n')
+  assert.equal(out.stdout, '')
+  assert.equal(fs.existsSync(s.seen('P1')), false)
+})
+
+test('--any reports a new worker stopped at the folder-trust question once, and only before its first heartbeat', () => {
+  const s = withNews(setup())
+  const status = path.join(s.home, '.kelpi-swarm', 'results', 'w1.status')
+  const screen = path.join(s.home, 'screen.txt')
+  fs.writeFileSync(path.join(s.bin, 'kelpi'), `#!/bin/sh\ncase "$1 $2" in\n  "pane list") echo '[{"id":"P1"}]' ;;\n  "pane capture") cat "${screen}" ;;\nesac\n`, { mode: 0o755 })
+  fs.writeFileSync(status, '2026-11-25T10:00:00Z spawned\n')
+  fs.writeFileSync(screen, 'a task that says: trust this folder\n')
+  quiet(s.any(['P1:w1']))
+  fs.writeFileSync(screen, ' ❯ 1. Yes, I trust this folder\n   2. No, exit\n')
+  fs.appendFileSync(status, '2026-11-25T10:00:05Z started\n')
+  quiet(s.any(['P1:w1']))
+  fs.writeFileSync(status, '2026-11-25T10:00:00Z spawned\n')
+  const out = s.any(['P1:w1'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(lines(out), ['NEWS P1:w1 blocked: waiting for its folder to be trusted; answer it in the pane'])
+  quiet(s.any(['P1:w1']))
+})
+
+test('a pane closed after its failure was reported is not a second FAILED line', () => {
+  const s = withNews(setup())
+  s.exit('P1', { reason: 'usage limit reached' })
+  assert.deepEqual(lines(s.any(['P1:w1'])), ['FAILED P1:w1 usage limit reached'])
+  fs.writeFileSync(path.join(s.bin, 'kelpi'), '#!/bin/sh\ncase "$1 $2" in\n  "pane list") echo \'[{"id":"OTHER"}]\' ;;\nesac\n', { mode: 0o755 })
+  const out = s.any(['P1:w1'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(lines(out), ['NEWS P1:w1 closed: pane closed after its failure'])
+})
+
+test('an --any timeout shows only the panes that are still open', () => {
+  const s = withNews(setup(['P2']))
+  s.any()
+  const out = s.any()
+  assert.equal(out.status, 2)
+  assert.deepEqual(lines(out), ['TIMEOUT w2, last lines:', 'screen of P2'])
 })
 
 test('without --any, news is neither read nor marked, and the wait still needs every worker', () => {

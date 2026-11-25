@@ -113,9 +113,9 @@ silently opening workers at the top level.
    `--parent-session` to `swarm-retry`.
 
    **Workers stay open.** Claude and Codex workers run interactively: after writing its result a
-   worker waits at its prompt for more. A new folder may first ask to be trusted; answer that in the
-   pane. Workers do not message each other: split work by file ownership and route anything shared
-   through you.
+   worker waits at its prompt for more. A new folder (a fresh worktree, say) may first ask to be
+   trusted: `swarm-wait --any` reports it as `blocked`; answer it in the pane. Workers do not message
+   each other: split work by file ownership and route anything shared through you.
 
    Every worker also appends a heartbeat line to `~/.kelpi-swarm/results/<label>.status` on each
    state change (`started`, `working: ...`, `pr-open: ...`, `blocked: ...`, `done`), and at least
@@ -148,9 +148,12 @@ silently opening workers at the top level.
    ```
 
    It refuses unless the worker is alive, idle at its prompt and not waiting on a person. A `DONE`
-   can arrive seconds before the turn ends, so if it says mid-turn, wait for the next news. It
-   archives the old result and prints `<pane-id>:<label>`; wait for the new one as above.
-   `NOT-STARTED` (exit 2) means no sign the turn began: look at the pane, and do not resend blindly.
+   can arrive seconds before the turn ends, so it waits up to 30 seconds (`--wait-seconds`) for a
+   running turn; if it still says mid-turn, the worker has more to do. If the worker reads as waiting
+   on a person but that is dealt with (an interrupted turn leaves it so), add `--answered`. It
+   archives the old result, prints any news not yet reported, and prints `<pane-id>:<label>`; wait
+   for the new result as above. `NOT-STARTED` (exit 2) means no sign the turn began: look at the
+   pane, and do not resend blindly.
 4. Check on quiet workers with `<skill-dir>/swarm-status`. It prints one line per worker (label,
    agent alive yes/no, the age of the last heartbeat and its text) and flags `DEAD` (no agent runs in
    the pane, because it is gone or has fallen back to a shell, or the plugin wrote an exit file; no
@@ -173,7 +176,7 @@ silently opening workers at the top level.
 - A live worker that needs more or different work: `swarm-send`. A worker that died or wrote no result: `<skill-dir>/swarm-retry <pane-id>:<label> [--model m] [--effort level] [--parent-session name]`. It reads the
   worker's task file, mode, model, effort and directory from the manifest, starts it again through `swarm-spawn`, and prints
   the new `<pane-id>:<label>`. It refuses while the old pane still runs its agent (close it first), and for a
-  worker started before the manifest recorded these (no task path).
+  worker started before the manifest recorded these (no task path). It replays the first task, not follow-ups.
 - `swarm-spawn` first runs `manifest-writer.mjs prune`: it drops workers whose pane is gone (once their result is
   10 minutes old, or at once when their coordinator is gone) and deletes manifests of closed coordinators with no live
   worker. It leaves another swarm's manifest written in the last minute alone, and removes the plugin's exit files

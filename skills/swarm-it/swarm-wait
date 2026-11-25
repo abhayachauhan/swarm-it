@@ -58,9 +58,6 @@ started_of() {
   done | head -1
 }
 
-# Replace a marker file. rm then noclobber: never write through a symlink left at this path.
-mark() { rm -f -- "$1"; ( set -C; echo "$2" >"$1" ) 2>/dev/null || true; }
-
 # check_result <label>: 1 no result, 2 an old one, 0 a new one (printed as DONE and remembered).
 check_result() {
   local label=$1 mtime seen
@@ -86,23 +83,13 @@ has_result() {
 
 exit_reason() { jq -r '.reason // empty' "$EXITS/$1.json" 2>/dev/null; }
 
-# new_news <pane> <label>: print the lines whose `at` is later than the saved one, then save the latest.
-# Times, not byte offsets: the writer may drop old lines. A .seen that is not a time counts as empty; a line
-# that is not a JSON object with a time is skipped.
-new_news() {
-  local pane=$1 label=$2 f="$NEWS/$1.jsonl" out
-  [ -s "$f" ] || return 1
-  # First output line is the latest `at`, the rest are the events.
-  out=$(jq -rRn --arg w "$pane:$label" --arg seen "$(cat "$NEWS/$pane.seen" 2>/dev/null || true)" "$NEWS_KEY"'
-    def plain: tostring | gsub("[[:cntrl:]]"; " ") | .[0:200];
-    (first($seen | key) // "") as $after
-    | [inputs | fromjson? | objects | . as $line | .at | key | select(. > $after) | {k: ., line: $line}]
-    | select(length > 0)
-    | max_by(.k).line.at, (.[].line | "NEWS \($w) \(.kind // "unknown" | plain): \(.text // "" | plain)")' "$f" 2>/dev/null)
-  [ -n "$out" ] || return 1
-  # Print before saving: a wait killed in between repeats a line and never loses one.
-  echo "${out#*$'\n'}"
-  mark "$NEWS/$pane.seen" "${out%%$'\n'*}"
+# A new interactive worker can stop at the folder-trust question, before any hook can write news. Only
+# looked for while the worker has written no heartbeat of its own.
+at_trust_question() {
+  local screen
+  [[ $(tail -n 1 "$RES/$2.status" 2>/dev/null) == *" spawned" ]] || return 1
+  screen=$(kelpi pane capture --target "$1" --lines 30 2>/dev/null) || return 1
+  grep -qE '[0-9][.)] *(Yes, I trust this folder|Trust and continue)|Do you trust the files in this folder' <<<"$screen"
 }
 
 # A counter, not ${#done_[@]}: under set -u an empty associative array counts as unbound.
@@ -118,8 +105,13 @@ any_pass() {
     # An empty list is a failed `kelpi pane list`, not every pane closing at once.
     closed=0
     [ -z "$live" ] || grep -qx "$pane" <<<"$live" || closed=1
-    new_news "$pane" "$label" && events=1
+    new_news "$pane" "$label" "$NEWS" && events=1
     check_result "$label" && events=1
+    if [ "$closed" = 0 ] && [ ! -e "$REPORTED/$pane.trust" ] && at_trust_question "$pane" "$label"; then
+      events=1
+      echo "NEWS $pane:$label blocked: waiting for its folder to be trusted; answer it in the pane"
+      mkdir -p "$REPORTED" && mark "$REPORTED/$pane.trust" 1
+    fi
     if [ -s "$EXITS/$pane.json" ] && ! has_result "$label"; then
       stamp=$(date -r "$EXITS/$pane.json" +%s 2>/dev/null || echo 0)
       if [ "$(cat "$REPORTED/$pane.exit" 2>/dev/null || true)" != "$stamp" ]; then
@@ -136,6 +128,8 @@ any_pass() {
       if [ ! -e "$REPORTED/$pane.closed" ]; then
         events=1
         if has_result "$label"; then echo "NEWS $pane:$label closed: pane closed after its result"
+        # The exit file was already reported: one death, one FAILED line.
+        elif [ -e "$REPORTED/$pane.exit" ]; then echo "NEWS $pane:$label closed: pane closed after its failure"
         else echo "FAILED $label: pane closed with no result"; fi
         mkdir -p "$REPORTED" && mark "$REPORTED/$pane.closed" 1
       fi
@@ -161,10 +155,12 @@ for ((t = 0; t < limit; t += 2)); do
   for w in "${workers[@]}"; do
     pane=${w%%:*} label=${w#*:}
     [ -n "${done_[$label]:-}" ] && continue
-    if [ -s "$RES/$label.md" ]; then
+    # One look at the result: swarm-send can archive it at any moment.
+    check_result "$label"
+    result=$?
+    if [ "$result" -ne 1 ]; then
       done_[$label]=1 finished=$((finished + 1))
-      check_result "$label"
-      if [ $? -eq 2 ]; then
+      if [ "$result" -eq 2 ]; then
         stale=$((stale + 1))
         echo "NOTHING-NEW $label: worker finished earlier; nothing new"
       fi
@@ -188,6 +184,8 @@ done
 for w in "${workers[@]}"; do
   pane=${w%%:*} label=${w#*:}
   [ -n "${done_[$label]:-}" ] && continue
+  # --any keeps closed panes in the list; there is nothing to show for them.
+  [ "$any" = 0 ] || [ -z "$live" ] || grep -qx "$pane" <<<"$live" || continue
   echo "TIMEOUT $label, last lines:"
   kelpi pane capture --target "$pane" --lines 10
 done

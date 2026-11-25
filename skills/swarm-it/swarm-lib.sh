@@ -4,6 +4,28 @@
 # Gives nothing for anything that is not a UTC ISO time.
 NEWS_KEY='def key: strings | capture("^(?<s>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<f>[0-9]+))?Z$") | .s + "." + (((.f // "") + "000000000")[0:9]);'
 
+# mark <file> <text>: replace a marker file. rm then noclobber: never write through a symlink left at this path.
+mark() { rm -f -- "$1"; ( set -C; echo "$2" >"$1" ) 2>/dev/null || true; }
+
+# new_news <pane> <label> <news-dir>: print the lines whose `at` is later than the one in <pane>.seen, then
+# save the latest there. Times, not byte offsets: the writer may drop old lines. A .seen that is not a time
+# counts as empty; a line that is not a JSON object with a time is skipped. Returns 1 when there is nothing.
+new_news() {
+  local pane=$1 label=$2 f="$3/$1.jsonl" seen="$3/$1.seen" out
+  [ -s "$f" ] || return 1
+  # First output line is the latest `at`, the rest are the events.
+  out=$(jq -rRn --arg w "$pane:$label" --arg seen "$(cat "$seen" 2>/dev/null || true)" "$NEWS_KEY"'
+    def plain: tostring | gsub("[[:cntrl:]]"; " ") | .[0:200];
+    (first($seen | key) // "") as $after
+    | [inputs | fromjson? | objects | . as $line | .at | key | select(. > $after) | {k: ., line: $line}]
+    | select(length > 0)
+    | max_by(.k).line.at, (.[].line | "NEWS \($w) \(.kind // "unknown" | plain): \(.text // "" | plain)")' "$f" 2>/dev/null)
+  [ -n "$out" ] || return 1
+  # Print before saving: a caller killed in between repeats a line and never loses one.
+  echo "${out#*$'\n'}"
+  mark "$seen" "${out%%$'\n'*}"
+}
+
 # worker_instructions: sets FORMAT and HEARTBEAT, so a first task and a follow-up give a worker the same
 # instructions. Needs RES (the results directory) and label.
 worker_instructions() {

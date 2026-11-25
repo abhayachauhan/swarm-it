@@ -18,8 +18,8 @@ const ME = { id: 'ORCH', workspace_id: 'WS', status: 'running' }
 const IDLE = { id: 'P1', workspace_id: 'CHILD', status: 'idle', agent_session_id: 'S1' }
 
 /** onSend: shell run by the stub when text is typed, standing in for what the worker does next. */
-function setup({ pane = IDLE, screen = CLAUDE_IDLE, onSend = 'running', agent = 'claude' } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-send-'))
+function setup({ pane = IDLE, screen = CLAUDE_IDLE, onSend = 'running', agent = 'claude', prefix = 'swarm-send-' } = {}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
   const bin = path.join(home, 'bin')
   const root = path.join(home, '.kelpi-swarm')
   const results = path.join(root, 'results')
@@ -34,7 +34,7 @@ function setup({ pane = IDLE, screen = CLAUDE_IDLE, onSend = 'running', agent = 
   fs.writeFileSync(path.join(bin, 'kelpi'), `#!/bin/sh
 case "$1 $2" in
   "pane id") echo ORCH ;;
-  "pane list") cat "${panesFile}" ;;
+  "pane list") cat "${panesFile}"; [ ! -f "${home}/then.json" ] || mv "${home}/then.json" "${panesFile}" ;;
   "pane capture") cat "${home}/screen.txt" ;;
   "pane send") printf '%s\\n' "$*" >> "${home}/sent.log"
     ${effect || ':'} ;;
@@ -54,8 +54,18 @@ esac
     home, root, results, news, task, setPanes,
     line: (at, kind) => fs.appendFileSync(news, `${JSON.stringify({ at, pane: 'P1', label: 'w1', kind, text: 'x' })}\n`),
     sent: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [],
-    run: (args = ['P1:w1', task, '--confirm-seconds', '1'], env = {}) => spawnSync(script, args, { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, SWARM_MANIFEST_DIR: '', ...env }, encoding: 'utf8' })
+    run: (args = ['P1:w1', task, '--confirm-seconds', '1', '--wait-seconds', '0'], env = {}) => spawnSync(script, args, { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, SWARM_MANIFEST_DIR: '', ...env }, encoding: 'utf8' })
   }
+}
+const status = s => fs.readFileSync(path.join(s.results, 'w1.status'), 'utf8')
+const archived = s => fs.readdirSync(path.join(s.results, 'archive')).map(f => fs.readFileSync(path.join(s.results, 'archive', f), 'utf8'))
+/** Replaces what the stub does when text is typed (by default, the pane turns running). */
+const onSend = (s, shell) => {
+  const cli = path.join(s.home, 'bin', 'kelpi')
+  const text = fs.readFileSync(cli, 'utf8')
+  const running = `cp "${s.home}/running.json" "${s.home}/panes.json"`
+  assert.ok(text.includes(running))
+  fs.writeFileSync(cli, text.replace(running, () => shell))
 }
 
 /** Nothing typed, result and heartbeat untouched. */
@@ -71,7 +81,7 @@ function untouched(s, out, message) {
 const NO_AGENT = 'no live agent in pane P1; start the worker again with swarm-retry P1:w1'
 const BUSY = 'worker w1 is in the middle of a turn; wait for it to finish'
 const NO_INPUT = 'pane P1 does not show the Claude input line (a permission prompt, a menu or a shell); nothing was typed'
-const BLOCKED = 'worker w1 is waiting on a person; answer it in pane P1 first'
+const BLOCKED = 'worker w1 is waiting on a person; answer it in pane P1 first (if that is done, add --answered)'
 
 test('a follow-up to a live idle worker archives the old result and types one short line that points at the prompt file', () => {
   const s = setup()
@@ -171,32 +181,116 @@ test('with no proof the turn started it reports NOT-STARTED with the pane lines,
   assert.ok(out.stdout.startsWith('NOT-STARTED P1:w1\n'), out.stdout)
   assert.ok(out.stdout.includes('❯'), 'the pane lines are shown')
   assert.equal(s.sent().length, 1)
+  assert.deepEqual(archived(s), ['first result'])
+  assert.match(status(s), / done\n\S+Z follow-up sent\n\S+Z blocked: follow-up not confirmed\n$/)
+})
+
+test('a failed kelpi send is NOT-STARTED, with the status file saying the follow-up is unconfirmed', () => {
+  const s = setup({ onSend: 'exit 1' })
+  const out = s.run()
+  assert.equal(out.status, 2, out.stderr)
+  assert.ok(out.stdout.startsWith('NOT-STARTED P1:w1 (kelpi pane send failed)\n'), out.stdout)
+  assert.equal(s.sent().length, 1)
+  assert.match(status(s), /\S+Z blocked: follow-up not confirmed\n$/)
 })
 
 test('an exited news line is not proof of a start', () => {
   const s = setup()
   const line = JSON.stringify({ at: '2026-11-25T11:00:00.000Z', kind: 'exited' })
-  const cli = path.join(s.home, 'bin', 'kelpi')
-  fs.writeFileSync(cli, fs.readFileSync(cli, 'utf8').replace(`cp "${s.home}/running.json" "${s.home}/panes.json"`, `echo '${line}' >> "${s.news}"`))
+  onSend(s, `echo '${line}' >> "${s.news}"`)
   const out = s.run()
   assert.equal(out.status, 2, out.stdout + out.stderr)
-  assert.match(out.stdout, /^NOT-STARTED P1:w1/)
+  assert.match(out.stdout, /^NOT-STARTED P1:w1\n/)
+  assert.equal(s.sent().length, 1)
+  assert.match(status(s), / blocked: follow-up not confirmed\n$/)
 })
 
-test('a new heartbeat line, or a news line later than the last one even after old lines are dropped, proves the start', () => {
-  const beat = setup()
-  const cli = path.join(beat.home, 'bin', 'kelpi')
-  fs.writeFileSync(cli, fs.readFileSync(cli, 'utf8').replace(`cp "${beat.home}/running.json" "${beat.home}/panes.json"`, `echo '2026-11-25T11:00:00Z started' >> "${beat.results}/w1.status"`))
-  assert.equal(beat.run().status, 0)
+test('a new heartbeat line, a new result, or a news line later than the last one even after old lines are dropped, proves the start', () => {
   const trimmed = setup()
   trimmed.line('2026-11-25T10:00:00.000Z', 'turn-done')
   trimmed.line('2026-11-25T10:00:01.000Z', 'turn-done')
   const line = JSON.stringify({ at: '2026-11-25T11:00:00.000Z', kind: 'blocked' })
-  const cli2 = path.join(trimmed.home, 'bin', 'kelpi')
-  // The writer replaces the whole file with only the new line: fewer lines than before.
-  fs.writeFileSync(cli2, fs.readFileSync(cli2, 'utf8').replace(`cp "${trimmed.home}/running.json" "${trimmed.home}/panes.json"`, `echo '${line}' > "${trimmed.news}"`))
-  const out = trimmed.run()
-  assert.equal(out.status, 0, out.stdout + out.stderr)
+  const beat = setup()
+  const result = setup()
+  // The writer replaces the whole news file with only the new line: fewer lines than before.
+  onSend(trimmed, `echo '${line}' > "${trimmed.news}"`)
+  onSend(beat, `echo '2026-11-25T11:00:00Z started' >> "${beat.results}/w1.status"`)
+  onSend(result, `echo 'second result' > "${result.results}/w1.md"`)
+  for (const s of [trimmed, beat, result]) {
+    const out = s.run()
+    assert.equal(out.status, 0, out.stdout + out.stderr)
+    assert.equal(out.stdout, 'P1:w1\n')
+    assert.doesNotMatch(status(s), /not confirmed/)
+  }
+})
+
+test('news not yet reported is printed and marked seen before typing, so it is not read as the follow-up', () => {
+  const s = setup()
+  s.line('2026-11-25T10:00:00.000Z', 'turn-done')
+  const out = s.run()
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.stderr, 'NEWS P1:w1 turn-done: x\n')
+  assert.equal(fs.readFileSync(path.join(s.root, 'news', 'P1.seen'), 'utf8'), '2026-11-25T10:00:00.000Z\n')
+})
+
+test('a turn that ends within --wait-seconds gets the follow-up', () => {
+  const s = setup({ pane: { ...IDLE, status: 'running' } })
+  fs.writeFileSync(path.join(s.home, 'then.json'), JSON.stringify([ME, IDLE]))
+  const out = s.run(['P1:w1', s.task, '--wait-seconds', '5', '--confirm-seconds', '1'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(s.sent().length, 1)
+})
+
+test('--answered passes an old blocked line, but never a permission menu', () => {
+  const args = s => ['P1:w1', s.task, '--answered', '--wait-seconds', '0', '--confirm-seconds', '1']
+  const s = setup()
+  s.line('2026-11-25T10:00:00.000Z', 'blocked')
+  const out = s.run(args(s))
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(s.sent().length, 1)
+  const menu = setup({ screen: [RULE, '❯ 1. Yes', RULE].join('\n') })
+  menu.line('2026-11-25T10:00:00.000Z', 'blocked')
+  untouched(menu, menu.run(args(menu)), NO_INPUT)
+})
+
+test('a prompt file path a shell would act on is refused before anything is typed', () => {
+  const s = setup({ prefix: 'swarm;send-' })
+  const task = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-task-')), 'next.md')
+  fs.writeFileSync(task, 'Next\n')
+  untouched(s, s.run(['P1:w1', task]), 'the prompt file path must be letters, digits, space, dot, dash, underscore or slash; nothing was typed')
+})
+
+test('a symlinked status file, an unreadable news file and a failed archive leave the result where it was', () => {
+  const link = setup()
+  const victim = path.join(link.home, 'victim')
+  fs.writeFileSync(victim, '2026-11-24T10:05:00Z done\n')
+  fs.rmSync(path.join(link.results, 'w1.status'))
+  fs.symlinkSync(victim, path.join(link.results, 'w1.status'))
+  untouched(link, link.run(), 'the status file for w1 is a symlink; nothing was typed')
+
+  const news = setup()
+  fs.mkdirSync(news.news)
+  const out = news.run()
+  untouched(news, { ...out, stderr: out.stderr.replace(/^jq: .*\n/gm, '') }, 'cannot read the news file for w1')
+
+  const full = setup()
+  fs.writeFileSync(path.join(full.results, 'archive'), 'in the way')
+  const failed = full.run()
+  assert.equal(failed.status, 1)
+  assert.equal(failed.stderr.trim().split('\n').at(-1), 'cannot archive the old result for w1; nothing was typed')
+  assert.deepEqual(full.sent(), [])
+  assert.equal(fs.readFileSync(path.join(full.results, 'w1.md'), 'utf8'), 'first result')
+  assert.equal(status(full), '2026-11-24T10:05:00Z done\n')
+})
+
+test('bad seconds, the coordinator pane and an unknown recorded agent are refused', () => {
+  const s = setup()
+  for (const flag of ['--wait-seconds', '--confirm-seconds']) {
+    untouched(s, s.run(['P1:w1', s.task, flag, 'x']), '--confirm-seconds and --wait-seconds must be whole numbers of seconds')
+  }
+  untouched(s, s.run(['ORCH:coordinator', s.task]), 'pane ORCH is the coordinator, not a worker')
+  const odd = setup({ agent: 'other' })
+  untouched(odd, odd.run(), 'recorded agent must be claude or codex')
 })
 
 test('unsafe ids, labels and paths, strangers and missing task files are refused', () => {
@@ -209,7 +303,6 @@ test('unsafe ids, labels and paths, strangers and missing task files are refused
     [['P1;id:w1', s.task], 'pane id must be letters, digits, dot, dash or underscore'],
     [['P1:w1', `${s.task};id`], taskPath],
     [['P1:w1', '/no/such/task.md'], 'no task file: /no/such/task.md'],
-    [['P1:other', s.task], 'no worker P1:other in this swarm\'s manifest'],
-    [['ORCH:coordinator', s.task], 'no worker ORCH:coordinator in this swarm\'s manifest']
+    [['P1:other', s.task], 'no worker P1:other in this swarm\'s manifest']
   ]) untouched(s, s.run(args), message)
 })
