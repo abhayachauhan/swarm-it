@@ -202,6 +202,47 @@ test('prune removes the exit files of closed panes and keeps those of live panes
   assert.deepEqual(fs.readdirSync(path.join(d, 'exits')), ['alive.json'])
 })
 
+test('prune removes the news, .seen and reported files of closed panes, keeping live ones and ones written a moment ago', () => {
+  const d = tmpDir()
+  swarm(d, 'live', 'orch', [])
+  const news = path.join(d, 'news')
+  const reported = path.join(d, 'reported')
+  fs.mkdirSync(news)
+  fs.mkdirSync(reported)
+  const files = ['alive.jsonl', 'alive.seen', 'closed.jsonl', 'closed.seen', 'justnow.jsonl', 'justnow.seen', 'orphan.seen', 'notes.txt']
+  const marks = ['alive.exit', 'alive.closed', 'closed.exit', 'closed.closed', 'justnow.closed', 'notes.txt']
+  const old = new Date(Date.now() - 5 * 60000)
+  for (const [folder, names] of [[news, files], [reported, marks]]) {
+    for (const name of names) fs.writeFileSync(path.join(folder, name), 'x\n')
+    for (const name of names.filter((n) => !n.startsWith('justnow'))) fs.utimesSync(path.join(folder, name), old, old)
+  }
+  const panes = [{ id: 'orch', workspace_id: 'live' }, { id: 'alive', workspace_id: 'live' }]
+  const r = prune(d, panes, '--fresh-ms', '60000')
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(r.out.removedNews, ['closed.jsonl', 'closed.seen', 'orphan.seen'])
+  assert.deepEqual(r.out.removedReported, ['closed.closed', 'closed.exit'])
+  assert.deepEqual(fs.readdirSync(news).sort(), ['alive.jsonl', 'alive.seen', 'justnow.jsonl', 'justnow.seen', 'notes.txt'])
+  assert.deepEqual(fs.readdirSync(reported).sort(), ['alive.closed', 'alive.exit', 'justnow.closed', 'notes.txt'])
+})
+
+test('prune never deletes through a symlinked news or reported directory, nor the target of a symlinked file', () => {
+  const d = tmpDir()
+  swarm(d, 'live', 'orch', [])
+  const elsewhere = tmpDir()
+  for (const name of ['closed.jsonl', 'closed.exit']) fs.writeFileSync(path.join(elsewhere, name), 'x\n')
+  fs.symlinkSync(elsewhere, path.join(d, 'news'))
+  fs.symlinkSync(elsewhere, path.join(d, 'reported'))
+  assert.equal(prune(d, [{ id: 'orch', workspace_id: 'live' }]).status, 0)
+  assert.deepEqual(fs.readdirSync(elsewhere).sort(), ['closed.exit', 'closed.jsonl'])
+
+  fs.unlinkSync(path.join(d, 'reported'))
+  fs.mkdirSync(path.join(d, 'reported'))
+  fs.symlinkSync(path.join(elsewhere, 'closed.exit'), path.join(d, 'reported', 'closed.exit'))
+  assert.equal(prune(d, [{ id: 'orch', workspace_id: 'live' }], '--fresh-ms', '0').status, 0)
+  assert.deepEqual(fs.readdirSync(path.join(d, 'reported')), [])
+  assert.deepEqual(fs.readdirSync(elsewhere).sort(), ['closed.exit', 'closed.jsonl'])
+})
+
 test('prune re-parents children of a dropped worker and refuses an empty or malformed pane list', () => {
   const d = tmpDir()
   swarm(d, 'p', 'orch', [['parent', 30]])

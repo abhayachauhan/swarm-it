@@ -25,7 +25,45 @@ Each worker writes a result with **Goal**, **Done**, and **Next**. Open the resu
 
 Web URLs and Markdown web links in a result are clickable and open in a Kelpi web pane. In a Codex terminal pane, Kelpi 0.2.22 supports a plain click on a web link to choose **Open in Kelpi**, **Open in Browser**, or **Copy Link**; ⌘-click opens it directly according to Settings → General → Links. Kelpi also recognises Codex's OSC 8 links, whose visible title may hide the URL. Local source-file references are not currently opened by Kelpi's terminal link handler; it opens existing Markdown and CSV/TSV paths. Copy a source path from the terminal if you need to open it elsewhere.
 
-Finished worker panes close after 10 minutes by default. The result stays on disk. A dirty worktree stays open so it can be inspected. Set `autoCleanMinutes` to `0` to turn off automatic pane cleanup.
+### Follow-ups to a worker that stays open
+
+A worker can stay open at its prompt after writing its result. **Send** reaches it according to what its pane shows:
+
+- Claude idle at its input box: your text is typed as a plain follow-up in the same conversation.
+- Claude exited and the pane back at a shell: the plugin restarts the same conversation with your text (**Send and restart**).
+- Codex: your text is queued for its session.
+- Mid-turn, or waiting on a permission prompt or question: nothing is sent.
+
+### When a finished pane closes
+
+Finished worker panes close after 10 minutes by default (`autoCleanMinutes`; `0` turns this off). The result stays on disk.
+
+A worker is finished when its pane is already closed, or its result file exists and it is idle. An agent still running at its prompt counts. The pane never closes while the worker:
+
+- is mid-turn, including waiting for its background tasks;
+- waits on a person: a permission prompt, a question or an open request in the rail (it moves to **Needs you**);
+- shows a screen that cannot be read, or a live agent shows anything other than its input box.
+
+The plugin looks at the pane again just before closing it. A worker found busy, or with a new turn, starts the 10 minutes again. A dirty worktree, or one whose git status is unknown, stays open so it can be inspected.
+
+## News for the coordinator
+
+For each swarm worker pane, and never for a coordinator or a pane outside a swarm, the plugin appends one JSON line per event to `news/<pane-id>.jsonl` under the manifest root:
+
+```json
+{"at":"2026-01-01T10:00:00.000Z","pane":"<pane-id>","label":"<worker label>","kind":"blocked","text":"npm test"}
+```
+
+| `kind` | Written when | `text` |
+| --- | --- | --- |
+| `blocked` | a permission request or a question waits for a person (not one Auto answers at once) | the command or question |
+| `error` | the agent reports an error | the error |
+| `turn-done` | a turn finishes with no background tasks left running | the result path once it exists, else the last line of the reply |
+| `exited` | the agent exits or its pane closes | the result path, else the reason |
+
+`text` is one plain line of at most 200 characters. `at` only moves forward within a file, and the newest 200 lines are kept. The plugin never writes through a symlink. `manifest-writer prune` removes the files of closed panes.
+
+On a Kelpi without agent hook events, `turn-done` and `error` come from the rail's cards. A Codex has no exit event, so its `exited` line is written when the pane closes.
 
 ## Hand the goal to the other CLI
 
@@ -45,6 +83,7 @@ Conversational transfers use the source session ID when known. When no ID is ava
 - Results: `~/.kelpi-swarm/results/` by default.
 - Handoffs: `~/.kelpi-swarm/handoffs/` by default.
 - Exit records: `~/.kelpi-swarm/exits/` by default.
+- Worker news: `~/.kelpi-swarm/news/` by default.
 
 The `manifestDir` plugin setting and `SWARM_MANIFEST_DIR` for CLI helpers can move the manifest root. The plugin checks result paths before reading them. It does not migrate a live conversation between Claude and Codex; handoff gives the receiving CLI a transcript or a summary so it can continue the goal.
 

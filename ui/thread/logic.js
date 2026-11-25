@@ -115,7 +115,7 @@ export function availableActions(worker) {
         dismiss: !worker.archived,
         terminal: true,
         send: true,
-        sendLabel: worker.agent === 'codex' ? 'Queue for Codex' : finished ? 'Send and restart' : 'Send',
+        sendLabel: worker.agent === 'codex' ? 'Queue for Codex' : finished && !worker.live ? 'Send and restart' : 'Send',
     };
 }
 

@@ -11,7 +11,9 @@ const W1 = { paneID: 'w1', label: 'repo-lag', resultPath: '/wt/w1/result.md', wo
 const W2 = { paneID: 'w2', label: 'tests', resultPath: null, worktreePath: null };
 
 function setup({ status = 'idle', settings = {}, gitStatus = { '/wt/w1': { kind: 'clean' } }, closeFails = false } = {}) {
-    const api = makeFakeApi({ allowClose: true, closeFails, gitStatus });
+    // Auto-clean reads each pane once more before closing it: these are shells whose agent has exited.
+    const captures = Object.fromEntries(['w1', ...Array.from({ length: 20 }, (_, n) => `p${n}`)].map(id => [id, 'max@mac repo % ']));
+    const api = makeFakeApi({ allowClose: true, closeFails, gitStatus, captures });
     const store = createStore(api);
     store.att = createAttention(api, store);
     store.settings = { ...store.settings, ...settings };

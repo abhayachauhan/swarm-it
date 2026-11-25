@@ -12,9 +12,9 @@ export function toMs(now) {
     return Number.isNaN(parsed) ? Date.now() : parsed;
 }
 
-/** @returns {{ api: object, store: object, onChange: (() => void) | null }} */
+/** @returns {{ api: object, store: object, onChange: (() => void) | null, onAdded: ((item: object) => void) | null }} */
 export function createAttention(api, store) {
-    const att = { api, store, onChange: null };
+    const att = { api, store, onChange: null, onAdded: null };
     store.att = att;
     return att;
 }
@@ -51,6 +51,7 @@ export async function addItem(att, item) {
     items.push(created);
     await persist(att.store);
     changed(att);
+    att.onAdded?.(created);
     return { added: true, item: created };
 }
 

@@ -5,7 +5,10 @@ import { parsePrompt, parseCodexPrompt, promptHash, PROMPT_CAPTURE_LINES } from 
 import { isSafeLabel } from './manifest.mjs';
 import { persist, deriveState, actionableWorker, actionableOrchestrator, otherSwarmPane, anyClaudePane, resultContext, readResultText, capturePane, CAPTURE_TIMEOUT_MS, ownedRequestPane, rememberSession, SESSION_ID, textHash } from './store.mjs';
 import { checkResultPath, withTimeout } from './safepath.mjs';
+import { asksPerson, showsClaudeInput, showsShellPrompt, showsWorking } from './screen.mjs';
 import { execFile } from 'node:child_process';
+
+export { showsClaudeInput };
 
 const fail = (error, code) => ({ ok: false, error, ...(code ? { code } : {}) });
 const worker = (store, paneID) => actionableWorker(store, paneID);
@@ -42,46 +45,33 @@ export async function sendToOrchestrator(api, store, text) {
 /** zsh single-quoted word: nothing inside is expanded; a quote is closed, escaped and reopened. */
 export const shellQuote = text => `'${String(text).replace(/'/g, `'\\''`)}'`;
 
-/**
- * Is Claude still alive in the pane by Kelpi's account? A live session id, or a running / waiting status. These go
- * stale when Claude dies without its SessionEnd hook, so this alone never decides that text may be typed.
- * Read fresh from panes.list; the last state change if that fails.
- */
-async function kelpiSaysAlive(api, store, paneID) {
+/** The pane as Kelpi has it now (panes.list); the last state change if that fails. */
+async function currentPane(api, store, paneID) {
     let pane = null;
     try {
         pane = (await api.panes.list()).find(p => p?.id === paneID) ?? null;
         if (pane) rememberSession(store, paneID, pane.agentSessionID);
     } catch { /* fall back to the last state change */ }
-    pane ??= store.panes.get(paneID);
-    return !!pane?.agentSessionID || pane?.status === 'running' || pane?.status === 'waitingForInput';
+    return pane ?? store.panes.get(paneID);
 }
 
-const RULE = /^\s*[─━]{20,}\s*$/;
-const INPUT = /^\s*❯(?:\s|$)/;
-const MENU_OPTION = /^\s*❯\s*\d+[.)]\s/;
 /**
- * Does the capture end in Claude Code's own input box: a full-width rule, the `❯` prompt (a permission menu's
- * `❯ 1. Yes` does not count), a closing rule, and at most a few status lines below it? A shell prompt never has the
- * rules around it, so a pane back at zsh does not pass, whatever its prompt character.
+ * Is Claude still alive in the pane by Kelpi's account? A live session id, or a running / waiting status. These go
+ * stale when Claude dies without its SessionEnd hook, so this alone never decides that text may be typed.
  */
-export function showsClaudeInput(text) {
-    const lines = String(text ?? '').replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').split('\n').filter(line => line.trim());
-    for (let i = lines.length - 1; i > 0; i -= 1) {
-        if (!INPUT.test(lines[i]) || MENU_OPTION.test(lines[i]) || !RULE.test(lines[i - 1])) continue;
-        const close = lines.findIndex((line, k) => k > i && RULE.test(line));
-        return close > i && lines.length - 1 - close <= 4;
-    }
-    return false;
-}
+const kelpiSaysAlive = pane => !!pane?.agentSessionID || pane?.status === 'running' || pane?.status === 'waitingForInput';
+
+const midTurn = () => fail('the worker is in the middle of a turn; nothing was sent. Wait for it to finish', 'BUSY');
 
 /**
- * Send text to a manifest worker. Any other pane is refused with NOT_WORKER. A worker whose result file exists has
- * finished: Claude is started again in that pane on the worker's own conversation (`--resume <id>`, never
- * `--continue`: workers share a directory), whatever Kelpi reports about the pane. With no known session id it refuses
- * (NO_SESSION) and types nothing. Otherwise the text is typed only when a fresh capture shows Claude's own input box;
- * a pane Kelpi says Claude has left, of a worker that finished in error, is restarted the same way; anything else is
- * refused (NOT_AT_CLAUDE), so user text is never typed into a shell.
+ * Send text to a manifest worker. Any other pane is refused with NOT_WORKER. Nothing is sent while the worker waits on
+ * a permission prompt or question (PROMPT_OPEN) or is mid-turn (BUSY).
+ * - Its agent is alive and idle at Claude's input box: the text is typed to it as a plain follow-up.
+ * - Claude has exited and a shell is back, and the worker finished (a result, or an error): Claude is started again in
+ *   that pane on the worker's own conversation (`--resume <id>`, never `--continue`: workers share a directory). With
+ *   no known session id it refuses (NO_SESSION) and types nothing.
+ * - Anything else is refused (NOT_AT_CLAUDE), so user text is never typed into a shell.
+ * Codex follow-ups go through `codex queue`, never the terminal.
  */
 export async function sendToWorker(api, store, paneID, text) {
     if (typeof paneID !== 'string' || !paneID) return fail('paneID is required', 'BAD_ARGS');
@@ -90,7 +80,15 @@ export async function sendToWorker(api, store, paneID, text) {
     if (typeof text !== 'string' || !text) return fail('paneID and text are required', 'BAD_ARGS');
     const problem = textProblem(text);
     if (problem) return fail(problem, 'BAD_TEXT');
+    const pane = await currentPane(api, store, paneID);
+    let screen = null;
+    try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); } catch { /* treated as unknown */ }
+    // A shell prompt on screen means the agent is gone, whatever status it left behind.
+    const shell = screen !== null && showsShellPrompt(screen);
+    const working = (pane?.status === 'running' && !shell) || (screen !== null && !shell && showsWorking(screen));
     if (w.agent === 'codex') {
+        if (screen !== null && asksPerson(screen)) return fail('the worker is waiting on a prompt or question; nothing was sent. Answer it in the pane', 'PROMPT_OPEN');
+        if (working) return midTurn();
         const session = store.sessions.get(paneID);
         if (!session || !SESSION_ID.test(session)) return fail('this Codex worker has no known conversation', 'NO_SESSION');
         const ask = `${text.trim().replace(/[.\s]+$/, '')}.${w.resultPath ? ` Write the updated result to ${w.resultPath}.` : ''} Reply done.`;
@@ -110,16 +108,25 @@ export async function sendToWorker(api, store, paneID, text) {
         await persist(store);
         return { ok: true, paneID, restarted: true };
     }
-    const alive = await kelpiSaysAlive(api, store, paneID);
-    let screen = null;
-    try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); } catch { /* treated as unknown */ }
-    // The restart line ends in Enter: never let it land on an open permission menu, where Enter means Yes.
-    if (screen === null || parsePrompt(screen)) return fail('the worker pane shows a permission prompt or cannot be read; nothing was typed. Answer it in the pane', 'PROMPT_OPEN');
-    if (store.resultExists.get(paneID) !== true) {
-        if (showsClaudeInput(screen)) return sendText(api, paneID, text);
-        const ended = !alive && (store.sessions.has(paneID) || ['done', 'error'].includes(deriveState(store, w)));
-        if (!ended) return fail('the worker pane does not show Claude\'s input box; nothing was typed. Answer it in the pane', 'NOT_AT_CLAUDE');
+    // Typed text ends in Enter: never let it land on an open menu, where Enter means Yes.
+    if (screen === null || asksPerson(screen)) return fail('the worker pane shows a permission prompt or question, or cannot be read; nothing was typed. Answer it in the pane', 'PROMPT_OPEN');
+    if (working) return midTurn();
+    if (showsClaudeInput(screen) && !shell) {
+        const sent = await sendText(api, paneID, text);
+        if (!sent.ok) return sent;
+        // A new turn starts: the auto-clean delay counts again from its end.
+        store.doneSince.delete(paneID);
+        store.errored.delete(paneID);
+        store.accepted.delete(paneID);
+        await settleComplete(store, paneID);
+        await persist(store);
+        return sent;
     }
+    const notAtClaude = () => fail('the worker pane does not show Claude\'s input box; nothing was typed. Answer it in the pane', 'NOT_AT_CLAUDE');
+    if (store.resultExists.get(paneID) !== true) {
+        const ended = !kelpiSaysAlive(pane) && (store.sessions.has(paneID) || ['done', 'error'].includes(deriveState(store, w)));
+        if (!ended) return notAtClaude();
+    } else if (pane?.agentSessionID && !shell) return notAtClaude();
     const session = store.sessions.get(paneID);
     if (!session || !SESSION_ID.test(session)) return fail('this worker has finished and its conversation cannot be found', 'NO_SESSION');
     const ask = `${text.trim().replace(/[.\s]+$/, '')}.${w.resultPath ? ` Write the updated result to ${w.resultPath}.` : ''} Reply done.`;
