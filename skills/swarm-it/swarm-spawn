@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # swarm-spawn <label> <task-file> [--agent claude|codex] [--mode auto|on-request] [--model model] [--effort level] [--path dir] [--parent-session name]
-# One call per worker: create a child workspace, register it in the swarm rail, start a headless
+# One call per worker: create a child workspace, register it in the swarm rail, start an interactive
 # agent on the task file. Prints <pane-id>:<label>, ready for swarm-wait. The result
-# lands in ~/.kelpi-swarm/results/<label>.md.
+# lands in ~/.kelpi-swarm/results/<label>.md. The agent stays open: send follow-ups with swarm-send.
 # --parent-session names the coordinator's Claude Code session (the name ListAgents gives it). A Claude
 # worker then messages the coordinator with SendMessage when it is blocked, finds something that changes
 # the plan, and when it finishes. The result file is still written first, so swarm-wait remains the backstop.
+# Every worker also appends heartbeat lines to results/<label>.status; swarm-status reads them.
 set -euo pipefail
 
 usage() { echo "usage: swarm-spawn <label> <task-file> [--agent claude|codex] [--mode mode] [--model model] [--effort low|medium|high|xhigh|max] [--path dir] [--parent-session name]" >&2; exit 1; }
@@ -80,6 +81,9 @@ cleanup_failed_spawn() {
   fi
 }
 trap cleanup_failed_spawn EXIT
+# A second worker under a label whose agent still runs would share its result and status files.
+dup=$(node "$MW" show "$ws" | jq --argjson panes "$panes" --arg l "$label" '[.workers[] | select(.label == $l) | .paneID] as $ids | [$panes[] | select(.id as $i | $ids | index($i)) | select(.status == "running" or .status == "waitingForInput" or ((.agent_session_id // "") != ""))] | length') || bad "cannot read the swarm manifest"
+[ "$dup" = 0 ] || bad "a worker named $label is still running; send it a follow-up with swarm-send, close its pane, or pick another label"
 # Each worker owns the first shell of its own child workspace, created without changing focus.
 child=$(kelpi workspace create --parent "$parent" --name "$label" --path "$dir" --no-repo --json) || bad "Kelpi did not create the child workspace; no worker was registered"
 created_ws=$(jq -r '.workspace_id // empty' <<<"$child")
@@ -92,21 +96,26 @@ for attempt in 1 2 3; do
 done
 [ -n "$pane" ] || bad "Kelpi did not create the worker pane; no worker was registered"
 kelpi pane name --target "$pane" "$label" >/dev/null
-mkdir -p "$RES/archive"
 # Reusing a label keeps the old result under results/archive/ (the rail only reads results/<label>.md).
-if [ -e "$RES/$label.md" ]; then
-  mv -n "$RES/$label.md" "$RES/archive/$label.$(date -u +%Y%m%dT%H%M%SZ).md"
-  [ ! -e "$RES/$label.md" ] || { echo "cannot archive the old result for $label" >&2; exit 1; }
-fi
+. "$(dirname "$(realpath "$0")")/swarm-lib.sh"
+archive_result || bad "cannot archive the old result for $label"
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# First heartbeat line, written here so swarm-status can tell a worker that never started from a slow one.
+# It replaces a reused label's old file, so the last worker's done line is never read as this one's.
+# Before registering, so a failed write leaves no worker that never started.
+rm -f -- "$RES/$label.status"
+# noclobber: refuse to write through anything that appears at the path between the rm and the write.
+( set -C; printf '%s spawned\n' "$started" >"$RES/$label.status" ) || bad "cannot write the status file for $label"
 node "$MW" add-worker "$ws" "$pane" "$label" "$(head -1 "$task" | head -c 80)" "$RES/$label.md" \
-  --agent "$agent" --task-path "$task" --model "${model:--}" --mode "$mode" --effort "${effort:--}" --dir "$dir" --started-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
+  --agent "$agent" --task-path "$task" --model "${model:--}" --mode "$mode" --effort "${effort:--}" --dir "$dir" --started-at "$started" >/dev/null
 registered=1
 
-FORMAT="Write the result as markdown with three headings, ## Goal, ## Done and ## Next. Goal is one plain sentence saying what you were asked to do. Done is at most three short bullets saying what is now true or what you found, in plain words, with no code, file dumps or tool narration. Next is at most two bullets of what a human must decide or do, or the words Nothing pending. Keep the whole file under 80 words."
+worker_instructions
+STAY="You stay open after writing the result and may be sent follow-up tasks in this session, so do not exit or close your pane."
 
 report=
 if [ "$agent" = claude ]; then
-  [ -z "$parent_session" ] || report=" Your coordinator is the Claude Code session $parent_session. Load SendMessage with ToolSearch query select:SendMessage, then send it one-line messages that start with $label: when you are blocked, when you find something that changes the plan, and once at the very end after the result file is written, saying done and the result path. Never send more than one message a minute, and never send to any other session. Always write the result file even if a send fails."
+  [ -z "$parent_session" ] || report=" Your coordinator is the Claude Code session $parent_session. Load SendMessage with ToolSearch query select:SendMessage, then send it one-line messages that start with $label: when you are blocked, when you find something that changes the plan, and once at the end of each task after the result file is written, saying done and the result path. Never send more than one message a minute, and never send to any other session. Always write the result file even if a send fails."
 else
   # Codex has no SendMessage: its result file and swarm-wait are the only report.
   [ -z "$parent_session" ] || echo "note: Codex workers cannot message $parent_session; rely on swarm-wait" >&2
@@ -114,14 +123,8 @@ fi
 # The prompt goes in a file and the typed command reads it. A line typed before the new shell's line
 # editor starts is cut at the terminal's 1024-byte limit (macOS MAX_CANON), which left a long prompt
 # with no closing quote and the worker never started (2026-11-24).
-# One file per spawn, so two spawns that share a label cannot swap prompts before their shells start.
-PROMPTS="$HOME/.kelpi-swarm/prompts"
-mkdir -p "$PROMPTS"
-find "$PROMPTS" -name '*.txt' -mtime +1 -delete 2>/dev/null || true
-promptFile=$(mktemp "$PROMPTS/$label.XXXXXX") || bad "cannot write the worker prompt file"
-mv "$promptFile" "$promptFile.txt" && promptFile=$promptFile.txt
+write_prompt "Do the task in $task. $FORMAT Write the result to $RES/$label.md. $HEARTBEAT $STAY${report} Reply done." || bad "cannot write the worker prompt file"
 [[ $promptFile != *"'"* ]] || bad "the prompt file path cannot contain a single quote"
-printf '%s\n' "Do the task in $task. $FORMAT Write the result to $RES/$label.md.${report} Reply done." >"$promptFile"
 # Single-quoted so a home folder with spaces still reaches cat as one argument.
 prompt="\"\$(cat '$promptFile')\""
 
@@ -131,7 +134,8 @@ sleep 2
 if [ "$agent" = claude ]; then
   effortArg=
   [ -z "$effort" ] || effortArg="--effort $effort "
-  kelpi pane send --target "$pane" "cd $dir && claude -p --permission-mode $mode --model $model ${effortArg}${prompt}" >/dev/null
+  # Interactive, not -p: the worker stays open for follow-ups from swarm-send.
+  kelpi pane send --target "$pane" "cd $dir && claude --permission-mode $mode --model $model ${effortArg}${prompt}" >/dev/null
 else
   modelArg= effortArg=
   [ -z "$model" ] || modelArg="--model $model "

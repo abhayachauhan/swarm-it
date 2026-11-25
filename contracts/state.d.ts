@@ -34,6 +34,9 @@ export interface Worker {
      *  The rail's Done section then shows Open and ✕ (Remove), and ✕ sends dismiss-worker instead of close-worker.
      *  A pane never seen yet is not closed. */
     paneClosed?: boolean;
+    /** ADDITIVE (interactive workers). True while the pane's agent may still be running: Send then reaches it as a
+     *  follow-up instead of restarting it. */
+    live?: boolean;
     /** ADDITIVE (exit reason). Present when the worker's Claude exited with no result file (agent hook events, Kelpi 0.2.18+).
      *  `reason` is plain words, e.g. "usage limit reached". The rail lists the worker under Needs you. */
     stopped?: { reason: string };

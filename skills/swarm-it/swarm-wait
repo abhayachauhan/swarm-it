@@ -1,39 +1,172 @@
 #!/usr/bin/env bash
-# swarm-wait <pane-id>:<label> ... [--timeout seconds]
+# swarm-wait <pane-id>:<label> ... [--any] [--timeout seconds]
 # Run in the background. Exits when every worker has written ~/.kelpi-swarm/results/<label>.md,
 # its pane has closed, or its agent stopped without a result. Prints one status line per worker as it finishes.
+# A result is not new when it is older than the worker's spawn time (startedAt in the manifest) or when
+# a previous swarm-wait already reported that same file (it records the result's time in results/<label>.seen,
+# so waiting again after a worker finished cannot mistake its old report for an answer). It prints
+# NOTHING-NEW <label>: worker finished earlier; nothing new, and the run ends with exit code 3
+# (0 all done, 1 a worker failed, 2 timeout, 3 nothing new from at least one worker and no failure).
 # The Swarm View plugin (Kelpi 0.2.18+) writes $SWARM_MANIFEST_DIR/exits/<pane-id>.json
 # ({"reason": "..."}, default dir ~/.kelpi-swarm) when it sees a worker's Claude end without a result.
 # An agent still starting up is never reported: only that file or a closed pane marks a worker failed.
+#
+# --any returns on the first new event from any listed worker instead. It prints every event found in that
+# pass and exits 0; each event is reported once across calls:
+#   NEWS <pane>:<label> <kind>: <text>   a line in news/<pane-id>.jsonl later than the last reported one
+#                                        (news/<pane-id>.seen holds that line's `at`)
+#   DONE <label>: <first lines>          a new result
+#   FAILED <pane>:<label> <reason>       an exit file and no result
+#   FAILED <label>: pane closed with no result
+# A pane closed after its result is reported as NEWS ... closed. Exit 2 on timeout, and 3 when every listed
+# pane is closed and already reported, so nothing more can arrive.
 set -uo pipefail
 RES="$HOME/.kelpi-swarm/results"
-EXITS="${SWARM_MANIFEST_DIR:-$HOME/.kelpi-swarm}/exits"
+MDIR="${SWARM_MANIFEST_DIR:-$HOME/.kelpi-swarm}"
+EXITS="$MDIR/exits"
+NEWS="$MDIR/news"
+# Which exit files and closed panes --any has already reported.
+REPORTED="$MDIR/reported"
+. "$(dirname "$(realpath "$0")")/swarm-lib.sh"
+usage="usage: swarm-wait <pane-id>:<label> ... [--any] [--timeout seconds]"
 # An hour: an Opus worker with a self-review round outlasted the old 30 minutes (2026-10-17).
 limit=3600
+any=0
 workers=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --timeout) limit=$2; shift 2 ;;
+    --any) any=1; shift ;;
     *:*) workers+=("$1"); shift ;;
-    *) echo "usage: swarm-wait <pane-id>:<label> ... [--timeout seconds]" >&2; exit 1 ;;
+    *) echo "$usage" >&2; exit 1 ;;
   esac
 done
 [ ${#workers[@]} -gt 0 ] || { echo "no workers given" >&2; exit 1; }
+# The label names files under results/; same rule as swarm-spawn.
+for w in "${workers[@]}"; do
+  [[ ${w#*:} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${w#*:} != *..* ]] || { echo "label must be letters, digits, dot, dash or underscore: ${w#*:}" >&2; exit 1; }
+  # --any also writes files named after the pane.
+  [ "$any" = 0 ] || [[ ${w%%:*} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${w%%:*} != *..* ]] || { echo "pane id must be letters, digits, dot, dash or underscore: ${w%%:*}" >&2; exit 1; }
+done
+
+# Spawn time (epoch seconds) of a worker, from whichever manifest lists it; empty when unknown.
+started_of() {
+  local f
+  for f in "$MDIR"/*.json; do
+    [ -f "$f" ] || continue
+    jq -r --arg p "$1" --arg l "$2" '[.workers[]? | select(.paneID == $p and .label == $l) | .startedAt | select(type == "string") | try fromdateiso8601 catch empty][0] // empty' "$f" 2>/dev/null
+  done | head -1
+}
+
+# check_result <label>: 1 no result, 2 an old one, 0 a new one (printed as DONE and remembered).
+check_result() {
+  local label=$1 mtime seen
+  [ -s "$RES/$label.md" ] || return 1
+  mtime=$(date -r "$RES/$label.md" +%s 2>/dev/null || true)
+  seen=$(cat "$RES/$label.seen" 2>/dev/null || true)
+  # Old: written before this spawn, or the same file a previous swarm-wait already reported.
+  if { [ -n "${started[$label]:-}" ] && [ -n "$mtime" ] && [ "$mtime" -lt "${started[$label]}" ]; } ||
+     { [[ $seen =~ ^[0-9]+$ ]] && [ -n "$mtime" ] && [ "$mtime" -le "$seen" ]; }; then
+    return 2
+  fi
+  echo "DONE $label: $(head -c 200 "$RES/$label.md" | tr '\n' ' ')"
+  [ -z "$mtime" ] || mark "$RES/$label.seen" "$mtime"
+}
+
+# A result of this spawn, reported or not.
+has_result() {
+  local mtime
+  [ -s "$RES/$1.md" ] || return 1
+  mtime=$(date -r "$RES/$1.md" +%s 2>/dev/null || true)
+  [ -z "${started[$1]:-}" ] || [ -z "$mtime" ] || [ "$mtime" -ge "${started[$1]}" ]
+}
+
+exit_reason() { jq -r '.reason // empty' "$EXITS/$1.json" 2>/dev/null; }
+
+# A new interactive worker can stop at the folder-trust question, before any hook can write news. Only
+# looked for while the worker has written no heartbeat of its own.
+at_trust_question() {
+  local screen
+  [[ $(tail -n 1 "$RES/$2.status" 2>/dev/null) == *" spawned" ]] || return 1
+  screen=$(kelpi pane capture --target "$1" --lines 30 2>/dev/null) || return 1
+  grep -qE '[0-9][.)] *(Yes, I trust this folder|Trust and continue)|Do you trust the files in this folder' <<<"$screen"
+}
 
 # A counter, not ${#done_[@]}: under set -u an empty associative array counts as unbound.
-declare -A done_=()
-failed=0 finished=0
+declare -A done_=() started=()
+for w in "${workers[@]}"; do started[${w#*:}]=$(started_of "${w%%:*}" "${w#*:}"); done
+
+# One pass of --any over every worker. Sets events and quiet (workers that can send nothing more).
+any_pass() {
+  local w pane label closed stamp
+  events=0 quiet=0
+  for w in "${workers[@]}"; do
+    pane=${w%%:*} label=${w#*:}
+    # An empty list is a failed `kelpi pane list`, not every pane closing at once.
+    closed=0
+    [ -z "$live" ] || grep -qx "$pane" <<<"$live" || closed=1
+    new_news "$pane" "$label" "$NEWS" && events=1
+    check_result "$label" && events=1
+    if [ "$closed" = 0 ] && [ ! -e "$REPORTED/$pane.trust" ] && at_trust_question "$pane" "$label"; then
+      events=1
+      echo "NEWS $pane:$label blocked: waiting for its folder to be trusted; answer it in the pane"
+      mkdir -p "$REPORTED" && mark "$REPORTED/$pane.trust" 1
+    fi
+    if [ -s "$EXITS/$pane.json" ] && ! has_result "$label"; then
+      stamp=$(date -r "$EXITS/$pane.json" +%s 2>/dev/null || echo 0)
+      if [ "$(cat "$REPORTED/$pane.exit" 2>/dev/null || true)" != "$stamp" ]; then
+        events=1
+        reason=$(exit_reason "$pane")
+        echo "FAILED $pane:$label ${reason:-agent stopped without a result}"
+        mkdir -p "$REPORTED" && mark "$REPORTED/$pane.exit" "$stamp"
+        # The same death: the pane closing in this pass is not a second failure.
+        [ "$closed" = 0 ] || mark "$REPORTED/$pane.closed" 1
+      fi
+    fi
+    if [ "$closed" = 1 ]; then
+      quiet=$((quiet + 1))
+      if [ ! -e "$REPORTED/$pane.closed" ]; then
+        events=1
+        if has_result "$label"; then echo "NEWS $pane:$label closed: pane closed after its result"
+        # The exit file was already reported: one death, one FAILED line.
+        elif [ -e "$REPORTED/$pane.exit" ]; then echo "NEWS $pane:$label closed: pane closed after its failure"
+        else echo "FAILED $label: pane closed with no result"; fi
+        mkdir -p "$REPORTED" && mark "$REPORTED/$pane.closed" 1
+      fi
+    fi
+  done
+}
+
+[ "$any" = 0 ] || find "$REPORTED" -type f -mtime +7 -delete 2>/dev/null || true
+
+failed=0 finished=0 stale=0
 for ((t = 0; t < limit; t += 2)); do
   live=$(kelpi pane list --json 2>/dev/null | jq -r '.[].id' || true)
+  if [ "$any" = 1 ]; then
+    any_pass
+    [ "$events" = 0 ] || exit 0
+    if [ "$quiet" -eq ${#workers[@]} ]; then
+      for w in "${workers[@]}"; do echo "NOTHING-NEW ${w#*:}: pane closed; nothing more to wait for"; done
+      exit 3
+    fi
+    sleep 2
+    continue
+  fi
   for w in "${workers[@]}"; do
     pane=${w%%:*} label=${w#*:}
     [ -n "${done_[$label]:-}" ] && continue
-    if [ -s "$RES/$label.md" ]; then
+    # One look at the result: swarm-send can archive it at any moment.
+    check_result "$label"
+    result=$?
+    if [ "$result" -ne 1 ]; then
       done_[$label]=1 finished=$((finished + 1))
-      echo "DONE $label: $(head -c 200 "$RES/$label.md" | tr '\n' ' ')"
+      if [ "$result" -eq 2 ]; then
+        stale=$((stale + 1))
+        echo "NOTHING-NEW $label: worker finished earlier; nothing new"
+      fi
     elif [ -s "$EXITS/$pane.json" ]; then
       done_[$label]=1 failed=$((failed + 1)) finished=$((finished + 1))
-      reason=$(jq -r '.reason // empty' "$EXITS/$pane.json" 2>/dev/null)
+      reason=$(exit_reason "$pane")
       echo "FAILED $pane:$label ${reason:-agent stopped without a result}"
     # An empty list is a failed `kelpi pane list`, not every pane closing at once.
     elif [ -n "$live" ] && ! grep -qx "$pane" <<<"$live"; then
@@ -41,12 +174,18 @@ for ((t = 0; t < limit; t += 2)); do
       echo "FAILED $label: pane closed with no result"
     fi
   done
-  [ "$finished" -eq ${#workers[@]} ] && exit $((failed > 0))
+  if [ "$finished" -eq ${#workers[@]} ]; then
+    [ "$failed" -eq 0 ] || exit 1
+    [ "$stale" -eq 0 ] || exit 3
+    exit 0
+  fi
   sleep 2
 done
 for w in "${workers[@]}"; do
   pane=${w%%:*} label=${w#*:}
   [ -n "${done_[$label]:-}" ] && continue
+  # --any keeps closed panes in the list; there is nothing to show for them.
+  [ "$any" = 0 ] || [ -z "$live" ] || grep -qx "$pane" <<<"$live" || continue
   echo "TIMEOUT $label, last lines:"
   kelpi pane capture --target "$pane" --lines 10
 done

@@ -17,7 +17,8 @@ const SESSION = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const prompt = cmd => ['╭──────────────────╮', ' Bash command', '', `   ${cmd}`, '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No'].join('\n');
 
 async function start(extra = {}) {
-    const api = makeSwarmApi(extra);
+    // w1's pane is back at its shell, which a restart line needs.
+    const api = makeSwarmApi({ captures: { w1: 'max@mac repo % ' }, ...extra });
     const dispose = registerAll(api);
     await dispose.ready;
     await api.command('get-state', { workspaceID: 'ws1' });

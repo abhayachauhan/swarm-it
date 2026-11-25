@@ -382,7 +382,7 @@ test('send-to-worker, open-result and read-result refuse panes that are not mani
 });
 
 test('send-to-worker sends to the worker and open-result opens only its manifest resultPath', async () => {
-    const { api, dispose } = await start({ captures: { w1: ['─'.repeat(40), '❯ ', '─'.repeat(40)].join('\n') } });
+    const { api, dispose } = await start({ w1Status: 'idle', captures: { w1: ['─'.repeat(40), '❯ ', '─'.repeat(40)].join('\n') } });
     assert.deepEqual(await api.command('send-to-worker', { paneID: 'w1', text: 'please fix' }), { ok: true, paneID: 'w1' });
     api.fileStore['/wt/w1/result.md'] = '## Goal\nx\n';
     assert.deepEqual(api.callsTo('terminal.send').map(c => c.args), [['w1', 'please fix']]);

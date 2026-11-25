@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# swarm-send <pane-id>:<label> <task-file> [--answered] [--wait-seconds N] [--confirm-seconds N]
+# Send a follow-up task to a live, idle worker of this coordinator's swarm. Nothing is typed unless the pane
+# exists, its agent is alive, no turn is running, it is not waiting on a person, and the screen shows the
+# agent's own input line. A turn still running is waited for, up to --wait-seconds (default 30): a result
+# lands a few seconds before its turn ends. --answered says a person has dealt with the last blocked news
+# line (an interrupted turn writes no turn-done); the screen checks still apply. The old result is archived
+# first, so swarm-wait sees the new one as new, and news not yet reported is printed to stderr and marked
+# seen, so the last task's turn-done is not taken for this one's.
+# Prints <pane-id>:<label> once the turn is seen to start. With no proof after --confirm-seconds (default 20)
+# it prints NOT-STARTED <pane-id>:<label> and the pane's last lines, and exits 2. It never sends twice: the
+# text may still have arrived, so look at the pane before deciding. Exit 1 means nothing was typed.
+set -euo pipefail
+
+usage() { echo "usage: swarm-send <pane-id>:<label> <task-file> [--answered] [--wait-seconds N] [--confirm-seconds N]" >&2; exit 1; }
+bad() { echo "$1" >&2; exit 1; }
+[ $# -ge 2 ] || usage
+worker=$1 task=$2; shift 2
+confirm=20 wait=30 answered=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --confirm-seconds) [ $# -ge 2 ] || usage; confirm=$2; shift 2 ;;
+    --wait-seconds) [ $# -ge 2 ] || usage; wait=$2; shift 2 ;;
+    --answered) answered=1; shift ;;
+    *) usage ;;
+  esac
+done
+[[ $confirm =~ ^[0-9]+$ && $wait =~ ^[0-9]+$ ]] || bad "--confirm-seconds and --wait-seconds must be whole numbers of seconds"
+[[ $worker == *:* ]] || usage
+pane=${worker%%:*} label=${worker#*:}
+
+# Same character rules as swarm-spawn.
+[[ $pane =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $pane != *..* ]] || bad "pane id must be letters, digits, dot, dash or underscore"
+[[ $label =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $label != *..* ]] || bad "label must be letters, digits, dot, dash or underscore"
+[[ $task =~ ^[A-Za-z0-9._/~-]+$ ]] || bad "task path must be letters, digits, dot, dash, underscore or slash"
+[ -f "$task" ] || bad "no task file: $task"
+task=$(cd "$(dirname "$task")" && pwd)/$(basename "$task")
+[[ $task =~ ^[A-Za-z0-9._/~-]+$ ]] || bad "task path must be letters, digits, dot, dash, underscore or slash"
+
+HERE="$(dirname "$(realpath "$0")")"
+MW="$HERE/manifest-writer.mjs"
+RES="$HOME/.kelpi-swarm/results"
+MDIR="${SWARM_MANIFEST_DIR:-$HOME/.kelpi-swarm}"
+NEWS="$MDIR/news/$pane.jsonl"
+STATUS="$RES/$label.status"
+. "$HERE/swarm-lib.sh"
+
+orch=$(kelpi pane id) || bad "cannot identify the coordinator pane; run swarm-send from a Kelpi pane"
+panes=$(kelpi pane list --json) || bad "cannot read Kelpi panes; if Codex denied local IPC, retry this command with sandbox escalation"
+ws=$(jq -er --arg p "$orch" '.[] | select(.id == $p) | .workspace_id | select(type == "string" and length > 0)' <<<"$panes") || bad "Kelpi returned no workspace ID; check KELPI_PANE_ID and retry with sandbox escalation if local IPC was denied"
+manifest=$(node "$MW" show "$ws") || bad "no swarm manifest for this workspace"
+# Only a worker of this swarm: never the coordinator or any other pane.
+[ "$pane" != "$orch" ] || bad "pane $pane is the coordinator, not a worker"
+rec=$(jq -c --arg p "$pane" --arg l "$label" '.workers[] | select(.paneID == $p and .label == $l)' <<<"$manifest")
+[ -n "$rec" ] || bad "no worker $pane:$label in this swarm's manifest"
+agent=$(jq -r '.agent // "claude"' <<<"$rec")
+[[ $agent = claude || $agent = codex ]] || bad "recorded agent must be claude or codex"
+
+# Alive and between turns, waiting for a running turn to end.
+dead="no live agent in pane $pane; start the worker again with swarm-retry $pane:$label"
+for ((t = 0; ; t++)); do
+  state=$(jq -c --arg p "$pane" '[.[] | select(.id == $p)][0] // empty' <<<"$panes")
+  [ -n "$state" ] || bad "pane $pane is gone; start the worker again with swarm-retry $pane:$label"
+  status=$(jq -r '.status // empty' <<<"$state")
+  session=$(jq -r '.agent_session_id // empty' <<<"$state")
+  [[ $status = running || $status = waitingForInput || -n $session ]] || bad "$dead"
+  [ ! -s "$MDIR/exits/$pane.json" ] || bad "$dead"
+  if [ "$status" != running ]; then
+    # Kelpi's status and session id go stale when an agent dies without telling it, and an idle composer can
+    # read as waitingForInput, so the screen decides: text typed into a shell would run as a command, and
+    # Enter on a permission menu means Yes.
+    screen=$(kelpi pane capture --target "$pane" --lines 40) || bad "cannot read pane $pane; nothing was typed"
+    # The escape sequences go, then blank lines.
+    lines=$(sed $'s/\x1b\\[[0-9;?]*[ -\\/]*[@-~]//g' <<<"$screen" | grep -v '^[[:space:]]*$' || true)
+    grep -qi 'esc to interrupt' <<<"$(tail -n 8 <<<"$lines")" || break
+  fi
+  [ "$t" -lt "$wait" ] || bad "worker $label is in the middle of a turn; wait for it to finish"
+  sleep 1
+  panes=$(kelpi pane list --json) || bad "cannot read Kelpi panes; nothing was typed"
+done
+
+# The newer of the last blocked and turn-done lines wins; the file is append-only, so line order is time order.
+if [ "$answered" = 0 ] && [ -e "$NEWS" ]; then
+  waiting=$(jq -rRn '[inputs | fromjson? | objects | .kind | select(. == "blocked" or . == "turn-done")] | last // empty' "$NEWS") || bad "cannot read the news file for $label"
+  [ "$waiting" != blocked ] || bad "worker $label is waiting on a person; answer it in pane $pane first (if that is done, add --answered)"
+fi
+
+# Claude's input box: a full-width rule, the ❯ line (not a menu's "❯ 1. Yes"), a closing rule and at most
+# 4 status lines below it. The same test as the rail's send (backend/actions.mjs).
+claude_input() {
+  local -a l=()
+  local line i k n
+  while IFS= read -r line; do l+=("$line"); done <<<"$lines"
+  n=${#l[@]}
+  local rule='^[[:space:]]*(─|━){20,}[[:space:]]*$'
+  # Claude may follow ❯ with a no-break space, which [[:space:]] does not match in every locale.
+  local gap=$'([[:space:]]|\xc2\xa0)'
+  local prompt="^[[:space:]]*❯($gap|\$)" menu="^[[:space:]]*❯$gap*[0-9]+[.)]$gap"
+  for ((i = n - 1; i > 0; i--)); do
+    [[ ${l[i]} =~ $prompt ]] || continue
+    [[ ! ${l[i]} =~ $menu ]] || continue
+    [[ ${l[i - 1]} =~ $rule ]] || continue
+    for ((k = i + 1; k < n; k++)); do
+      [[ ! ${l[k]} =~ $rule ]] || { ((n - 1 - k <= 4)); return; }
+    done
+    return 1
+  done
+  return 1
+}
+# Codex draws its composer as a › line near the bottom; an approval or question menu uses › on numbered rows.
+codex_input() {
+  local bottom
+  bottom=$(tail -n 8 <<<"$lines")
+  ! grep -qE '^[[:space:]]*(›[[:space:]]*)?[0-9]+[.)][[:space:]]' <<<"$bottom" && grep -qE '^[[:space:]]*›([[:space:]]|$)' <<<"$bottom"
+}
+"${agent}_input" || bad "pane $pane does not show the ${agent^} input line (a permission prompt, a menu or a shell); nothing was typed"
+
+report=
+[ "$agent" != claude ] || report=" If you were told to message a coordinator session, do so for this task too."
+worker_instructions
+write_prompt "Follow-up task for you, the same worker. Do the task in $task. $FORMAT Write the new result to $RES/$label.md (the previous one was archived). $HEARTBEAT$report Reply done." || bad "cannot write the follow-up prompt file"
+# The path is typed too: if the agent has just ended, a shell reads it.
+plain='^[A-Za-z0-9._/ -]+$'
+[[ $promptFile =~ $plain ]] || bad "the prompt file path must be letters, digits, space, dot, dash, underscore or slash; nothing was typed"
+# Never append through a symlink. Checked before the result moves.
+[ ! -L "$STATUS" ] || bad "the status file for $label is a symlink; nothing was typed"
+archive_result || bad "cannot archive the old result for $label; nothing was typed"
+
+# A new line, so swarm-status does not keep reading the last task's done line.
+printf '%s follow-up sent\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$STATUS" || bad "cannot write the status file for $label; nothing was typed"
+
+# Unreported lines belong to the last task: say them now, so --any does not later.
+new_news "$pane" "$label" "$MDIR/news" >&2 || true
+beats=$(wc -l <"$STATUS")
+# News is compared by time, not by line count: the writer may drop old lines to cap the file.
+# newer_than <key>: prints the latest key among news lines after <key>, exited lines aside.
+newer_than() {
+  [ -f "$NEWS" ] || return 0
+  jq -rRn --arg after "$1" "$NEWS_KEY"'
+    [inputs | fromjson? | objects | select(.kind != "exited") | .at | key | select(. > $after)] | max // empty' "$NEWS" 2>/dev/null || true
+}
+news=$(newer_than "")
+
+not_started() {
+  printf '%s blocked: follow-up not confirmed\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$STATUS" || true
+  echo "NOT-STARTED $pane:$label${1:+ $1}"
+  kelpi pane capture --target "$pane" --lines 10 || true
+  exit 2
+}
+# Starts with a word no shell has as a command, in case the agent ended between the check and now.
+kelpi pane send --target "$pane" "Follow-up: read the file $promptFile and do what it says." >/dev/null || not_started "(kelpi pane send failed)"
+
+# Proof that the turn started: the pane is running, or a new heartbeat or news line appeared. An exited
+# line is the opposite of proof.
+for ((t = 0; ; t++)); do
+  now=$(kelpi pane list --json 2>/dev/null | jq -r --arg p "$pane" '.[] | select(.id == $p) | .status // empty' || true)
+  if [ "$now" = running ] || [ "$(wc -l <"$STATUS")" -gt "$beats" ] || [ -s "$RES/$label.md" ] || [ -n "$(newer_than "$news")" ]; then
+    echo "$pane:$label"
+    exit 0
+  fi
+  [ "$t" -lt "$confirm" ] || break
+  sleep 1
+done
+not_started
