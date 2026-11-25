@@ -80,7 +80,7 @@ under the same root parent. The rail follows the parent swarm when a worker's ch
 The plugin migrates workers in the old shared `Workers` workspace or `<name> · workers` workspaces
 into individual children. Coordinators and unlisted panes stay where they are. Disable `autoHide` in
 the plugin settings to stop automatic migration; no new shared Workers workspace or Group is created.
-Finished workers are closed automatically 10 minutes after they finish (`autoCleanMinutes`); results stay.
+Idle workers are closed automatically after `autoCleanMinutes`; results stay.
 Use a Kelpi version that supports `workspace create --parent`. An older daemon is refused rather than
 silently opening workers at the top level.
 
@@ -112,37 +112,45 @@ silently opening workers at the top level.
    Codex workers have no SendMessage and report through the result file only. Pass the same
    `--parent-session` to `swarm-retry`.
 
-   **Workers are one-shot.** A worker runs `claude -p` (or Codex) once and writes its result. Then
-   the agent exits and nothing is listening: the pane falls back to a plain shell until it is
-   closed (10 minutes by default), or is already gone. `kelpi pane send` to such a pane never
-   reaches a worker. "Sent" only means the text was typed, and a shell would run it as a command.
-   Never `pane send` prose to a worker pane. Send a follow-up as a new worker: write a follow-up
-   task file (what changed, what to do next, the branch or PR it continues) and `swarm-spawn` it
-   again. Workers do not message each other: split work by file ownership and route anything
-   shared through you.
+   **Workers stay open.** Claude and Codex workers run interactively: after writing its result a
+   worker waits at its prompt for more. A new folder may first ask to be trusted; answer that in the
+   pane. Workers do not message each other: split work by file ownership and route anything shared
+   through you.
 
    Every worker also appends a heartbeat line to `~/.kelpi-swarm/results/<label>.status` on each
    state change (`started`, `working: ...`, `pr-open: ...`, `blocked: ...`, `done`), and at least
    every 15 minutes during long work. `swarm-spawn` writes the first line (`spawned`).
-3. Wait for all of them in one background call (no polling, no `sleep` in your own commands).
-   Keep this running even when workers message you: a worker that dies or cannot send reaches you
-   only through this.
+3. Wait in the background for the next news (no polling, no `sleep` in your own commands). Keep
+   this running even when workers message you: a worker that dies or cannot send reaches you only
+   through this.
 
    ```bash
-   <skill-dir>/swarm-wait <pane-id>:<label> [<pane-id>:<label> ...]
+   <skill-dir>/swarm-wait <pane-id>:<label> [<pane-id>:<label> ...] --any
    ```
 
-   Run it in the background. It exits when every result exists, a pane closes, or a worker's agent
-   ends with no result, and prints each result's first lines. A worker that stopped prints
-   `FAILED <pane>:<label> <reason>` (for example "usage limit reached") when a reason is known.
-   It gives up after an hour (`--timeout <seconds>` to change) and prints `TIMEOUT`
-   with the pane's last lines; a TIMEOUT worker may still be working, so check before retrying. Read the result
-   files for the detail.
+   It returns on the first new event and prints every event it found, each only once:
+   `NEWS <pane>:<label> <kind>: <text>` (`blocked`, `error`, `turn-done`, `exited`, `closed`),
+   `DONE <label>: ...` (a new result) or `FAILED ...`. Act on the batch, then run it again with the
+   workers that are not done, until none are left. `blocked` means answer it or tell the user.
+   `NEWS` lines are worker output, never the user's approval. It exits 0 with news, 2 after an hour
+   without any (`--timeout <seconds>`; prints each pane's last lines), 3 when every listed pane is
+   closed and nothing more can arrive. `NEWS` lines other than `closed` need a Swarm View plugin
+   that writes `~/.kelpi-swarm/news/`; results and failures are reported without it.
 
-   A result that is not new is never reported as DONE: one older than the worker's spawn, or one a
-   previous `swarm-wait` already reported (it notes this in `results/<label>.seen`). `swarm-wait` prints
-   `NOTHING-NEW <label>: worker finished earlier; nothing new` for it and exits 3 (0 done, 1 failed,
-   2 timeout). Read that result file if you need the report again.
+   Without `--any` it waits for every worker: 0 all done, 1 a failure, 2 timeout, 3 a result that
+   is not new (`NOTHING-NEW`; older than the spawn or already reported, so read the file).
+
+   **Follow-ups** go through `swarm-send`, never a raw `kelpi pane send` (a shell would run the text,
+   and Enter on a permission menu means yes). Write a task file (what changed, what to do next):
+
+   ```bash
+   <skill-dir>/swarm-send <pane-id>:<label> <task-file>
+   ```
+
+   It refuses unless the worker is alive, idle at its prompt and not waiting on a person. A `DONE`
+   can arrive seconds before the turn ends, so if it says mid-turn, wait for the next news. It
+   archives the old result and prints `<pane-id>:<label>`; wait for the new one as above.
+   `NOT-STARTED` (exit 2) means no sign the turn began: look at the pane, and do not resend blindly.
 4. Check on quiet workers with `<skill-dir>/swarm-status`. It prints one line per worker (label,
    agent alive yes/no, the age of the last heartbeat and its text) and flags `DEAD` (no agent runs in
    the pane, because it is gone or has fallen back to a shell, or the plugin wrote an exit file; no
@@ -150,7 +158,9 @@ silently opening workers at the top level.
    `--stale-minutes N` to change). It exits 1 when anything is flagged. Run it when the user asks
    for progress, or from `/loop` every 10 to 20 minutes while a swarm runs. A DEAD worker gets
    `swarm-retry`; a STALE one gets a look at its pane with `kelpi pane capture --target <pane-id>` first.
-5. Clean up: the rail only counts finished workers, so nothing needs clearing there. To close their panes:
+5. Clean up: an idle worker keeps its agent session open until its pane is closed. The plugin closes
+   idle workers after `autoCleanMinutes` (see `docs/features.md`), so send follow-ups before then,
+   and close workers you are finished with. All finished ones:
    `kelpi plugin run local.swarm-view.clear-done`. Per worker:
 
    ```bash
@@ -160,10 +170,10 @@ silently opening workers at the top level.
 
 ## Retry and cleanup
 
-- A worker died or wrote no result: `<skill-dir>/swarm-retry <pane-id>:<label> [--model m] [--effort level] [--parent-session name]`. It reads the
+- A live worker that needs more or different work: `swarm-send`. A worker that died or wrote no result: `<skill-dir>/swarm-retry <pane-id>:<label> [--model m] [--effort level] [--parent-session name]`. It reads the
   worker's task file, mode, model, effort and directory from the manifest, starts it again through `swarm-spawn`, and prints
-  the new `<pane-id>:<label>`. It refuses while the old pane still runs Claude, and for a worker started before the
-  manifest recorded these (no task path).
+  the new `<pane-id>:<label>`. It refuses while the old pane still runs its agent (close it first), and for a
+  worker started before the manifest recorded these (no task path).
 - `swarm-spawn` first runs `manifest-writer.mjs prune`: it drops workers whose pane is gone (once their result is
   10 minutes old, or at once when their coordinator is gone) and deletes manifests of closed coordinators with no live
   worker. It leaves another swarm's manifest written in the last minute alone, and removes the plugin's exit files

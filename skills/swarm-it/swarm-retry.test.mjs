@@ -135,7 +135,7 @@ test('swarm-retry starts a dead worker again with the same label, task, mode, mo
   assert.equal(status, 0, stderr)
   assert.equal(stdout.trim(), 'P2:w1')
   const send = calls.find((c) => c.startsWith('pane send'))
-  assert.ok(send.includes(`cd ${s.home} && claude -p --permission-mode auto --model haiku "Do the task in ${s.task}.`), send)
+  assert.ok(send.includes(`cd ${s.home} && claude --permission-mode auto --model haiku "Do the task in ${s.task}.`), send)
   assert.ok(send.includes(`Write the result to ${s.results}/w1.md.`), send)
   assert.deepEqual(manifest(s).workers.map((w) => [w.paneID, w.label, w.taskPath, w.model, w.mode, w.dir]), [['P2', 'w1', s.task, 'haiku', 'auto', s.home]])
   assert.equal(fs.existsSync(path.join(s.results, 'w1.md')), false)
@@ -194,7 +194,7 @@ test('swarm-retry refuses a worker whose pane still runs Claude, and starts noth
     setPanes(s, [ME, pane])
     const { status, stderr, calls } = retry(s, ['P1:w1'])
     assert.equal(status, 1)
-    assert.equal(stderr.trim(), 'worker w1 still runs Claude in pane P1; close it first or wait for it')
+    assert.equal(stderr.trim(), 'worker w1 still runs Claude in pane P1; send it a follow-up with swarm-send P1:w1 <task-file>, or close it first (kelpi pane close --target P1)')
     assert.ok(noWork(calls), calls.join('\n'))
     assert.equal(manifest(s).workers[0].paneID, 'P1', 'manifest unchanged')
   }
