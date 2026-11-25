@@ -113,7 +113,12 @@ export function createWorkerNews(api, store, { serial }) {
                 if (seen && ++seen.misses >= MENU_GONE_SCANS) questions.delete(paneID);
                 return;
             }
-            if (seen?.question === question) { seen.misses = 0; return; }
+            // The same open menu: a half-drawn screen can show it before (or without) its question line.
+            if (seen && (seen.question === question || !question || !seen.question)) {
+                seen.question ||= question;
+                seen.misses = 0;
+                return;
+            }
             if (!newsWorker(store, paneID)) return;
             questions.set(paneID, { question, misses: 0 });
             await writeNews(store, paneID, 'blocked', question || 'a question is waiting in its pane');

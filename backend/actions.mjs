@@ -64,6 +64,24 @@ const kelpiSaysAlive = pane => !!pane?.agentSessionID || pane?.status === 'runni
 const midTurn = () => fail('the worker is in the middle of a turn; nothing was sent. Wait for it to finish', 'BUSY');
 
 /**
+ * Type a follow-up bound to the screen it was checked against: if the pane changes before the text lands (a turn
+ * starts, a prompt opens), the host refuses the send. A host without `terminal.read` has no revision to bind to.
+ */
+async function sendFollowUp(api, paneID, text) {
+    if (typeof api.terminal.read !== 'function') return sendText(api, paneID, text);
+    try {
+        const read = await withTimeout(api.terminal.read(paneID), CAPTURE_TIMEOUT_MS);
+        if (!showsClaudeInput(read.text) || asksPerson(read.text) || showsShellPrompt(read.text) || showsWorking(read.text)) {
+            return fail('the worker pane changed before the text was typed; nothing was sent. Try again', 'BUSY');
+        }
+        await api.terminal.send(paneID, text, { ifRevision: read.revision });
+        return { ok: true, paneID };
+    } catch (error) {
+        return fail(`send failed: ${message(error)}`, 'SEND_FAILED');
+    }
+}
+
+/**
  * Send text to a manifest worker. Any other pane is refused with NOT_WORKER. Nothing is sent while the worker waits on
  * a permission prompt or question (PROMPT_OPEN) or is mid-turn (BUSY).
  * - Its agent is alive and idle at Claude's input box: the text is typed to it as a plain follow-up.
@@ -112,7 +130,7 @@ export async function sendToWorker(api, store, paneID, text) {
     if (screen === null || asksPerson(screen)) return fail('the worker pane shows a permission prompt or question, or cannot be read; nothing was typed. Answer it in the pane', 'PROMPT_OPEN');
     if (working) return midTurn();
     if (showsClaudeInput(screen) && !shell) {
-        const sent = await sendText(api, paneID, text);
+        const sent = await sendFollowUp(api, paneID, text);
         if (!sent.ok) return sent;
         // A new turn starts: the auto-clean delay counts again from its end.
         store.doneSince.delete(paneID);
@@ -123,10 +141,12 @@ export async function sendToWorker(api, store, paneID, text) {
         return sent;
     }
     const notAtClaude = () => fail('the worker pane does not show Claude\'s input box; nothing was typed. Answer it in the pane', 'NOT_AT_CLAUDE');
+    // The restart line is a shell command, so only a visible shell prompt may take it.
+    if (!shell) return notAtClaude();
     if (store.resultExists.get(paneID) !== true) {
         const ended = !kelpiSaysAlive(pane) && (store.sessions.has(paneID) || ['done', 'error'].includes(deriveState(store, w)));
         if (!ended) return notAtClaude();
-    } else if (pane?.agentSessionID && !shell) return notAtClaude();
+    }
     const session = store.sessions.get(paneID);
     if (!session || !SESSION_ID.test(session)) return fail('this worker has finished and its conversation cannot be found', 'NO_SESSION');
     const ask = `${text.trim().replace(/[.\s]+$/, '')}.${w.resultPath ? ` Write the updated result to ${w.resultPath}.` : ''} Reply done.`;

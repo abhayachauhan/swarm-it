@@ -32,7 +32,7 @@ A worker can stay open at its prompt after writing its result. **Send** reaches 
 - Claude idle at its input box: your text is typed as a plain follow-up in the same conversation.
 - Claude exited and the pane back at a shell: the plugin restarts the same conversation with your text (**Send and restart**).
 - Codex: your text is queued for its session.
-- Mid-turn, or waiting on a permission prompt or question: nothing is sent.
+- Mid-turn, waiting on a permission prompt or question, or showing any other screen: nothing is sent.
 
 ### When a finished pane closes
 
@@ -61,7 +61,7 @@ For each swarm worker pane, and never for a coordinator or a pane outside a swar
 | `turn-done` | a turn finishes with no background tasks left running | the result path once it exists, else the last line of the reply |
 | `exited` | the agent exits or its pane closes | the result path, else the reason |
 
-`text` is one plain line of at most 200 characters. `at` only moves forward within a file, and the newest 200 lines are kept. The plugin never writes through a symlink. `manifest-writer prune` removes the files of closed panes.
+`text` is one plain line of at most 200 characters. `at` only moves forward within a file, and the newest 200 lines are kept. The plugin never writes through a symlink. `manifest-writer prune` removes the files of closed panes that no manifest lists any more.
 
 On a Kelpi without agent hook events, `turn-done` and `error` come from the rail's cards. A Codex has no exit event, so its `exited` line is written when the pane closes.
 

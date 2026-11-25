@@ -8,15 +8,15 @@ import { lstat, mkdir, open, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { manifestDirectory, isSafeLabel } from './manifest.mjs';
 import { refreshResult } from './store.mjs';
+import { ANSI } from './screen.mjs';
+import { PANE_ID } from './exits.mjs';
 
 export const MAX_LINES = 200;
 export const MAX_TEXT_CHARS = 200;
 /** Far above MAX_LINES lines of the longest text; a bigger file was not written by this plugin, so only its tail is kept. */
 const MAX_READ_BYTES = 1024 * 1024;
-const PANE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/;
-const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
-/** Control characters, Unicode line and paragraph separators, and unpaired surrogates. */
-const UNPRINTABLE = /[\p{Cc}\p{Zl}\p{Zp}\p{Cs}]+/gu;
+/** Control and format characters (bidirectional overrides among them), line and paragraph separators, lone surrogates. */
+const UNPRINTABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]+/gu;
 
 export const newsDirectory = (store, home = homedir()) => join(manifestDirectory(home, store.settings?.manifestDir), 'news');
 

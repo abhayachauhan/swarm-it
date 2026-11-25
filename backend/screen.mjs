@@ -1,15 +1,19 @@
 // What a captured agent pane is showing. Used before typing into a pane or closing it, and for worker news.
 import { parsePrompt, parseCodexPrompt } from './notify.mjs';
 
-const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
+export const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 const RULE = /^\s*[─━]{20,}\s*$/;
 const INPUT = /^\s*❯(?:\s|$)/;
 const MENU_OPTION = /^\s*❯\s*\d+[.)]\s/;
 const QUESTION_FOOTER = /Enter to select.*Esc to cancel/i;
 const WORKING = /(?:esc|ctrl\+c) to interrupt/i;
 const BACKGROUND = /\bWaiting for \d+ background|\b\d+ background (?:agent|task)s? (?:running|still)/i;
-/** `max@mac repo % `, `❯ `, `~$ `. A status line such as `Context left: 45%` does not match. */
-const SHELL_PROMPT = /(?:(?:^|\s)[%$#❯➜]|[~\]:][$#])\s*$/u;
+/** Common shell prompts. A line such as `Context left: 45%` does not match. */
+const SHELL_PROMPTS = [
+    /(?:(?:^|\s)[%$#❯➜]|[~\]:][$#])\s*$/u, // `max@mac repo % `, `❯ `, `~$ `
+    /^➜\s/u, // `➜  repo git:(main) ✗`
+    /^(?:\S+@\S+[: ].*[$#>]|[^\s:]+:\S* \S+[$#]|(?:ba|z)?sh-[\d.]+[$#])\s*$/u // `user@host:~/repo$`, `host:repo user$`, `bash-5.2$`, fish
+];
 
 const filled = text => String(text ?? '').replace(ANSI, '').split('\n').filter(line => line.trim());
 
@@ -30,12 +34,15 @@ function inputBox(lines) {
  */
 export const showsClaudeInput = text => inputBox(filled(text)) !== null;
 
-/** Does the capture end at a shell prompt (including one printed under the input box a killed Claude left behind)? */
+/**
+ * Does the capture end at a shell prompt? Under an input box only an unindented line counts: that is a prompt printed
+ * after a killed Claude, while Claude's own status lines are indented and may end in a prompt character.
+ */
 export function showsShellPrompt(text) {
     const lines = filled(text);
     const close = inputBox(lines);
-    const below = close === null ? lines.slice(-1) : lines.slice(close + 1);
-    return below.some(line => SHELL_PROMPT.test(line));
+    const candidates = close === null ? lines.slice(-1) : lines.slice(close + 1).filter(line => /^\S/.test(line));
+    return candidates.some(line => SHELL_PROMPTS.some(prompt => prompt.test(line)));
 }
 
 /** The question of an open question menu (Claude's AskUserQuestion and the like); null when none is showing. */

@@ -1,7 +1,7 @@
 // Worker news: one JSON line per real event in <manifestDir>/news/<pane-id>.jsonl, for swarm workers only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, lstatSync, mkdirSync,mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeSwarmApi, MANIFEST, PROMPT_TEXT } from './backend-fake-api.mjs';
@@ -73,7 +73,22 @@ test('a request that auto-approve answers at once is not reported as blocked', a
     api.captureStore.w1 = PROMPT_TEXT.replace('rm -rf node_modules && npm ci', 'npm test');
     await until(() => api.callsTo('terminal.sendKey').length > 0, 'the approval');
     await settle();
-    assert.deepEqual(lines('w1').filter(l => l.kind === 'blocked'), []);
+    // The error is written, so the writer works: it is only the approved request that is missing.
+    await api.agentEvent(ev('error', 'w1', { message: 'boom' }));
+    await until(() => lines('w1').length > 0, 'the error line');
+    assert.deepEqual(lines('w1').map(l => [l.kind, l.text]), [['error', 'boom']]);
+    dispose();
+});
+
+test('a menu drawn before its question line is one question', async () => {
+    const footer = 'Enter to select · ↑/↓ to navigate · Esc to cancel';
+    const { api, dispose, lines } = await start({ captures: { w1: footer } });
+    await until(() => lines('w1').length > 0, 'a news line');
+    api.captureStore.w1 = QUESTION;
+    await settle();
+    api.captureStore.w1 = footer;
+    await settle();
+    assert.deepEqual(lines('w1').map(l => l.text), ['a question is waiting in its pane']);
     dispose();
 });
 
@@ -175,6 +190,10 @@ test('no news for the coordinator or a pane outside any swarm', async () => {
     await removePane(api, 'orch');
     await settle();
     assert.deepEqual(written(), []);
+    // A worker's event in the same run is written, so the writer was working all along.
+    await api.agentEvent(ev('error', 'w1', { message: 'boom' }));
+    await until(() => written().length > 0, 'the worker\'s line');
+    assert.deepEqual(written(), ['w1.jsonl']);
     dispose();
 });
 
@@ -244,6 +263,7 @@ test('text is one plain line of at most 200 characters', async () => {
     assert.ok(text.startsWith('first second third fourth 😀'), text);
     assert.ok(text.length <= MAX_TEXT_CHARS, String(text.length));
     assert.ok(!/[\p{Cc}\p{Zl}\p{Cs}]/u.test(text));
+    assert.equal(plainText('run ‮evil​ now'), 'run evil now');
     assert.equal(plainText('x'.repeat(500)).length, MAX_TEXT_CHARS);
 });
 
@@ -287,6 +307,16 @@ test('news is never written through a symlink at the file or at the news directo
     symlinkSync(elsewhere, join(linked.dir, 'news'));
     assert.equal(await writeNews(linked.store, 'w1', 'turn-done', 'x'), false);
     assert.deepEqual(readdirSync(elsewhere), []);
+    assert.equal(linked.store.placementCounts.get('news.write-failed'), 1);
+
+    const hard = direct();
+    const target = join(hard.dir, 'victim');
+    writeFileSync(target, 'keep');
+    mkdirSync(join(hard.dir, 'news'));
+    linkSync(target, hard.file);
+    assert.equal(await writeNews(hard.store, 'w1', 'turn-done', 'x'), true);
+    assert.equal(readFileSync(target, 'utf8'), 'keep');
+    assert.equal(hard.lines().length, 1);
 });
 
 test('a pane id that could leave the news directory is refused', async () => {

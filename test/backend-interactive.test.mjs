@@ -150,22 +150,30 @@ test('send restarts the conversation only once the agent has exited and a shell 
     assert.match(sends(api)[0][1], new RegExp(`^claude -p --resume ${SESSION} `));
 });
 
-for (const [name, options, code] of [
+const REFUSALS = {
+    BUSY: 'the worker is in the middle of a turn; nothing was sent. Wait for it to finish',
+    PROMPT_OPEN: 'the worker pane shows a permission prompt or question, or cannot be read; nothing was typed. Answer it in the pane',
+    CODEX_PROMPT: 'the worker is waiting on a prompt or question; nothing was sent. Answer it in the pane',
+    NOT_AT_CLAUDE: 'the worker pane does not show Claude\'s input box; nothing was typed. Answer it in the pane'
+};
+
+for (const [name, options, code, error = REFUSALS[code]] of [
     ['mid-turn', { status: 'running' }, 'BUSY'],
     ['working while Kelpi says waiting', { screen: WORKING_BOX, status: 'waitingForInput' }, 'BUSY'],
     ['mid-turn on a screen with no input box', { screen: DIALOG, status: 'running' }, 'BUSY'],
+    ['mid-turn under a status line ending in a prompt character', { screen: `${IDLE_BOX}\n  ~/repo main ❯`, status: 'running' }, 'BUSY'],
     ['waiting on a permission prompt', { screen: PROMPT_TEXT, status: 'waitingForInput' }, 'PROMPT_OPEN'],
     ['waiting on a question menu', { screen: QUESTION, status: 'waitingForInput' }, 'PROMPT_OPEN'],
     ['alive at some other dialog', { screen: DIALOG, status: 'waitingForInput' }, 'NOT_AT_CLAUDE'],
+    ['at a dialog while Kelpi reports no session', { screen: DIALOG, session: null }, 'NOT_AT_CLAUDE'],
+    ['at a screen ending in a percentage', { screen: `${DIALOG}\nContext left: 45%`, session: null }, 'NOT_AT_CLAUDE'],
     ['a Codex mid-turn', { agent: 'codex', status: 'running', screen: CODEX_IDLE }, 'BUSY'],
-    ['a Codex waiting on a question menu', { agent: 'codex', status: 'waitingForInput', screen: QUESTION }, 'PROMPT_OPEN']
+    ['a Codex waiting on a question menu', { agent: 'codex', status: 'waitingForInput', screen: QUESTION }, 'PROMPT_OPEN', REFUSALS.CODEX_PROMPT]
 ]) {
     test(`send is refused for a worker ${name}: nothing is typed`, async () => {
         const { api, store } = setup(options);
         store.sessions.set('w1', SESSION);
-        const sent = await sendToWorker(api, store, 'w1', 'hello');
-        assert.equal(sent.ok, false);
-        assert.equal(sent.code, code);
+        assert.deepEqual(await sendToWorker(api, store, 'w1', 'hello'), { ok: false, error, code });
         assert.deepEqual(sends(api), []);
         assert.equal(store.resultExists.get('w1'), true);
         assert.equal(store.restarts.has('w1'), false);
@@ -179,10 +187,47 @@ test('a killed Claude that left its input box above a shell prompt gets the rest
     assert.match(sends(api)[0][1], /^claude -p --resume /);
 });
 
-test('a status line ending in a percentage is not read as a shell prompt', async () => {
-    const { api, store } = setup({ screen: `${IDLE_BOX}\n  Context left: 45%` });
-    assert.deepEqual(await sendToWorker(api, store, 'w1', 'hello'), { ok: true, paneID: 'w1' });
+test('an indented status line ending in a prompt character is not read as a shell prompt', async () => {
+    for (const line of ['  Context left: 45%', '  ~/repo main ❯', '  cost $']) {
+        const { api, store } = setup({ screen: `${IDLE_BOX}\n${line}` });
+        assert.deepEqual(await sendToWorker(api, store, 'w1', 'hello'), { ok: true, paneID: 'w1' }, line);
+    }
 });
+
+test('common shell prompts are recognised, so an exited worker can be restarted', async () => {
+    for (const prompt of ['➜  repo git:(main) ✗', 'max@box:~/repo$', 'mac:repo max$', 'bash-5.2$', 'max@box ~/repo>', '❯']) {
+        const { api, store } = setup({ screen: `⏺ Done.\n${prompt}`, session: null });
+        store.sessions.set('w1', SESSION);
+        assert.equal((await sendToWorker(api, store, 'w1', 'again')).restarted, true, prompt);
+    }
+});
+
+test('a follow-up is bound to the screen it was checked against', async () => {
+    const { api, store } = setup();
+    const typed = [];
+    api.terminal.read = async () => ({ text: IDLE_BOX, revision: 7 });
+    api.terminal.send = async (...args) => { typed.push(args); };
+    assert.deepEqual(await sendToWorker(api, store, 'w1', 'hello'), { ok: true, paneID: 'w1' });
+    assert.deepEqual(typed, [['w1', 'hello', { ifRevision: 7 }]]);
+});
+
+for (const [name, change, expected] of [
+    ['a prompt opened after the check', api => { api.terminal.read = async () => ({ text: PROMPT_TEXT, revision: 8 }); },
+        { ok: false, error: 'the worker pane changed before the text was typed; nothing was sent. Try again', code: 'BUSY' }],
+    ['the host refuses a stale revision', api => {
+        api.terminal.read = async () => ({ text: IDLE_BOX, revision: 7 });
+        api.terminal.send = async () => { throw new Error('revision changed'); };
+    }, { ok: false, error: 'send failed: revision changed', code: 'SEND_FAILED' }]
+]) {
+    test(`a follow-up is not typed when ${name}`, async () => {
+        const { api, store } = setup();
+        change(api);
+        store.doneSince.set('w1', 5);
+        assert.deepEqual(await sendToWorker(api, store, 'w1', 'hello'), expected);
+        assert.deepEqual(sends(api), []);
+        assert.equal(store.doneSince.get('w1'), 5);
+    });
+}
 
 test('the Send button offers a restart only when the finished worker\'s agent has exited', () => {
     assert.equal(availableActions({ state: 'done', agent: 'claude', live: true }).sendLabel, 'Send');

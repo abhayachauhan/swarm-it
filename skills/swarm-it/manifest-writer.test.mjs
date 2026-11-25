@@ -225,6 +225,20 @@ test('prune removes the news, .seen and reported files of closed panes, keeping 
   assert.deepEqual(fs.readdirSync(reported).sort(), ['alive.closed', 'alive.exit', 'justnow.closed', 'notes.txt'])
 })
 
+test('prune keeps the news and reported files of a closed worker that a manifest still lists', () => {
+  const d = tmpDir()
+  swarm(d, 'live', 'orch', [['stopped', null]])
+  for (const [sub, name] of [['news', 'stopped.jsonl'], ['news', 'stopped.seen'], ['reported', 'stopped.closed']]) {
+    fs.mkdirSync(path.join(d, sub), { recursive: true })
+    fs.writeFileSync(path.join(d, sub, name), 'x\n')
+  }
+  const r = prune(d, [{ id: 'orch', workspace_id: 'live' }], '--fresh-ms', '0')
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(JSON.parse(run(d, 'show', 'live').stdout).workers.map((w) => w.paneID), ['stopped'])
+  assert.deepEqual(fs.readdirSync(path.join(d, 'news')).sort(), ['stopped.jsonl', 'stopped.seen'])
+  assert.deepEqual(fs.readdirSync(path.join(d, 'reported')), ['stopped.closed'])
+})
+
 test('prune never deletes through a symlinked news or reported directory, nor the target of a symlinked file', () => {
   const d = tmpDir()
   swarm(d, 'live', 'orch', [])

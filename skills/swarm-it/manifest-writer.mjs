@@ -258,8 +258,13 @@ switch (cmd) {
       try { fs.unlinkSync(path.join(d, 'exits', name)); out.removedExits.push(pane) } catch {}
     }
     // The plugin's news/<pane-id>.jsonl files, and what swarm-wait keeps beside them (.seen) and in reported/, for closed
-    // panes. A file written a moment ago stays for now: swarm-wait may not have read the last line yet. A news .seen is
-    // as fresh as its .jsonl. A symlinked directory is left alone.
+    // panes that no manifest lists any more: swarm-wait still reads a listed worker's. A file written a moment ago stays
+    // for now, a news .seen being as fresh as its .jsonl. A symlinked directory is left alone.
+    const listed = new Set()
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      try { for (const w of JSON.parse(fs.readFileSync(path.join(d, name), 'utf8')).workers) listed.add(w.paneID) } catch {}
+    }
     for (const [sub, pattern, timedBy, key] of [
       ['news', /^(.+)\.(?:jsonl|seen)$/, (pane) => `${pane}.jsonl`, 'removedNews'],
       ['reported', /^(.+)\.(?:exit|closed)$/, (pane, name) => name, 'removedReported'],
@@ -269,7 +274,7 @@ switch (cmd) {
       try { if (fs.lstatSync(folder).isDirectory()) files = fs.readdirSync(folder) } catch {}
       for (const name of files.sort()) {
         const pane = pattern.exec(name)?.[1]
-        if (pane === undefined || !ID_RE.test(pane) || live.has(pane)) continue
+        if (pane === undefined || !ID_RE.test(pane) || live.has(pane) || listed.has(pane)) continue
         try { if (Date.now() - fs.lstatSync(path.join(folder, timedBy(pane, name))).mtimeMs < FRESH_MS) continue } catch {}
         try {
           fs.unlinkSync(path.join(folder, name))
