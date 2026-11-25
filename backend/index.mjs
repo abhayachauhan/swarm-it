@@ -23,6 +23,7 @@ import * as restart from './restart.mjs';
 import * as workers from './workers.mjs';
 import * as exits from './exits.mjs';
 import * as handoff from './handoff.mjs';
+import { createPrWatch } from './pr-watch.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 
 export const PLUGIN_ID = 'local.swarm-view';
@@ -30,9 +31,11 @@ export const COMMANDS = [
     'get-workspace-brief', 'edit-workspace-brief', 'open-workspace-brief', 'focus-rail', 'get-state', 'open-thread', 'read-result', 'approve', 'deny',
     'trust-folder', 'locate-codex-pane', 'load-codex-questions', 'answer-codex-question', 'archive', 'close-worker', 'accept', 'send-to-worker', 'open-result', 'open-web-link',
     'auto-approve', 'auto-approve-log', 'dismiss-worker', 'close-thread', 'clear-done', 'clean-completed', 'update-agents', 'dock-agents',
-    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff', 'fresh-session', 'agent-appearance'
+    'run-suggested', 'copy-suggested', 'run-suggested-confirm', 'close-run-view', 'restart-claude', 'handoff', 'request-handoff', 'fresh-session', 'agent-appearance',
+    'pr-inbox'
 ].map(name => `${PLUGIN_ID}.${name}`);
 export const COUNTS_ITEM = `${PLUGIN_ID}.counts`;
+export const PRS_ITEM = `${PLUGIN_ID}.prs`;
 export const SNAPSHOT_EVENT = 'snapshot';
 export const RAIL_VIEW = `${PLUGIN_ID}.rail`;
 export const THREAD_VIEW = `${PLUGIN_ID}.thread`;
@@ -118,6 +121,9 @@ export function registerAll(api, deps = modules) {
         } });
 
     const maintenance = createAgentMaintenance(api, st, RS.restartAgent);
+    // Off unless `prWatchEnabled` is set. Its checks run outside `serial`: they wait on GitHub and Slack.
+    const prWatch = (deps.createPrWatch ?? createPrWatch)({ api, settings: () => st.settings, itemID: PRS_ITEM });
+    disposers.push(() => prWatch.dispose());
 
     function snapshotNow() {
         const snapshot = S.buildSnapshot(st, Date.now());
@@ -842,7 +848,13 @@ export function registerAll(api, deps = modules) {
     };
     listen('state.changed', onStateChanged);
     listen('daemon.notification', onNotification);
-    listen('settings.changed', async () => { await loadSettings(); await settle({ publishAlways: true }); });
+    listen('settings.changed', async () => { await loadSettings(); void prWatch.settingsChanged(); await settle({ publishAlways: true }); });
+    // Started here and from the event above, never from a command (see pr-watch.mjs).
+    void ready.then(() => prWatch.settingsChanged());
+    disposers.push(api.commands.register(`${PLUGIN_ID}.pr-inbox`, async (args, context) => {
+        await ready;
+        return prWatch.inbox(args ?? {}, context ?? {});
+    }));
 
     async function onAgentEvent(event) {
         if (!await E.onAgentEvent(st, event, Date.now())) return;

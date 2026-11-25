@@ -39,6 +39,12 @@ Conversational transfers use the source session ID when known. When no ID is ava
 - **Restart Claude/Codex:** detect the CLI in the pane, quit it, and resume the same conversation after changing hooks, settings, or MCP servers. Codex reports its current session through `/status`, so restart works even when its session hook was missed. Wait for it to finish and clear any draft before restarting.
 - **Review and retry:** keep implementation and review in separate workers; `swarm-retry` restarts a dead worker from its saved task and settings when possible.
 
+## PR watch
+
+Off by default. When on, a review request from GitHub or Slack starts a review worker, with fixed rules and
+daily limits, and the `PRs` status bar item lists requests and your own open pull requests. See
+[PR watch](pr-watch.md).
+
 ## Files and scope
 
 - Manifests: `~/.kelpi-swarm/<workspace-id>.json` by default.
