@@ -3,7 +3,8 @@
 # Start a dead worker again through swarm-spawn, with the agent, label, task file, mode, model, effort
 # and directory recorded in the manifest. Prints <pane-id>:<label> of the new pane, ready for swarm-wait.
 # --parent-session is passed through so the new worker messages the coordinator (see swarm-spawn).
-# The old result is archived by swarm-spawn. Refuses while the old pane still runs Claude.
+# The old result is archived by swarm-spawn. Refuses while the old pane still runs its agent: a live worker
+# takes follow-ups through swarm-send.
 set -euo pipefail
 
 usage() { echo "usage: swarm-retry <pane-id>:<label> [--model sonnet] [--effort high] [--parent-session name]" >&2; exit 1; }
@@ -49,7 +50,7 @@ effort=$(jq -r '.effort // empty' <<<"$rec")
 
 # A worker whose Claude still runs would be started twice: Kelpi reports it as running, waiting, or holding a session.
 if [ "$(jq -r --arg p "$pane" '[.[] | select(.id == $p and (.status == "running" or .status == "waitingForInput" or ((.agent_session_id // "") != "")))] | length' <<<"$panes")" != 0 ]; then
-  bad "worker $label still runs ${agent^} in pane $pane; close it first or wait for it"
+  bad "worker $label still runs ${agent^} in pane $pane; send it a follow-up with swarm-send $pane:$label <task-file>, or close it first (kelpi pane close --target $pane)"
 fi
 
 [[ -z $mode || $mode =~ ^[A-Za-z-]+$ ]] || bad "recorded mode must be a plain word"

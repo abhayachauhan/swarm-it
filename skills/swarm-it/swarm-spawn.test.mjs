@@ -98,7 +98,7 @@ test('a Codex worker uses its sandbox and records its agent without a Claude mod
   assert.equal(status, 0, stderr)
   const send = calls.find(c => c.startsWith('pane send'))
   assert.ok(send.includes(`codex --sandbox workspace-write --add-dir ${s.home}/.kelpi-swarm/results --ask-for-approval on-request`), send)
-  assert.ok(!send.includes('claude -p') && !send.includes('--model sonnet'), send)
+  assert.ok(!send.includes('claude --') && !send.includes('--model sonnet'), send)
   const worker = JSON.parse(fs.readFileSync(path.join(s.home, '.kelpi-swarm', 'WS.json'), 'utf8')).workers[0]
   assert.deepEqual([worker.agent, worker.model, worker.mode], ['codex', null, 'on-request'])
   assert.equal(worker.effort, null)
@@ -117,8 +117,20 @@ test('--effort reaches Codex as model_reasoning_effort and Claude as --effort, a
   const claude = spawn(s, ['fix', s.task, '--effort', 'low', '--path', s.home])
   assert.equal(claude.status, 0, claude.stderr)
   const claudeSend = claude.calls.filter(c => c.startsWith('pane send')).at(-1)
-  assert.ok(claudeSend.includes('claude -p --permission-mode auto --model sonnet --effort low "Do the task'), claudeSend)
+  assert.ok(claudeSend.includes('claude --permission-mode auto --model sonnet --effort low "Do the task'), claudeSend)
   assert.deepEqual([worker().label, worker().effort], ['fix', 'low'])
+})
+
+test('a Claude worker starts interactively, with no -p or --print, and is told it stays open for follow-ups', () => {
+  const s = stub([{ id: 'WS', name: 'Warm pool' }])
+  const out = spawn(s, ['w1', s.task, '--path', s.home])
+  assert.equal(out.status, 0, out.stderr)
+  const typed = out.typed.find(c => c.startsWith('pane send'))
+  assert.match(typed, /^pane send --target CREATED cd \S+ && claude --permission-mode auto --model sonnet "\$\(cat '[^']+'\)"$/)
+  assert.doesNotMatch(typed, / (-p|--print) /)
+  const send = out.calls.find(c => c.startsWith('pane send'))
+  assert.ok(send.includes('You stay open after writing the result and may be sent follow-up tasks in this session, so do not exit'), send)
+  assert.ok(send.includes('Each time you finish a task, write the final done line last, after the result file.'), send)
 })
 
 test('--parent-session tells a Claude worker to message that session, and is left out otherwise', () => {
@@ -185,7 +197,7 @@ test('every worker, Claude and Codex, is told to keep a heartbeat in results/<la
     const file = `${s.home}/.kelpi-swarm/results/${label}.status`
     assert.ok(send.includes(`Keep a heartbeat in ${file}: append one line per state change`), `${agent}: ${send}`)
     assert.ok(send.includes(`>> ${file}.`), `${agent} is given the exact append command: ${send}`)
-    assert.ok(send.includes('a working: line at least every 15 minutes') && send.includes('Write the final done line last, after the result file.'), `${agent}: ${send}`)
+    assert.ok(send.includes('a working: line at least every 15 minutes') && send.includes('write the final done line last, after the result file.'), `${agent}: ${send}`)
     assert.ok(send.endsWith('Reply done."'), send)
     assert.match(fs.readFileSync(file, 'utf8'), /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ spawned\n$/, agent)
   }
