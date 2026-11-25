@@ -1,7 +1,10 @@
 // Each worker lives in a child workspace. Manifests determine swarm membership.
 import { handleItem } from './attention.mjs';
 import { worktreeProblem } from './actions.mjs';
-import { persist, deriveState, paneClosed, updateWorkspaceParents } from './store.mjs';
+import { persist, deriveState, paneClosed, updateWorkspaceParents, capturePane, agentMayBeLive } from './store.mjs';
+import { PROMPT_CAPTURE_LINES } from './notify.mjs';
+import { codexInput } from './codex-session.mjs';
+import { asksPerson, showsClaudeInput, showsShellPrompt, showsWorking } from './screen.mjs';
 
 export const WORKERS_NAME = 'Workers';
 /** Before the shared workspace, each swarm had its own `<name> · workers`. Still recognised so old workers move across. */
@@ -161,14 +164,36 @@ export function claimedElsewhere(store, paneID, ownWorkspaceID) {
 }
 
 /**
+ * A last, fresh look before closing an open pane: why it is not idle, or null. An interactive worker stays alive after
+ * its result, and the cached status can say "done" while it works after an approval or waits on a person.
+ */
+export async function notIdle(api, store, paneID) {
+    let pane = null;
+    try { pane = (await api.panes.list()).find(p => p?.id === paneID) ?? null; } catch { /* use the last state change */ }
+    pane ??= store.panes.get(paneID);
+    if (pane?.status === 'running') return 'mid-turn';
+    // A card left behind by an agent that has since exited holds nothing open.
+    if (agentMayBeLive(pane) && store.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt)) return 'waiting on a person';
+    let screen;
+    try { screen = await capturePane(api, paneID, PROMPT_CAPTURE_LINES); } catch { return 'its screen cannot be read'; }
+    if (asksPerson(screen)) return 'waiting on a person';
+    const shell = showsShellPrompt(screen);
+    if (!shell && showsWorking(screen)) return 'mid-turn';
+    // A live agent must be seen at its input box; any other screen may be a dialog waiting for an answer.
+    if (pane?.agentSessionID && !shell && !showsClaudeInput(screen) && codexInput(screen) === null) return 'not at its input box';
+    return null;
+}
+
+/**
  * Close finished workers once they have been finished for `autoCleanMinutes` (0 turns it off). `candidates` are manifest
- * workers an ownership gate already accepts. A worker counts as finished when its result exists and its agent stopped,
- * or its pane is closed. Errored workers with an open pane are left for the user. A worker whose worktree is dirty, or
- * whose git status is unknown, is kept and tried again after another delay.
- * @returns {Promise<{ cleaned: string[], kept: { paneID: string, label: string, error: string }[] }>}
+ * workers an ownership gate already accepts. A worker counts as finished when its pane is closed, or its result exists
+ * and it is idle: not mid-turn and not waiting on a person, whether or not its agent is still running. Errored workers
+ * with an open pane are left for the user. A worker that turns out busy, or whose worktree is dirty or of unknown git
+ * status, is kept and tried again after another delay.
+ * @returns {Promise<{ cleaned: string[], kept: { paneID: string, label: string, error: string }[], busy: { paneID: string, reason: string }[] }>}
  */
 export async function autoClean(api, store, candidates, now) {
-    const result = { cleaned: [], kept: [] };
+    const result = { cleaned: [], kept: [], busy: [] };
     const raw = Number(store.settings?.autoCleanMinutes ?? DEFAULT_CLEAN_MINUTES);
     const delay = (Number.isFinite(raw) ? raw : DEFAULT_CLEAN_MINUTES) * 60000;
     if (!(delay > 0)) { store.doneSince.clear(); return result; }
@@ -188,6 +213,13 @@ export async function autoClean(api, store, candidates, now) {
             closes += 1;
             const problem = await worktreeProblem(api, w);
             if (problem) { store.doneSince.set(id, now); result.kept.push({ paneID: id, label: w.label, error: problem.error }); continue; }
+            const reason = await notIdle(api, store, id);
+            if (reason) {
+                store.doneSince.set(id, now);
+                result.busy.push({ paneID: id, reason });
+                recordPlacement(store, 'autoclean-busy', { paneID: id, reason });
+                continue;
+            }
         }
         store.archived.add(id);
         if (open) {

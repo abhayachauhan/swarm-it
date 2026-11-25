@@ -21,6 +21,9 @@ import * as suggested from './suggested.mjs';
 import * as restart from './restart.mjs';
 import * as workers from './workers.mjs';
 import * as exits from './exits.mjs';
+import { createWorkerNews } from './news-events.mjs';
+import { newsWorker } from './news.mjs';
+import { questionMenu } from './screen.mjs';
 import * as handoff from './handoff.mjs';
 import { withTimeout, READ_TIMEOUT_MS } from './safepath.mjs';
 
@@ -100,6 +103,9 @@ export function registerAll(api, deps = modules) {
         queue = run.catch(() => {});
         return run;
     };
+    const news = createWorkerNews(api, st, { serial });
+    att.onAdded = item => news.onItem(item);
+    disposers.push(() => news.dispose());
 
     const emit = (name, data) => (typeof api.emit === 'function' ? api.emit(name, data) : api.events.emit(name, data));
 
@@ -558,6 +564,8 @@ export function registerAll(api, deps = modules) {
         // A closed pane is remembered across reloads (store.gone is persisted) so its worker keeps reading as closed.
         // So is a pane's Claude session id: Kelpi forgets it when Claude exits, and send-to-worker resumes it.
         if (removed.size || st.sessionsDirty) { try { await S.persist(st); } catch { /* kept in memory */ } }
+        // Before the cards settle, so a closed worker reads as exited and not also as an error.
+        if (removed.size) await news.onPaneRemoved([...removed]);
         // A pane with an open Request, in any swarm: publish so its card updates, and settle the card when the pane closed.
         for (const item of st.attention.filter(i => i.type === 'Request' && !i.handledAt && touched.has(i.paneID))) {
             relevant = true;
@@ -599,12 +607,16 @@ export function registerAll(api, deps = modules) {
         if (disposed) return;
         let changed = false;
         const displayRead = new Set();
+        /** Pane id to the question menu seen on its screen in this scan, or null. */
+        const menus = new Map();
         const noteDisplayPrompt = (paneID, screen) => {
             if (disposed) return;
             displayRead.add(paneID);
-            const tail = screen.split('\n').filter(line => line.trim()).slice(-5);
-            const waiting = !!(N.parseCodexPrompt(screen) || N.parsePrompt(screen))
-                || tail.some(line => /Enter to select.*Esc to cancel/i.test(line));
+            const prompt = !!(N.parseCodexPrompt(screen) || N.parsePrompt(screen));
+            const question = prompt ? null : questionMenu(screen);
+            // A question menu raises no card, so worker news learns about it here.
+            menus.set(paneID, question);
+            const waiting = prompt || question !== null;
             if (waiting === st.displayPrompts.has(paneID)) return;
             if (waiting) st.displayPrompts.add(paneID); else st.displayPrompts.delete(paneID);
             changed = true;
@@ -668,8 +680,10 @@ export function registerAll(api, deps = modules) {
             st.unparsed.set(paneID, { misses, label: worker.label, swarmName: swarm?.name ?? null, swarmWorkspaceID: swarm?.workspaceID ?? null });
             return !shownBefore && misses >= S.UNPARSED_SCANS;
         }
+        // A done worker whose agent is still alive can be given another turn and ask something: it is scanned too.
+        const finishedForGood = (paneID, state) => state === 'done' && !S.agentMayBeLive(st.panes.get(paneID));
         for (const w of S.currentWorkers(st, Date.now())) {
-            if (w.archived || w.state === 'done' || !st.panes.has(w.paneID)) continue;
+            if (w.archived || finishedForGood(w.paneID, w.state) || !st.panes.has(w.paneID)) continue;
             const worker = st.manifestWorkers.find(m => m.paneID === w.paneID);
             await scanWorker(w.paneID, worker ? { worker, swarm: null } : null);
         }
@@ -680,13 +694,13 @@ export function registerAll(api, deps = modules) {
             for (const w of swarm.workers) {
                 if (followed.has(w.paneID) || st.archived.has(w.paneID) || st.accepted.has(w.paneID)) continue;
                 if (!S.otherSwarmPane(st, w.paneID)) continue;
-                // A finished worker (its result file exists) is not scanned; existence is sticky, so a done one costs nothing.
+                // A worker that finished and exited is not scanned; result existence is sticky, so it costs nothing.
                 if (st.resultExists.get(w.paneID) !== true) {
                     await S.refreshResult(st, w);
                     // The other-swarms summary counts it as done now.
                     if (st.resultExists.get(w.paneID) === true) changed = true;
                 }
-                if (S.deriveState(st, w) === 'done') continue;
+                if (finishedForGood(w.paneID, S.deriveState(st, w))) continue;
                 await scanWorker(w.paneID, { worker: w, swarm });
             }
         }
@@ -729,6 +743,7 @@ export function registerAll(api, deps = modules) {
             }));
         }
         if (disposed) return;
+        for (const [paneID, question] of menus) await news.onScreen(paneID, question);
         for (const paneID of st.displayPrompts) if (!st.panes.has(paneID)) { st.displayPrompts.delete(paneID); changed = true; }
         for (const orch of orchestrators) {
             const orchOpen = orch && st.panes.has(orch) ? st.attention.filter(i => i.paneID === orch && i.type === 'Request' && !i.handledAt) : [];
@@ -801,7 +816,16 @@ export function registerAll(api, deps = modules) {
     listen('settings.changed', async () => { await loadSettings(); await settle({ publishAlways: true }); });
 
     async function onAgentEvent(event) {
-        if (!await E.onAgentEvent(st, event, Date.now())) return;
+        const paneID = event?.paneID;
+        // A worker spawned moments ago may not be in the manifests read so far.
+        if (['stop', 'error', 'session-end'].includes(event?.type) && !newsWorker(st, paneID) && Date.now() - swarmsReadAt > MANIFEST_RELOAD_MS) {
+            await loadSwarms({ force: true });
+        }
+        // A turn starting or ending restarts the auto-clean delay.
+        if (event?.type === 'start' || event?.type === 'stop') st.doneSince.delete(paneID);
+        const changed = await E.onAgentEvent(st, event, Date.now());
+        await news.onAgentEvent(event);
+        if (!changed) return;
         try { await S.persist(st); } catch { /* kept in memory */ }
         await publish();
     }

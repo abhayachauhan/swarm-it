@@ -7,7 +7,7 @@ import { lastLineOf, refreshResult } from './store.mjs';
 import { manifestDirectory } from './manifest.mjs';
 
 const LINE_CAP = 200;
-const PANE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/;
+export const PANE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/;
 const USAGE_LIMIT = /usage limit|hit your (?:\w+ )?limit|out of (?:extra )?usage|credit balance|limit (?:reached|will reset|resets)/i;
 const RATE_LIMIT = /rate limit|too many requests|\b429\b/i;
 

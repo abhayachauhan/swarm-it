@@ -347,10 +347,20 @@ export async function refreshResult(store, worker) {
 }
 
 /**
+ * Is an agent still running in the pane, so that it can start another turn or ask something? Kelpi clears a Claude
+ * session id when it exits; Codex has no end hook, so a waiting Codex pane counts too.
+ */
+export const agentMayBeLive = pane => !!pane?.agentSessionID || ((pane?.agent ?? pane?.agentKind) === 'codex' && pane.status === 'waitingForInput');
+
+const waitsOnPerson = (store, paneID) => store.displayPrompts.has(paneID)
+    || store.attention.some(i => i.paneID === paneID && i.type === 'Request' && !i.handledAt);
+
+/**
  * Derive a worker state from pane status, agent info and result-file existence.
  * - pane closed: done if the result file exists, else error
  * - reported error and not running again: error
- * - result file exists and the agent is not running: done
+ * - result file exists and the agent is not running: done, also when the agent stays alive at its prompt
+ * - result file exists but the live agent shows a prompt or question, or has an open Request: waiting
  * - running: running; waitingForInput: waiting
  * - idle: running until the pane has been seen running once (just started), then waiting
  */
@@ -362,7 +372,7 @@ export function deriveState(store, worker) {
     // Restarted on its own conversation and the new result has not landed yet.
     if (store.restarts.has(worker.paneID)) return pane.status === 'waitingForInput' ? 'waiting' : 'running';
     if (store.errored.has(worker.paneID)) return 'error';
-    if (hasResult) return 'done';
+    if (hasResult) return agentMayBeLive(pane) && waitsOnPerson(store, worker.paneID) ? 'waiting' : 'done';
     // Claude exited with no result: the user must look at it, so it counts as waiting.
     if (store.exits.has(worker.paneID) || pane.status === 'waitingForInput') return 'waiting';
     return store.seenRunning.has(worker.paneID) ? 'waiting' : 'running';
@@ -386,6 +396,7 @@ export function currentWorkers(store, now) {
             state,
             activity: pane?.status === 'idle' ? 'idle' : state,
             ...(exit && state === 'waiting' ? { stopped: { reason: exit.reason } } : {}),
+            ...(agentMayBeLive(pane) ? { live: true } : {}),
             elapsedSeconds: Number.isNaN(first) ? 0 : Math.max(0, Math.floor((nowMs - first) / 1000)),
             lastLine: store.lastLines.get(mw.paneID) ?? '',
             resultPath: mw.resultPath ?? null,
