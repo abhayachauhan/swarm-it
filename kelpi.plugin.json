@@ -74,7 +74,8 @@
       { "id": "local.swarm-view.copy-suggested", "title": "Copy fixed command" },
       { "id": "local.swarm-view.run-suggested-confirm", "title": "Swarm: run a confirmed suggested command" },
       { "id": "local.swarm-view.close-run-view", "title": "Swarm: close the run suggested command view" },
-      { "id": "local.swarm-view.restart-claude", "title": "Restart Claude/Codex (quit and resume)", "icon": "restart" }
+      { "id": "local.swarm-view.restart-claude", "title": "Restart Claude/Codex (quit and resume)", "icon": "restart" },
+      { "id": "local.swarm-view.pr-inbox", "title": "PRs: show review requests and your open PRs" }
     ],
     "providers": [
       { "id": "local.swarm-view.permissions", "title": "Swarm auto-approve: allow safe Claude and Codex permission requests while Auto is on", "service": "kelpi.agent.permissions", "version": 1, "methods": ["decide"] }
@@ -82,7 +83,8 @@
     "items": [
       { "id": "local.swarm-view.clean", "placement": "statusbar", "text": "Clean", "tooltip": "Close finished swarm workers", "tone": "default", "command": "local.swarm-view.clean-completed" },
       { "id": "local.swarm-view.update", "placement": "statusbar", "text": "Update", "tooltip": "Update idle Claude and Codex sessions", "tone": "default", "command": "local.swarm-view.update-agents" },
-      { "id": "local.swarm-view.counts", "placement": "statusbar", "text": "Swarm 0/0/0", "tooltip": "Swarm: waiting / running / finished", "tone": "default", "command": "local.swarm-view.focus-rail" }
+      { "id": "local.swarm-view.counts", "placement": "statusbar", "text": "Swarm 0/0/0", "tooltip": "Swarm: waiting / running / finished", "tone": "default", "command": "local.swarm-view.focus-rail" },
+      { "id": "local.swarm-view.prs", "placement": "statusbar", "text": "PRs", "tooltip": "PR watch: review requests and your open PRs", "tone": "default", "command": "local.swarm-view.pr-inbox" }
     ],
     "settings": {
       "agentDirectoryEnabled": { "title": "Show all workspaces in Agents", "type": "boolean", "default": true },
@@ -93,7 +95,12 @@
       "coordinatorLabel": { "title": "Orchestrator pane label", "type": "string", "default": "coordinator" },
       "manifestDir": { "title": "Swarm manifest directory", "type": "string", "default": "" },
       "resultRoot": { "title": "Extra root allowed for worker result files (workers without a worktree)", "type": "string", "default": "" },
-      "worktreeRoots": { "title": "Directories worker worktrees must live inside to be trusted: absolute paths separated by ':' or newlines (empty = ~/repos)", "type": "string", "default": "" }
+      "worktreeRoots": { "title": "Directories worker worktrees must live inside to be trusted: absolute paths separated by ':' or newlines (empty = ~/repos)", "type": "string", "default": "" },
+      "prWatchEnabled": { "title": "PR watch: check GitHub and Slack for review requests every 3 minutes", "type": "boolean", "default": false },
+      "prWatchAutoStart": { "title": "PR watch: start a review worker for each new request (off: only notify)", "type": "boolean", "default": true },
+      "prWatchOrgs": { "title": "PR watch: GitHub organisations to accept, separated by spaces or commas", "type": "string", "default": "mr-yum" },
+      "prWatchTeamRequests": { "title": "PR watch: also take requests to your GitHub teams, on pull requests opened after the watch first ran", "type": "boolean", "default": true },
+      "prWatchSlackChannels":{ "title": "PR watch: Slack channels where any PR link counts as a request", "type": "string", "default": "" }
     }
   }
 }
