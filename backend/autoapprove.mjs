@@ -443,12 +443,47 @@ function settingsWrite(tokens) {
 /** A path that names an agent settings file, in any case. */
 export const settingsPath = path => typeof path === 'string' && FLOOR_SETTINGS.test(path);
 
+/** A quoted string that is a JSON query or output template, never a path: an argument of jq or yq, or the value of gh's --jq, -q or --template. */
+const DATA_QUOTE_HEAD = /^\s*(?:\S*\/)?(?:(?:jq|yq)\s(?:[^;&|\n]*\s)?|gh\s[^;&|\n]*\s(?:--jq|-q|--template|-t)(?:\s+|=))$/;
+/**
+ * A JSON query such as `--jq '.oid[0:12]'` is text, not a hidden path pattern. Glob characters in such a quoted string become `_` so
+ * HIDDEN_PATTERN reads only real paths; letters are kept, so a quoted `.claude` still names the file. Only data quotes (DATA_QUOTE_HEAD)
+ * change: other programs expand a quoted pattern themselves (`bash -c '... ~/.cl*de'`, `find -path` patterns, git pathspecs, tar
+ * and unzip patterns). The whole text is kept as written when a quote is left open, or when it holds anything the scan does not model
+ * (below) or a comment (which hides quote marks): all fail closed. Inside double quotes a backslash escapes the next character, so
+ * `"\""` ends where the shell ends it.
+ */
+export function quotedGlobsInert(text) {
+    // `$'...'` has its own escapes, a here-document body can hold a lone quote mark that would shift every pairing after it, and a
+    // command substitution starts a new quoting level (`"$(echo "x")"`). This scan models none of them, so it leaves such text as written.
+    if (/\$'|<<|`|\$\(/.test(text)) return text;
+    const glob = /[*?[{]/g;
+    let out = '';
+    let segment = 0;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        // An unquoted `#` at a word start begins a comment, where quote marks are only text.
+        if (c === '#' && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) return text;
+        if (c === ';' || c === '&' || c === '|' || c === '\n' || c === '(' || c === ')') { out += c; segment = out.length; continue; }
+        if (c === '\\' && i + 1 < text.length) { out += c + text[i + 1]; i++; continue; }
+        if (c !== '"' && c !== "'") { out += c; continue; }
+        let end = i + 1;
+        while (end < text.length && text[end] !== c) end += c === '"' && text[end] === '\\' ? 2 : 1;
+        if (end >= text.length) return text;
+        const body = text.slice(i + 1, end);
+        out += c + (DATA_QUOTE_HEAD.test(out.slice(segment)) ? body.replace(glob, '_') : body) + c;
+        i = end;
+    }
+    return out;
+}
+
 /** The settings half of the floor: the rule when the text writes, or mentions in a way that could write, an agent settings file. */
 function settingsRule(command) {
     // Read before quotes are made inert: a quoted path to a settings file is still that file.
     const raw = command.replace(/\\\r?\n/g, '');
     if (SETTINGS_REDIRECT.test(raw)) return FLOOR_SETTINGS_RULE;
-    for (const text of [raw, raw.split('\n').map(l => l.trim()).join(' ')]) {
+    const words = quotedGlobsInert(raw);
+    for (const text of [words, words.split('\n').map(l => l.trim()).join(' ')]) {
         for (const tokens of segments(text)) if (settingsWrite(tokens)) return FLOOR_SETTINGS_RULE;
     }
     return null;
