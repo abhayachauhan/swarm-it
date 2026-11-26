@@ -47,7 +47,7 @@ Expanded native Codex questions also appear directly on worker cards with their 
 
 Collapsed Codex questions require the question to belong to the connected local Codex server for central answers. Some terminal workers run through a separate server, which can leave their question marker visible while the connected server has no question to return. **Answer here** reports this limitation for the selected pane; use **Go to pane** for those workers. A notification without a visible approval menu is labelled as a notification, rather than an approval. Delayed notifications are ignored when the terminal visibly shows Codex working without a prompt.
 
-The timed **Auto** control can approve eligible requests while you are away. It works through Kelpi's permission provider for Claude and through a separate Codex `PermissionRequest` hook for safe Bash requests. Other requests stay with you. Auto has a time limit, an activity log, and [documented safeguards](docs/permissions.md).
+**Auto** approves requests while you are away, and is on until you turn it off (the choice is saved, and it can run for a timed window instead). It works through Kelpi's permission provider for Claude and through a separate Codex `PermissionRequest` hook for Bash requests. By default it approves everything except AWS and Terraform changes, agent settings, and MCP tools that send, share or delete; `SWARM_AUTO_APPROVE_POLICY=careful` restores the stricter policy. Auto has an activity log and [documented safeguards](docs/permissions.md).
 
 ## Move between Claude and Codex
 

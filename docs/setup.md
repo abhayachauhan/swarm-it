@@ -50,7 +50,7 @@ Restart Claude sessions that predate the hook change. To let Swarm-it's provider
 node skills/swarm-it/install-codex-hook.mjs
 ```
 
-Open `/hooks` inside Codex and trust the new hook definition. The installer preserves Kelpi's Codex notification hook. Auto is controlled from the rail and is off after each plugin install or reload. It does not bypass either CLI's normal permission boundary. Read [Permissions](permissions.md) before using it unattended.
+Open `/hooks` inside Codex and trust the new hook definition. The installer preserves Kelpi's Codex notification hook. Auto is controlled from the rail. It is on from the first start, keeps your last choice across reloads, and approves everything except the operations listed under "The floor" in [Permissions](permissions.md). Read that page before using it unattended.
 
 ## Check the installation
 
@@ -62,7 +62,7 @@ kelpi plugin services --json
 
 Kelpi's doctor can confirm that Codex hooks are installed, but it cannot verify their trust state. Check `/hooks` in Codex if an approval notification does not reach the rail. The plugin also scans a recognised Codex approval menu as a navigation-only fallback when Kelpi reports the pane as waiting or focused.
 
-To update, pull the repository and run `kelpi plugin install . --trust` again. Reloading the plugin turns Auto off, so choose a new timed Auto window in the rail if you still want one.
+To update, pull the repository and run `kelpi plugin install . --trust` again. Reloading the plugin keeps your last Auto choice: on stays on, off stays off, and a timed window carries on with the time left or stays off once it has ended.
 
 ## Where to go next
 

@@ -1021,7 +1021,7 @@ export function registerAll(api, deps = modules) {
         return result;
     });
     command('accept', async args => needPane(args) ?? after(await X.accept(api, st, args.paneID)));
-    // `{ on: true, hours?: number | null }` (default 12 h; null or 0: until turned off), `{ on: true, until: ISO }`
+    // `{ on: true, hours?: number | null }` (default: no end time; null or 0 also mean until turned off), `{ on: true, until: ISO }`
     // (in the future, at most 7 days away) or `{ on: false }`.
     command('auto-approve', async args => {
         if (args.on === true) {
@@ -1039,11 +1039,13 @@ export function registerAll(api, deps = modules) {
             // Exactly the time asked for, not one recomputed from fractional hours.
             if (endAt !== null) AA.setUntil(st, endAt, now);
             // Provider or screen: decided before anything is approved.
+            await AA.saveEnabled(st, true);
             await AA.checkProvider(api, st);
             // Cards already open are approved now; the user opted in knowing that.
             await AA.run(api, st, Date.now());
         } else if (args.on === false) {
             AA.turnOff(st, 'user', Date.now());
+            await AA.saveEnabled(st, false);
         } else return fail('on must be true or false', 'BAD_ARGS');
         await settle();
         await publish();
