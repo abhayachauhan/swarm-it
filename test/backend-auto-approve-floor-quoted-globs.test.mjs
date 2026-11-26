@@ -25,6 +25,7 @@ test('JSON queries for jq, yq and gh are text', async () => {
         "gh pr list --json number --template '{{range .}}{{.number}}{{end}}'",
         'jq ".items[0].name" out.json > /tmp/x',
         "yq '.a[0]' f.yaml",
+        "/opt/homebrew/bin/jq '.a[0]' f.json",
         // An escaped quote mark does not end a double-quoted string, so `.a[0]` here is still inside it.
         'jq "\\".a[0]\\"" f.json > /tmp/x',
     ]) assert.equal(await judge(command), 'OK', command);
@@ -49,6 +50,11 @@ test('patterns that are expanded, by the shell or by the program they are given 
         "tar -xf x.tar -C ~ --wildcards '.cl*'",
         "ssh -q host 'cp /tmp/x ~/.cl*de/settings.json'",
         "gh pr view 1; bash -c 'cp /tmp/x ~/.cl*de/settings.json'",
+        // The command word is bash, not jq: an assignment ending in jq in front of it changes nothing.
+        "FOO=a/jq bash -c 'cp /tmp/x ~/.cl*de/settings.json'",
+        // A redirection is not a command separator: `gh` here is the output file and bash runs the quoted text.
+        "bash >| gh -c -t 'cp /tmp/x ~/.cl*de/settings.json'",
+        "bash >& gh -c -t 'cp /tmp/x ~/.cl*de/settings.json'",
         // Valid shell that a quote scan blind to here-documents or substitutions would misread (finding 2).
         "cat > /tmp/n <<EOF\ndon't\nEOF\ncp /tmp/a ~/.cl*de/settings.json; echo it\\'s",
         'n="$(grep -c \'"\' f)"; cp x ~/.cl*de/settings.json; echo it\\\'s',

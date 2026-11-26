@@ -444,7 +444,8 @@ function settingsWrite(tokens) {
 export const settingsPath = path => typeof path === 'string' && FLOOR_SETTINGS.test(path);
 
 /** A quoted string that is a JSON query or output template, never a path: an argument of jq or yq, or the value of gh's --jq, -q or --template. */
-const DATA_QUOTE_HEAD = /^\s*(?:\S*\/)?(?:(?:jq|yq)\s(?:[^;&|\n]*\s)?|gh\s[^;&|\n]*\s(?:--jq|-q|--template|-t)(?:\s+|=))$/;
+// The command word itself must be jq, yq or gh, or an absolute path to one: no assignment in front (`X=a/jq bash -c '...'`), no quote.
+const DATA_QUOTE_HEAD = /^\s*(?:\/[^\s='"]*\/)?(?:(?:jq|yq)\s(?:[^;&|\n]*\s)?|gh\s[^;&|\n]*\s(?:--jq|-q|--template|-t)(?:\s+|=))$/;
 /**
  * A JSON query such as `--jq '.oid[0:12]'` is text, not a hidden path pattern. Glob characters in such a quoted string become `_` so
  * HIDDEN_PATTERN reads only real paths; letters are kept, so a quoted `.claude` still names the file. Only data quotes (DATA_QUOTE_HEAD)
@@ -464,7 +465,9 @@ export function quotedGlobsInert(text) {
         const c = text[i];
         // An unquoted `#` at a word start begins a comment, where quote marks are only text.
         if (c === '#' && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) return text;
-        if (c === ';' || c === '&' || c === '|' || c === '\n' || c === '(' || c === ')') { out += c; segment = out.length; continue; }
+        // `>|`, `>&`, `&>` and `<&` are redirections, not command separators: the word after them is a file, not a command word.
+        const redirect = (c === '&' || c === '|') && (/[<>]/.test(text[i - 1] ?? '') || text[i + 1] === '>');
+        if (!redirect && (c === ';' || c === '&' || c === '|' || c === '\n' || c === '(' || c === ')')) { out += c; segment = out.length; continue; }
         if (c === '\\' && i + 1 < text.length) { out += c + text[i + 1]; i++; continue; }
         if (c !== '"' && c !== "'") { out += c; continue; }
         let end = i + 1;
